@@ -5,6 +5,706 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## Phase 5 — Fly.io deployment & S3 storage (2026-10-09)
+
+The `scripts/Dockerfile` and the `release_smoke_test.sh` were Memos-shaped
+(both referenced `./cmd/memos`, the `memos` binary, `MEMOS_*` env vars,
+and `MEMOS_PORT=5230`). The `InstanceSetting.StorageSetting.S3Config`
+proto field has been declared since the Memos import but no Go code
+ever read it. Phase 5 ports the deploy story to riff and lands the
+remote-attachment plumbing. Choices that fall outside the mechanical
+port:
+
+- **S3 client wraps `pocketbase/tools/filesystem`, not `aws-sdk-go-v2`.**
+  PocketBase already ships a battle-tested S3 client
+  (`tools/filesystem/internal/s3blob/s3/s3.go`) that we can lean on
+  rather than reimplement signing-v4. The official `aws-sdk-go-v2` is
+  ~50 MB of transitive deps, which the upstream PB maintainers also
+  rejected (PB discussion #6562). `internal/storage/s3.go` is a
+  ~150-line wrapper around `filesystem.NewS3`; the only riff-specific
+  logic is URL construction (path-style vs virtual-hosted) and the
+ 404-to-`ErrNotFound` mapping.
+- **Bridge hook is best-effort and non-blocking.** The
+  `pb/hooks/storage_bridge.go` hook fires on
+  `OnRecordAfterCreateSuccess` and `OnRecordAfterUpdateSuccess` for
+  `patches`/`samples`. A remote upload failure logs a warning and
+  leaves the local file as the canonical source of truth; the next
+  save will retry. The local PocketBase file is never deleted on a
+  successful remote upload because the bridge cannot guarantee the
+  remote is permanently available (a transient S3 outage would
+  orphan the attachment).
+- **`remote_url` is a single text column, not a new collection.**
+  The column is added idempotently to both `patches` and `samples` by
+  `pb/migrations/1780000000_add_remote_url.go`. It carries a single
+  URL or a JSON array of URLs (samples can have up to 50 files). A
+  join/split helper in the bridge serialises/deserialises the array
+  shape.
+- **Only the legacy `s3_config` proto field is honoured.** The
+  newer `InstanceSetting.StorageSetting.storages[]` +
+  `default_storage_id` shape (multi-backend with named IDs) is
+  declared in the proto but is not read by the bridge yet. Phase 6
+  will extend the bridge to honour that shape; until then, only the
+  single-bucket legacy `s3_config` field takes effect.
+- **`SecretAccessKey` is read from the `instance_settings` row, but
+  the proto's `INPUT_ONLY` annotation strips it from every response.**
+  The first save with a new secret is the only time the bridge sees
+  it. After that, the field is permanently redacted. The operator
+  must restart the server with a new `RIFF_S3_SECRET` env var or
+  re-submit the secret through `UpdateInstanceSetting` to rotate it.
+  This is a known limitation; it matches how Memos treats SMTP
+  passwords in the same proto.
+- **PocketBase `newer` `tools/filesystem` client is the source of
+  truth for the S3 path.** The PB filesystem API does not take a
+  `context.Context` on `GetReader`/`NewWriter`, so the
+  `context.Context` parameter on `Storage.Get/Put/Stat/Delete` is
+  accepted but ignored. We still pass one because the bridge hook
+  composes the request context for logging; ignoring it is a
+  non-issue for a 30-second upload.
+- **Fly.io `fly.toml` is a template, not a live config.** The
+  `app = "riff"` field is a placeholder; the operator must run
+  `fly apps create <unique-name>` and patch `app` before `fly
+  deploy`. The persistent volume `riff_data` must also be created
+  once with `fly volumes create riff_data --size 1`. The
+  `release_command` runs `scripts/release_version.sh version
+  <git-branch>` to print the resolved CalVer for the deploy log;
+  the actual `VERSION` and `COMMIT` are baked into the image at
+  build time.
+- **`scripts/release_smoke_test.sh` is left Memos-shaped.** The
+  smoke test calls Memos REST endpoints (`/api/v1/users`,
+  `/api/v1/auth/signin`, `/api/v1/memos`) that do not exist in
+  riff (the auth and memo flows are Connect/gRPC). A riff-shaped
+  smoke test that drives `pb/connect.SignIn`,
+  `pb/connect.CreateMemo`, etc. against a fresh container is
+  deferred to a Phase 5 follow-up commit. The `scripts/Dockerfile`
+  port and `fly.toml` template are sufficient to cut the first
+  release; a missing smoke test does not block a `git push
+  YY.MM.N` tag.
+
+### Phase 5 Slice D — Inbox hooks + email delivery (2026-10-09)
+
+The Memos inbox (`SPACE_INVITATION`, `MEMO_COMMENT`, `MEMO_MENTION`
+notification kinds) was partially wired in Wave 5: the
+`notifications` collection existed, `ListUserNotifications` worked
+against seeded rows, and `spaceInviteHandler` in
+`pb/api/space_routes.go` wrote the invite row, but the proto/DB
+type mismatch (`MEMO_REACTION` vs `MEMO_MENTION`) and the missing
+write hooks for `MEMO_COMMENT` and `MEMO_MENTION` left the
+end-to-end story broken. Slice D closes the gap and adds the
+email delivery path. Choices that fall outside the mechanical
+port:
+
+- **`MEMO_REACTION` was a Wave-3 placeholder; the proto enum is
+  `MEMO_MENTION`.** The previous `pb/migrations/1710000000_create_notifications.go`
+  declared `Values: []string{"SPACE_INVITATION", "MEMO_COMMENT", "MEMO_REACTION"}`,
+  which no row could ever carry because the
+  `recordToUserNotification` decoder had no `MEMO_REACTION` arm
+  (it downgraded to `TYPE_UNSPECIFIED`). The migration's select
+  field is now `MEMO_MENTION`; a follow-up migration that
+  actively rewrites existing rows is not needed because
+  `MEMO_REACTION` was never writeable. Re-running the migration
+  on an existing database is a no-op (`Add` is skipped when the
+  field is already present).
+- **The `notifications` collection is server-write only.** Its
+  `createRule` is `nil` (superuser-only), and the only authorised
+  insert path is the exported `hooks.CreateNotificationBestEffort`
+  helper. The helper is used by:
+  - the four `OnRecordAfter*Success` hooks in
+    `pb/hooks/notifications.go` (MEMO_COMMENT, MEMO_MENTION,
+    accept-archive, decline/revoke-delete);
+  - the `spaceInviteHandler` in `pb/api/space_routes.go` (the
+    one pre-existing call site, which used to write directly
+    via `app.Save`).
+  All other code paths produce notifications as a side effect of
+  the underlying save, never directly.
+- **The mention dedupe on memo update uses a stashed-content
+  map, not `e.Record.Original()`.** PocketBase's
+  `OnRecordAfter*Success` event exposes `e.Record.Original()`,
+  but for a record that arrived via the request bridge the
+  `originalData` map is empty (the record is a fresh
+  `core.NewRecord` from the request body, not a row that was
+  loaded first). The `OnRecordUpdate` model-level hook looks
+  the previous content up explicitly and stashes it in
+  `prevMemoContent`; the `OnRecordAfterUpdateSuccess` hook
+  reads from that map and clears the entry.
+- **Self-mentions and self-comments are not inbox events.** The
+  hook layer treats the memo author as a no-op for both
+  mention and comment paths, matching the Memos "things you
+  would otherwise miss" rule. The author is read at the row
+  level (`memo.GetString("author")`); an `auth != author`
+  check guards the per-receiver emission.
+- **`internal/email` is a revival of the Memos SMTP package,
+  not a rewrite.** The previous retirement entry
+  (Phase 5 — Orphan package retirement) was correct at the
+  time: nothing imported it. The Phase 5 Slice D dispatcher
+  is the first importer, so the package comes back unchanged
+  in shape — same `Config`, `Message`, `Client`, `Send`,
+  `SendAsync`, same `init()` workers — with a small `doc.go`
+  refresh that documents the revival.
+- **`TestInstanceEmailSetting` is now a real TCP-dial
+  reachability check, not a syntactic stub.** The prior
+  handler parsed the JSON and returned `ok` without ever
+  opening a connection; the new one calls `(&net.Dialer{Timeout:
+  5*time.Second}).Dial("tcp", host:port)` and reports the
+  result. This is a more honest test for the admin UI ("can
+  my server reach the SMTP host?") and matches what the
+  upstream Memos version of the same RPC does in spirit. It
+  does NOT send a real email — that path lives in
+  `EmailDispatcher.DispatchTestEmail` and is reachable through
+  the dispatcher's `sender` shim when an operator wires a
+  test runner.
+- **The dispatcher is feature-gated on `RIFF_INSTANCE_URL`.**
+  An empty value means every email would have a broken link,
+  so the dispatcher no-ops with a warn log. The same env
+  var lights up the MCP origin allow-list (see
+  `buildProfileFromEnv` in `main.go`). One knob, two
+  features: the operator sets `RIFF_INSTANCE_URL` once.
+- **The dispatcher's `sender` is a function value, not a
+  global queue.** `pb/hooks/notifications_email_wiring.go`
+  exposes `InstallEmailDispatcher(profile, app)`; the wiring
+  installs a package-level `*EmailDispatcher` that the
+  after-success hook reads. Tests pass their own sender to
+  bypass the network; production uses `email.SendAsync` (the
+  bounded 128-message async queue that the package's `init()`
+  starts two workers for).
+- **Memo visibility for the email path is a conservative
+  approximation, not the rule engine.** The dispatcher
+  classifies a memo as "visible to the receiver" by checking
+  `visibility` directly: `PUBLIC` and `PROTECTED` are
+  visible; `PRIVATE` and `SPACE` need membership that the
+  dispatcher does not evaluate. This is intentionally
+  over-restrictive — a private-memo mention is dropped, which
+  is the safe direction for an email side-channel. A
+  follow-up commit can re-use `app.CanAccessRecord` if the
+  inbox starts to over-suppress.
+
+---
+
+## User-webhook lifecycle end-to-end (2026-10-09)
+
+The five `UserService.UserWebhook` RPCs (`ListUserWebhooks`,
+`CreateUserWebhook`, `UpdateUserWebhook`, `DeleteUserWebhook`,
+`GetUserWebhookSigningSecret`) are now wired against two new
+collections and two new hooks. The design choices that fall outside the
+mechanical translation of the proto into a handler:
+
+- **Signing secret is a plain `TextField`, not `PasswordField`.**
+  PocketBase's `PasswordField.Intercept` clears the in-memory `Plain`
+  value after the create/update action, which would break both the
+  `GetUserWebhookSigningSecret` RPC and the drain goroutine (which
+  reads the raw secret to sign outbound POSTs). `PasswordField` is
+  also coupled to auth collections; `user_webhooks` is a base
+  collection, so we'd be fighting the framework on two axes. The
+  proto's `INPUT_ONLY` annotation already removes the secret from
+  every list/get response, and the column is `Hidden: true` for the
+  REST collection API. At-rest disk encryption is the operator's
+  responsibility (PocketBase ships a `pb_data/` directory the operator
+  is expected to mount on encrypted storage).
+- **Two migrations, one collection each.** PocketBase's
+  `migrations.Register` uses `runtime.Caller(1)` to derive the
+  migration's filename-based dedup key, so two `init()` functions in
+  one file would share the same caller and the second would overwrite
+  the first. `1770000000_create_user_webhooks_main.go` registers the
+  `user_webhooks` collection; `1770000001_create_webhook_deliveries.go`
+  registers the outbox. The numeric gap (`...000` and `...001`)
+  signals the same deployment unit.
+- **Outbox table, not direct delivery.** A 30s-tick drain goroutine
+  (with `app.OnTerminate` shutdown signal) is the only path that
+  actually POSTs to receivers. The outbox hook enqueues one
+  `webhook_deliveries` row per user webhook on every memo
+  create/update/delete success; the drain picks rows whose
+  `next_attempt_at <= now` and dispatches them through
+  `webhook.Post`. Direct delivery in the after-save hook would
+  introduce tail-latency on memo writes and a slow receiver would
+  block every other webhook for that user.
+- **`update_mask` is required on `UpdateUserWebhook`.** A proto3
+  string field's zero value is `""`, which is indistinguishable from
+  "not set" — so a permissive "apply populated fields" rule would
+  silently clear `display_name` and `signing_secret` on a URL-only
+  update. The handler refuses an empty mask with `InvalidArgument`,
+  matching the `user_settings.Update` precedent. The React client
+  always sends a mask.
+- **Per-URL `whsec_` secret generation.** `CreateUserWebhook` mints a
+  fresh `whsec_<base64>` token (32 random bytes) when the request
+  omits one, so two consecutive creates produce independent secrets.
+  There is no global default secret that an attacker could guess.
+- **Memo `Links` race fix in the same commit.** The pre-existing
+  `memoLinksFanOut` worker-pool race (AGENTS.md Known Issue #1) is
+  fixed by a per-app `memoLinksShutdown` channel that the
+  `OnTerminate` hook closes. The goroutine checks the signal before
+  every DB write, and `pruneStaleMemoLinks` recovers from a
+  closed-DB panic so a test app cleanup does not crash the runner.
+
+## Attachment motion-media end-to-end (2026-10-09)
+
+### Scope
+
+Wire `internal/motionphoto` into the upload path so the
+proto's `Attachment.motion_media` field actually
+populates and the frontend's `MotionPhotoPreview`
+component can play the embedded video. Three new
+files and one migration.
+
+### What is now wired
+
+1. **Migration** `pb/migrations/1760000000_add_motion_media.go`
+   adds an idempotent `motion_media` JSON `Text` column
+   to both `patches` and `samples`. We picked `Text`
+   (max 8192 bytes) over `JSONField` because the JSON
+   field's storage semantics drift between
+   SQLite/Postgres/MySQL; the `Text` column round-trips
+   the same payload in every driver and the
+   `pb/connect/attachment_motion_media.go` converter
+   handles the parse on the way out.
+
+2. **Hook** `pb/hooks/motion_media.go` subscribes to
+   `OnRecordAfterCreateSuccess` for both `patches`
+   and `samples`, runs `motionphoto.DetectJPEG` on
+   the first file, and writes the result back to the
+   row's `motion_media` column. The hook is detached
+   (goroutine) so a slow disk read does not stall
+   the API response; failures are logged and
+   silently dropped (the column stays empty, the
+   proto's `motion_media` is unset).
+
+3. **Converter** `pb/connect/attachment_motion_media.go`
+   reads the column and produces the proto's
+   `MotionMedia` value. The converter fails open:
+   a malformed column yields `nil` rather than an
+   error, so a bad row written during the first
+   deploy never locks the user out of an
+   otherwise-readable attachment.
+
+### Design call-outs
+
+- **Pre-filter on filename extension** skips
+  `.wav`, `.mp3`, `.zip`, `.pdf`, `.heic`, etc.
+  before any disk read. The detector is fast
+  but the read isn't.
+- **Bounded read** uses `io.LimitReader` capped
+  at 16 MB even though the `patches` field is
+  already capped at 8 MB. Defence in depth: we
+  don't trust the field's `MaxSize` to apply
+  when the upload was made via a path that
+  bypasses the standard collection REST API.
+- **Family is hardcoded to `ANDROID_MOTION_PHOTO`**
+  because the detector currently only recognises
+  the Google GCamera XMP packet. A future wave
+  can add iOS Live Photo detection and switch
+  on `family` here.
+- **Role is hardcoded to `CONTAINER`**. The
+  proto's enum (`STILL | VIDEO | CONTAINER`) is
+  an odd fit for Android Motion Photos, where
+  the file is a single container that holds
+  both still and video. `CONTAINER` best
+  reflects "this row is the wrapper"; the
+  frontend picks the still or the video
+  based on `has_embedded_video` and the
+  user action.
+
+### Validation
+
+- `go build ./...` — clean.
+- `go vet ./...` — clean.
+- `go test -v -count=1 -run 'TestShouldInspect\|TestFileField\|TestMotionMedia\|TestReadMotionMedia' ./pb/...` — pass.
+
+---
+
+## Orphan package retirement: `internal/email` (2026-10-09)
+
+### Scope
+
+Retire the `internal/email` package (10 files, ~46KB including
+README). It is a Memos-shaped SMTP helper left over from the
+Memos-to-PocketBase port: built, fully tested, with **zero
+importers in the riff Go tree** (`grep -rn
+'"github.com/incurl/riff/internal/email"' --include='*.go' .`
+returns nothing).
+
+### Why delete
+
+- The proto has no `email` RPC or message that would need
+  the SMTP client; the closest proto surface is
+  `TestInstanceEmailSetting` in `instance_service.proto`,
+  whose handler in `pb/connect/instance_settings.go` is
+  deliberately a syntactic check that never dials a TCP
+  connection (the comment in that file makes the design
+  explicit).
+- The `internal/email` package itself documents the gap
+  in its own `doc.go`: "designed for self-hosted
+  environments where instance administrators configure
+  their own SMTP servers" — a Memos-era affordance with
+  no riff call site and no admin UI to populate
+  `Config{SMTPHost, SMTPPort, ...}`.
+- All eight `*_test.go` files pass on the current Go
+  1.27.0 toolchain; the package is healthy, just
+  unused. Holding it for a hypothetical future wave
+  costs go-test time and reviewer cognitive load on
+  every PR that touches `internal/`.
+
+### What is NOT deleted in this commit
+
+- `internal/webhook` — see "User webhooks end-to-end
+  (2026-10-09)" below; the package stays and is wired
+  up.
+- `internal/motionphoto` — see "Attachment motion
+  media end-to-end (2026-10-09)" below; the package
+  stays and is wired up.
+- `internal/email` as a *future* feature is not
+  foreclosed. If a later wave adds the admin UI to
+  store SMTP credentials and an email-OTP or
+  notification RPC, the package can be re-introduced
+  from git history in a single small commit.
+
+### Validation
+
+- `go build ./...` — clean.
+- `go vet ./...` — clean.
+- `go test -count=1 -p 1 -race -skip 'TestMemos_Create'
+  -skip 'TestCreateMemo' ./...` — pass (the
+  memo-links race flagged in AGENTS.md Known Issue #1
+  is pre-existing and unrelated to this commit).
+
+---
+
+## Connect rate-limit wiring (2026-10-09)
+
+### Scope
+
+Finish Wave 4 of the API abuse controls design
+(`docs/design/api-abuse-controls.md`): wire the in-process
+`internal/ratelimit/` middleware onto real Connect routes, gated
+on the operator-supplied `RIFF_RATE_LIMIT` env var. Before this
+change the middleware existed, was tested, and was attached to
+exactly zero routes.
+
+### Decisions
+
+- **Opt-in table, not a blanket "every procedure" loop.** A
+  `procedureScope` map in `pb/connect/ratelimit.go` lists the
+  procedures that need a *per-flow* rule tighter than the
+  catch-all the authorizer (a future wave) will layer on top.
+  Procedures with no row are reachable but not rate-limited at
+  the route level. This keeps the table small (~50 rows) and
+  auditable: every entry is a deliberate budget, not a default.
+- **Route-level middleware, not interceptor-level.** PocketBase
+  routes run `BindFunc` before the connect-go handler (and
+  before `withAuth` resolves the Bearer token), so route-level
+  is the only place an `IPKey` (resolved client address) is
+  available without an extra trust hop. Authorizer-level
+  catch-all budgets (ScopeAnonymous / ScopeAuthenticated) are
+  deferred to a future wave that has the resolved user.
+- **Per-flow counters whose key is in the request body live in
+  the handler.** `signin_account` keys on the *submitted*
+  username, not the resolved user, and the design requires
+  that a successful sign-in refunds the consume. Both rules
+  need body access, so the counter is incremented inside
+  `AuthServer.SignIn` and the Consume / Refund pair is
+  explicit. The route-level `RateLimit(limiter, signin_ip)` is
+  the IP-side companion and runs before the handler so bcrypt
+  is never paid on a refused request.
+- **No-op by default.** `RateLimit(nil, …)` is a no-op (covered
+  by `TestRateLimit_NilLimiterIsNoop`). Production calls
+  `connect.Register(app, nil)` until the operator sets
+  `RIFF_RATE_LIMIT=1`, which the `Profile.RateLimit` flag
+  plumbs to `ratelimit.NewMemoryLimiter(ratelimit.DefaultPolicy())`.
+  The default install is byte-identical to before this commit
+  when the env var is unset.
+- **`registerConnectRoutes` is the test seam.** The production
+  `Register` schedules the per-procedure loop behind
+  `app.OnServe().BindFunc`, which only fires during
+  `app.Start()`. Extracting the loop into a free function
+  with the router as a parameter lets the in-package tests
+  drive the same code path through `apis.NewRouter` without
+  the full start loop. Two new tests
+  (`TestConnectRegister_RateLimitFiresAgainstAuthSignIn`,
+  `TestConnectRegister_NilLimiterKeepsProceduresReachable`)
+  pin the wiring end-to-end; one new test
+  (`TestSignIn_FailedAttemptsCountSigninAccount`) pins the
+  in-handler Consume / Refund pattern.
+
+### Files
+
+- **`pb/connect/ratelimit.go`** — added `procedureScope` map
+  (50 rows) and a package doc comment explaining the
+  opt-in / no-op / handler-keys-in-body contract.
+- **`pb/connect/connect.go`** — `Register` takes a
+  `ratelimit.Limiter`; the OnServe callback now delegates to
+  `registerConnectRoutes` (a free function with the same
+  loop, exposed for tests).
+- **`pb/connect/auth.go`** — `NewAuthServer(app, limiter)`
+  takes a limiter; `SignIn` calls `Consume` on the
+  submitted username before the password check, returns
+  `connect.CodeResourceExhausted` when refused, and
+  `Refund`s the consume on successful auth.
+- **`pb/connect/connect_ratelimit_internal_test.go`** — added
+  the three tests above plus the `connectRegisterForTest`
+  helper that mirrors `Register`'s wiring synchronously.
+- **`pb/connect/connect_wave4_user_internal_test.go`** — two
+  `NewAuthServer(app)` call sites updated to
+  `NewAuthServer(app, nil)` for the new signature.
+- **`main.go`** — `RIFF_RATE_LIMIT` env var plumbed through
+  `Profile.RateLimit` to the limiter constructor in
+  `main()`; new `envBool` helper.
+- **`AGENTS.md`** — new "Wire `RateLimit` onto a new Connect
+  procedure" row in the Change Routing table, pointing at
+  the `procedureScope` table.
+
+### Validation
+
+- `go build ./...` — clean.
+- `go vet ./...` — clean.
+- `go test -v -count=1 -race -run
+  'TestRateLimit|TestConnectRegister|TestSignIn'
+  ./pb/connect/` — 7 / 7 pass.
+- `go test -count=1 -p 1 ./pb/hooks/ ./internal/ratelimit/`
+  — pass (no regression in the rate-limit library or the
+  hooks that share the package's test helpers).
+- The full `go test ./...` is blocked by a pre-existing
+  worker-pool race in `pb/hooks/memo_links.go::memoLinksFanOut`
+  (AGENTS.md Known Issue #1), unrelated to this change. My
+  new tests do not touch the memo-create path.
+
+### What was NOT added in this commit
+
+- A persistent or distributed limiter. The
+  `ratelimit.Limiter` interface is the seam; today only
+  `ratelimit.MemoryLimiter` is wired. A Redis-backed
+  implementation can land without touching `pb/connect/`.
+- The authorizer-level catch-all (`ScopeAnonymous`,
+  `ScopeAuthenticated`). The route-level table covers the
+  per-flow rules the design asks for; the catch-all needs
+  the resolved user, which only the authorizer has.
+- A per-scope admin UI or knobs in the `InstanceSetting`
+  collection. The design explicitly defers both.
+- Changes to the `internal/email/`, `internal/webhook/`,
+  `internal/motionphoto/` orphans. Those remain in their
+  pre-retirement state, ready for a separate `filter/`-style
+  decision in a future turn.
+
+---
+
+## Filter package retired (2026-10-09)
+
+### Scope
+
+Remove the orphaned `filter/` package. The Memos-era CEL→SQL
+compiler has no production caller in riff: the `store/db/<dialect>/`
+driver layer that would have consumed it was replaced by
+PocketBase, and PocketBase's collection `filter` query parameter
+is now the filter surface for every list endpoint.
+
+### Why the package existed, and why it has no replacement
+
+`filter/` (12 files, ~1,400 LoC + ~3,000 LoC of tests) was a
+three-stage compiler: parse CEL → dialect-agnostic IR
+(`filter/ir.go`) → SQL fragment for SQLite, MySQL, and Postgres
+(`filter/render.go`). Memos needed it because Memos wrote its
+own SQL; the input to the compiler was a per-list-endpoint
+`filter` string field on the Connect request, and the output
+was a `Statement{SQL, []any}` that the driver spliced into a
+hand-rolled `SELECT`. That architecture is gone. In riff:
+
+- There is no `store/db/` tree. The only SQL path is through
+  PocketBase's `app.FindRecordsByFilter(col, filter, sort, limit,
+  offset, params)` calls (see `pb/api/feed.go:123`,
+  `pb/api/memo_routes.go:50`, `pb/api/space_routes.go:25`, …).
+- The list endpoints accept a *string* `filter` field and hand
+  it to PocketBase unchanged. PocketBase's own DSL is
+  CEL-shaped (`uid={:u}`, `visibility = "PUBLIC"`,
+  `tags ?= "urgent"`), so the same UI string parses fine.
+- `grep -rn 'incurl/riff/filter'` returns no production
+  importers. The package's public API (`NewSchema`,
+  `NewEngine`, `DefaultEngine`, `DefaultAttachmentEngine`,
+  `Compile`, `CompileToStatement`, `AppendConditions`,
+  `RenderOptions`, `DialectSQLite`, `DialectPostgres`,
+  `DialectMySQL`) is unused outside `filter/` itself and the
+  three `filter/*_test.go` files.
+
+### Decisions
+
+- **Delete, do not adapt.** Adapting the schema to riff's
+  collections (`memos`/`spaces`/`users` for `NewSchema()`,
+  `patches`/`samples` for `NewAttachmentSchema()`) would
+  preserve a compiler with no caller. The drift cost
+  outpaces the cleanup cost.
+- **Do not build a CEL→PocketBase-filter translator in this
+  commit.** It is the right long-term design (keeps the
+  user-facing CEL string the `MemoView.filter` field already
+  stores) but it is a Wave-7-sized change: a new
+  `internal/filterpocketbase/` package, plus wiring into the
+  list handlers. The user-facing string is preserved
+  verbatim in the `memo_views` collection either way.
+- **`MemoView.filter` keeps its CEL-string storage.** The
+  collection is the saved-filter user feature from Wave 5;
+  whether those strings are ever re-evaluated is a future
+  decision and depends on the `internal/filterpocketbase/`
+  translator.
+- **Drop `cel-go` from `go.mod`.** No code outside `filter/`
+  imports `github.com/google/cel-go`. The dependency comes
+  out via `go mod tidy`.
+
+### Files
+
+- **Deleted:** `filter/` (12 files: `MAINTENANCE.md`, `README.md`,
+  `doc.go`, `engine.go`, `engine_test.go`, `functions_test.go`,
+  `helpers.go`, `ir.go`, `parser.go`, `render.go`, `schema.go`,
+  `time_test.go`).
+- **`AGENTS.md`:** dropped the `filter/` row from the
+  Repository Layout table, removed `filter/` from the
+  layering chain sentence, removed the `Markdown, filter, or
+  MCP logic` row from the Change Routing table, and removed
+  `filter` from the CI "other" test group.
+- **`README.md`:** the package description now says the
+  Memos-era CEL→SQL compiler was retired and points to this
+  entry.
+- **`go.mod` / `go.sum`:** `cel-go` removed.
+- **`DECISIONS.md`:** this entry is appended above Wave 6
+  (Memos-era entries below stay untouched, per the
+  append-only audit log).
+
+### Verification
+
+```
+go build ./...                 # clean
+go vet ./...                   # clean
+go mod tidy -go=1.27.0         # cel-go dropped
+go test ./...                  # all green; the pre-existing
+                               # pb/hooks memo_links worker-pool
+                               # race still surfaces on the
+                               # second subtest of TestMemos_Create
+                               # (Known Issue #1, not introduced
+                               # by this commit)
+```
+
+### Still open after Wave 7
+
+If a future Wave wants saved filters to actually be re-evaluated
+server-side, the design is a thin `internal/filterpocketbase/`
+that compiles a saved CEL string into the equivalent
+PocketBase `filter` query parameter, with a per-collection
+schema declaring which identifiers are CEL-visible. Until then,
+`saved CEL filters from Wave 5` is a storage feature, not a
+filter feature.
+
+---
+
+
+## Phase 4 Wave 6 — Memo shares (2026-10-09)
+
+### Scope
+
+Wave 6 closes the first item on the "Still open after Wave 5"
+list. Four new `MemoService` RPCs land on the existing
+`MemoServer`:
+
+- `CreateMemoShare` — mint an opaque bearer token that grants
+  read access to one memo. Caller is the memo's author or an
+  instance admin.
+- `ListMemoShares` — list the share rows attached to a memo.
+  Same auth as create.
+- `DeleteMemoShare` — revoke a share. Idempotent; a missing
+  row is success, not a 404.
+- `GetSharedMemo` — public, no auth. Resolves a share code to
+  the underlying memo. The memo's own visibility still applies
+  (a private-memo share does not leak existence to a non-author).
+
+### New collection
+
+| Collection | Why | Migration |
+| --- | --- | --- |
+| `memo_shares` | One row per active share. `code` is a 22-char URL-safe random string (131 bits); `memo` is a `CascadeDelete` relation; `created_by` is informational. | `pb/migrations/1750000000_create_memo_shares.go` |
+
+### Decisions
+
+- **Server-only on every `*Rule`.** All five access-rule
+  fields on `memo_shares` are `nil` so the Connect handler is
+  the only authority. This is the same shape as
+  `notifications.createRule = nil`: the rule engine cannot
+  express "memo author or admin" cleanly because admin is a
+  PocketBase superuser, not a row in `users`, and we'd rather
+  not duplicate the author check in two places. Tests
+  `TestCreateMemoShare_AuthorOnly`,
+  `TestListMemoShares_NonAuthorDenied`, and
+  `TestDeleteMemoShare_AuthorCanRevoke` pin this.
+- **`GetSharedMemo` does not consult the rule engine.** The
+  row's `code` is the bearer credential, not the caller's
+  session; a public route that asks PocketBase "can this
+  request see this row?" would always say "no, no
+  @request.auth". The handler queries the collection directly
+  with `app.FindRecordsByFilter` and then runs
+  `canViewMemo` against the resolved memo, so a private-memo
+  share still returns `CodeNotFound` to a non-author
+  (`TestGetSharedMemo_PrivateMemoShare`).
+- **22-char codes from `internal/random`.** The TextField's
+  `Pattern` accepts 22–32, so a future length bump is a
+  constant change, not a migration. The unique index makes
+  the chance of collision 1 in 2^131 per try; the
+  `shareCodeMaxAttempts = 5` retry loop bounds a corrupted
+  RNG.
+- **Cascade-delete on `memo`.** Deleting a memo removes its
+  share rows, matching the Wave 4 memo-delete cascade rule
+  in `pb/hooks/spaces.go` and `docs/design/multi-spaces.md`
+  (which the `TestMemoShare_CascadeDeleteOnMemoDelete` test
+  guards).
+- **Expiry is informational in the proto, enforced in the
+  handler.** `expire_time` is a `*timestamppb.Timestamp` with
+  a `oneof` marker; we read it via `record.GetDateTime` and
+  reject reads in the past as `CodeNotFound`. A future
+  background job to garbage-collect expired rows is the next
+  step (see "Still open after Wave 6").
+
+### Files
+
+- `pb/migrations/1750000000_create_memo_shares.go` — the new
+  collection.
+- `pb/connect/memo_shares.go` — the four handlers, the
+  `recordToMemoShare` translator, and the
+  `canManageMemoShares` authorisation helper.
+- `pb/connect/connect_wave6_shares_internal_test.go` — ten
+  tests covering create / list / delete / public read,
+  expiry, visibility-leak, and the cascade rule.
+
+### Verification
+
+```
+go build ./...
+go vet ./pb/connect/... ./pb/migrations/...
+gofmt -l pb/connect/memo_shares.go \
+          pb/connect/connect_wave6_shares_internal_test.go \
+          pb/migrations/1750000000_create_memo_shares.go
+go test -v -count=1 \
+    -run 'TestCreateMemoShare|TestListMemoShares|TestDeleteMemoShare|TestGetSharedMemo|TestMemoShare_CascadeDeleteOnMemoDelete' \
+    ./pb/connect/
+go test -race -count=1 -run 'TestCreateMemoShare|TestListMemoShares|TestDeleteMemoShare|TestGetSharedMemo|TestMemoShare_CascadeDeleteOnMemoDelete' ./pb/connect/
+```
+
+### Still open after Wave 6
+
+- `memos/{memo}/views` *view counter* (per-memo view log;
+  this is *not* the same as the `memo_views` collection of
+  saved CEL filters from Wave 5).
+- `GetLinkMetadata` / `BatchGetLinkMetadata` outbound HTTP
+  provider selection (the `internal/linkmeta` library is
+  wired; the transport is the gap).
+- Personal access tokens, linked identities, user webhooks,
+  identity providers: each needs a new collection.
+- `ExportMemos` / `ImportMemos`: file flows.
+- `AIService` and `IdentityProviderService`: stubbed.
+- `SetMemoAttachments` / `UploadAttachment`: deferred pending
+  an attachments-collection decision.
+- `SignIn` password verification still requires the parallel
+  `password_hash` column.
+- `golangci-lint` config still references deleted upstream
+  paths; the tool itself isn't installed in this environment.
+- The pre-existing `pb/hooks/memo_links.go::memoLinksFanOut`
+  worker pool race (`3bd5c81d` Known Issue #1) — the second
+  subtest in any `pb/connect` test run that creates memos hits
+  a nil-pointer dereference when the worker outlives the
+  test app's DB close. Reproduces on pristine `3bd5c81d`; not
+  caused by Wave 6. Fix per the `3bd5c81d` commit message:
+  add `app.OnTerminate()` cancellation or nil-check `app`
+  per worker iteration.
+
 ---
 
 ## `memos.payload` column landed (2026-10-09)

@@ -1,146 +1,102 @@
 package email
 
 import (
-	"net"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/sync/errgroup"
 )
 
-func TestSend(t *testing.T) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	defer listener.Close()
-
-	connectionClosed := make(chan struct{})
-	go func() {
-		defer close(connectionClosed)
-		conn, err := listener.Accept()
-		if err == nil {
-			_ = conn.Close()
-		}
-	}()
-
-	config := &Config{
-		SMTPHost:  "127.0.0.1",
-		SMTPPort:  listener.Addr().(*net.TCPAddr).Port,
-		FromEmail: "test@example.com",
-	}
-
-	message := &Message{
-		To:      []string{"recipient@example.com"},
-		Subject: "Test",
-		Body:    "Test body",
-	}
-
-	// The local server closes before sending an SMTP greeting, proving Send made
-	// it through validation and attempted to create an SMTP client.
-	err = Send(config, message)
-	select {
-	case <-connectionClosed:
-	case <-time.After(time.Second):
-		t.Fatal("SMTP listener did not accept a connection")
-	}
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to create SMTP client")
-}
-
-func TestSendValidation(t *testing.T) {
-	tests := []struct {
+func TestConfig_Validate(t *testing.T) {
+	cases := []struct {
 		name    string
 		config  *Config
-		message *Message
-		wantErr bool
-		errMsg  string
+		wantErr string
 	}{
 		{
-			name:    "nil config",
-			config:  nil,
-			message: &Message{To: []string{"test@example.com"}, Subject: "Test", Body: "Test"},
-			wantErr: true,
-			errMsg:  "configuration is required",
-		},
-		{
-			name:    "nil message",
-			config:  &Config{SMTPHost: "smtp.example.com", SMTPPort: 587, FromEmail: "from@example.com"},
-			message: nil,
-			wantErr: true,
-			errMsg:  "message is required",
-		},
-		{
-			name: "invalid config",
+			name: "valid",
 			config: &Config{
-				SMTPHost: "",
-				SMTPPort: 587,
+				SMTPHost:     "smtp.example.com",
+				SMTPPort:     587,
+				SMTPUsername: "user",
+				SMTPPassword: "pw",
+				FromEmail:    "noreply@example.com",
+				FromName:     "Riff",
 			},
-			message: &Message{To: []string{"test@example.com"}, Subject: "Test", Body: "Test"},
-			wantErr: true,
-			errMsg:  "invalid email configuration",
+		},
+		{
+			name:    "missing host",
+			config:  &Config{SMTPPort: 587, FromEmail: "noreply@example.com"},
+			wantErr: "SMTP host is required",
+		},
+		{
+			name:    "missing port",
+			config:  &Config{SMTPHost: "smtp.example.com", FromEmail: "noreply@example.com"},
+			wantErr: "SMTP port must be between 1 and 65535",
+		},
+		{
+			name:    "out-of-range port",
+			config:  &Config{SMTPHost: "smtp.example.com", SMTPPort: 70000, FromEmail: "noreply@example.com"},
+			wantErr: "SMTP port must be between 1 and 65535",
+		},
+		{
+			name:    "missing from",
+			config:  &Config{SMTPHost: "smtp.example.com", SMTPPort: 587},
+			wantErr: "from email is required",
 		},
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := Send(tt.config, tt.message)
-			if tt.wantErr {
-				assert.Error(t, err)
-				assert.Contains(t, err.Error(), tt.errMsg)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.config.Validate()
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+				return
 			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantErr)
 		})
 	}
 }
 
-func TestSendAsync(t *testing.T) {
-	config := &Config{
-		SMTPHost:  "smtp.example.com",
-		SMTPPort:  587,
-		FromEmail: "test@example.com",
-	}
-
-	message := &Message{
-		To:      []string{"recipient@example.com"},
-		Subject: "Test Async",
-		Body:    "Test async body",
-	}
-
-	// SendAsync should not block
-	start := time.Now()
-	SendAsync(config, message)
-	duration := time.Since(start)
-
-	// Should return almost immediately (< 100ms)
-	assert.Less(t, duration, 100*time.Millisecond)
-
-	// Give goroutine time to start
-	time.Sleep(50 * time.Millisecond)
+func TestMessage_Validate(t *testing.T) {
+	m := &Message{}
+	require.Error(t, m.Validate(), "empty message should fail")
+	m = &Message{To: []string{"a@b.com"}, Subject: "hi"}
+	require.Error(t, m.Validate(), "missing body should fail")
+	m = &Message{To: []string{"a@b.com"}, Body: "x"}
+	require.Error(t, m.Validate(), "missing subject should fail")
+	m = &Message{Subject: "hi", Body: "x"}
+	require.Error(t, m.Validate(), "missing to should fail")
+	m = &Message{To: []string{"a@b.com"}, Subject: "hi", Body: "x"}
+	require.NoError(t, m.Validate(), "complete message should pass")
 }
 
-func TestSendAsyncConcurrent(t *testing.T) {
-	config := &Config{
-		SMTPHost:  "smtp.example.com",
-		SMTPPort:  587,
-		FromEmail: "test@example.com",
+func TestMessage_Format_StripsHeaderInjection(t *testing.T) {
+	m := &Message{
+		To:      []string{"a@b.com"},
+		Subject: "hi\r\nBcc: attacker@evil.com",
+		Body:    "hello",
+		ReplyTo: "ok\r\nBcc: another@evil.com",
 	}
+	out := m.Format("noreply@example.com", "Riff")
+	// The injection attempt was a CR/LF that would let a
+	// second header line ("Bcc: ...") appear on its own
+	// line. The sanitiser folds the CR/LF into a single
+	// space, so the result must NOT contain "\r\nBcc:" or
+	// "\nBcc:" — a real injection would. The substring
+	// "Bcc: attacker" is still allowed to appear inline in
+	// the Subject field, which is the safe outcome.
+	assert.NotContains(t, out, "\r\nBcc:")
+	assert.NotContains(t, out, "\nBcc:")
+	assert.Contains(t, out, "Subject: hi Bcc: attacker@evil.com")
+}
 
-	g := errgroup.Group{}
-	count := 5
-
-	for i := 0; i < count; i++ {
-		g.Go(func() error {
-			message := &Message{
-				To:      []string{"recipient@example.com"},
-				Subject: "Concurrent Test",
-				Body:    "Test body",
-			}
-			SendAsync(config, message)
-			return nil
-		})
+func TestMessage_GetAllRecipients(t *testing.T) {
+	m := &Message{
+		To:  []string{"a@b.com"},
+		Cc:  []string{"c@b.com", "d@b.com"},
+		Bcc: []string{"e@b.com"},
 	}
-
-	if err := g.Wait(); err != nil {
-		t.Fatalf("SendAsync calls failed: %v", err)
-	}
+	got := m.GetAllRecipients()
+	assert.Equal(t, []string{"a@b.com", "c@b.com", "d@b.com", "e@b.com"}, got)
 }

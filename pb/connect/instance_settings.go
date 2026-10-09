@@ -2,7 +2,10 @@ package connect
 
 import (
 	"context"
+	"net"
+	"strconv"
 	"strings"
+	"time"
 
 	"connectrpc.com/connect/v2"
 	"github.com/pocketbase/pocketbase/core"
@@ -92,11 +95,22 @@ func (s *InstanceServer) UpdateInstanceSetting(ctx context.Context, req *v1.Upda
 	return recordToInstanceSetting(rec), nil
 }
 
-// TestInstanceEmailSetting validates the supplied SMTP settings. We don't
-// actually open a TCP connection: riff doesn't ship an SMTP backend and
-// the admin settings page uses this call for a "looks valid" check, not
-// delivery confirmation. We re-encode the JSON and return ok if the
-// shape parses; the frontend then persists.
+// TestInstanceEmailSetting validates the supplied SMTP settings.
+// Phase 5 makes the call a real reachability check: we open a
+// TCP connection to SmtpHost:SmtpPort with a 5 s timeout and
+// report the result. A successful dial means the operator's
+// SMTP server is at least reachable on the network; a failed
+// dial returns FailedPrecondition so the admin settings page
+// can surface a meaningful error.
+//
+// The handler does NOT send a real email; that would
+// require credentials and a test recipient. The dial-only
+// behaviour is the same trade-off the upstream Memos version
+// makes (server/api/notification_email.go::SendTestEmail
+// sends for real, but the upstream RPC handler does not call
+// it from the settings page — the admin UI dials a separate
+// probe port). Keeping the dial here gives the frontend a
+// network-level signal without the credentials round-trip.
 func (s *InstanceServer) TestInstanceEmailSetting(ctx context.Context, req *v1.TestInstanceEmailSettingRequest) (*emptypb.Empty, error) {
 	if err := requireAdmin(ctx); err != nil {
 		return nil, err
@@ -108,7 +122,20 @@ func (s *InstanceServer) TestInstanceEmailSetting(ctx context.Context, req *v1.T
 	if email.SmtpHost == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, "smtp_host is required")
 	}
-	// We deliberately don't dial. The call is a syntactic check.
+	port := int(email.GetSmtpPort())
+	if port <= 0 || port > 65535 {
+		port = 587
+	}
+	addr := net.JoinHostPort(email.SmtpHost, strconv.Itoa(port))
+	// 5s gives a slow server (cross-region) a chance without
+	// making the admin wait forever.
+	dialer := &net.Dialer{Timeout: 5 * time.Second}
+	conn, err := dialer.Dial("tcp", addr)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			"smtp server is not reachable at "+addr+": "+err.Error())
+	}
+	_ = conn.Close()
 	return &emptypb.Empty{}, nil
 }
 

@@ -72,7 +72,7 @@ func TestCreateUser_AdminOnlyAndSignIn(t *testing.T) {
 	require.NoError(t, err)
 	assert.NoError(t, bcrypt.CompareHashAndPassword([]byte(rec.GetString("password_hash")), []byte("passw0rd!")))
 
-	auth := NewAuthServer(app)
+	auth := NewAuthServer(app, nil)
 	signIn, err := auth.SignIn(context.Background(), &v1.SignInRequest{
 		Credentials: &v1.SignInRequest_PasswordCredentials_{
 			PasswordCredentials: &v1.SignInRequest_PasswordCredentials{
@@ -141,7 +141,7 @@ func TestUpdateUser_PasswordKeepsBothStoresInSync(t *testing.T) {
 	require.NoError(t, err)
 	assert.NoError(t, bcrypt.CompareHashAndPassword([]byte(rec.GetString("password_hash")), []byte("newpassw0rd!")))
 
-	auth := NewAuthServer(app)
+	auth := NewAuthServer(app, nil)
 	_, err = auth.SignIn(context.Background(), &v1.SignInRequest{
 		Credentials: &v1.SignInRequest_PasswordCredentials_{
 			PasswordCredentials: &v1.SignInRequest_PasswordCredentials{

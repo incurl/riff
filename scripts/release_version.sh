@@ -49,7 +49,7 @@ previous_release_image() {
     echo 'Pass --previous-image' >&2
     return 1
   fi
-  printf 'neosmemo/memos:%s\n' "${tag#v}"
+  printf 'incurl/riff:%s\n' "${tag#v}"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

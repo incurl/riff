@@ -8,7 +8,9 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 
+	"github.com/incurl/riff/internal/ratelimit"
 	"github.com/pocketbase/pocketbase"
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/pocketbase/pocketbase/plugins/migratecmd"
@@ -42,6 +44,23 @@ func mcpSpecPath() string {
 	return raw
 }
 
+// envBool reports whether name is set in the process environment
+// to a truthy value (1, true, yes, on — case-insensitive). The
+// default is false so the rest of the binary sees "feature off"
+// unless an operator explicitly opts in. Used today for
+// RIFF_RATE_LIMIT.
+func envBool(name string) bool {
+	v := os.Getenv(name)
+	if v == "" {
+		return false
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return false
+	}
+	return b
+}
+
 func main() {
 	app := pocketbase.NewWithConfig(pocketbase.Config{
 		DefaultDataDir: "./pb_data",
@@ -56,6 +75,31 @@ func main() {
 		Dir:         "pb/migrations",
 	})
 
+	// --- Profile --------------------------------------------------------
+	// Build a default profile so the MCP origin allow-list has
+	// something to compare against. RIFF_INSTANCE_URL populates
+	// the canonical URL the email dispatcher and MCP origin
+	// check share; an empty value is the safe default that
+	// disables both the email side and the cross-origin
+	// allow-list.
+	prof := buildProfileFromEnv()
+
+	// --- Rate limiter ---------------------------------------------------
+	// The Connect registration loop consults this limiter per
+	// procedure (see pb/connect/ratelimit.go for the procedure
+	// table). A nil limiter keeps the previous unbounded behaviour,
+	// which is the default; operators that flip
+	// Profile.RateLimit (today's only knob is RIFF_RATE_LIMIT=1
+	// wired up here) get the conservative in-memory policy from
+	// ratelimit.DefaultPolicy() instead. A persistent or
+	// distributed limiter can be slotted in here without
+	// touching pb/connect/ — the ratelimit.Limiter interface is
+	// the seam.
+	var rateLimiter ratelimit.Limiter
+	if prof.RateLimit {
+		rateLimiter = ratelimit.NewMemoryLimiter(ratelimit.DefaultPolicy())
+	}
+
 	// --- Business logic hooks -------------------------------------------
 	// Register all event hooks (spaces cascade, memos author auto-
 	// assign, hashtag parse, space-membership gates, realtime
@@ -63,15 +107,19 @@ func main() {
 	// and the individual subpackages for behavior.
 	hooks.Register(app)
 
-	// --- Profile --------------------------------------------------------
-	// Build a default profile so the MCP origin allow-list has
-	// something to compare against. A future change can populate
-	// Profile.InstanceURL from env or flags (RIFF_INSTANCE_URL);
-	// for now, the default zero-value profile keeps the existing
-	// "reject every cross-origin browser request" behaviour, which
-	// is the safe failure mode until an operator explicitly opts
-	// in to a broader allow-list.
-	prof := &profile.Profile{}
+	// --- Notification email dispatcher ---------------------------------
+	// The Phase 5 inbox work introduced a notification email
+	// dispatcher that turns new notification rows into SMTP
+	// messages. It is feature-gated on RIFF_INSTANCE_URL because
+	// the dispatcher's email bodies link to URLs under
+	// prof.InstanceURL; without that, every email would have a
+	// broken link and the dispatcher would no-op with a warn
+	// log. Wire it after hooks.Register so the in-process
+	// goroutine can find the email-setting row by collection
+	// name.
+	if prof.InstanceURL != "" {
+		hooks.InstallEmailDispatcher(prof, app)
+	}
 
 	// --- Custom REST routes ---------------------------------------------
 	// /api/po33/* endpoints (feed, space memos, invite, move).
@@ -81,7 +129,7 @@ func main() {
 	// /memos.api.v1.*/* endpoints. The Memos React frontend
 	// talks to these; this is what makes Phase 4 "drop the
 	// existing frontend in unchanged" work.
-	if err := connect.Register(app); err != nil {
+	if err := connect.Register(app, rateLimiter); err != nil {
 		log.Fatal(err)
 	}
 
@@ -113,4 +161,26 @@ func main() {
 	if err := app.Start(); err != nil {
 		log.Fatal(err)
 	}
+}
+
+// buildProfileFromEnv reads the operator-facing env vars and
+// returns a Profile with the corresponding fields populated.
+//
+// RIFF_INSTANCE_URL is the canonical external URL of the
+// instance. Both the MCP origin allow-list and the notification
+// email dispatcher link back to it, so a missing value is the
+// single switch that turns off both features at once.
+//
+// RIFF_RATE_LIMIT flips the in-process rate limiter on. The
+// knob is read here (and not on the Profile struct directly)
+// so the env var name stays the operator-facing one while the
+// profile type keeps its domain meaning.
+func buildProfileFromEnv() *profile.Profile {
+	p := &profile.Profile{
+		InstanceURL: os.Getenv("RIFF_INSTANCE_URL"),
+	}
+	if envBool("RIFF_RATE_LIMIT") {
+		p.RateLimit = true
+	}
+	return p
 }

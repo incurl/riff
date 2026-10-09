@@ -11,6 +11,7 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/incurl/riff/internal/ratelimit"
 	v1 "github.com/incurl/riff/proto/gen/api/v1"
 	"github.com/incurl/riff/proto/gen/api/v1/apiv1connect"
 )
@@ -22,18 +23,51 @@ import (
 // not the v1 connect.Request[T] / connect.Response[T] wrappers.
 type AuthServer struct {
 	apiv1connect.UnimplementedAuthServiceHandler
-	app core.App
+	app         core.App
+	rateLimiter ratelimit.Limiter
 }
 
-func NewAuthServer(app core.App) *AuthServer { return &AuthServer{app: app} }
+// NewAuthServer constructs the AuthService implementation. The
+// optional rateLimiter is consulted by SignIn for the per-account
+// signin_account budget (see SignIn docstring); passing nil keeps
+// the previous behaviour where the in-handler counter is a no-op,
+// matching the per-route RateLimit middleware's nil-is-noop contract.
+func NewAuthServer(app core.App, rateLimiter ratelimit.Limiter) *AuthServer {
+	return &AuthServer{app: app, rateLimiter: rateLimiter}
+}
 
 // SignIn authenticates a user and returns a token. We support
 // password-based credentials only; SSO is delegated to
 // IdentityProviderService (currently Unimplemented).
+//
+// The per-IP signin_ip budget is enforced at the route level by the
+// RateLimit middleware attached in connect.Register; this handler is
+// the right place for the per-submitted-username signin_account budget
+// because the key is the username in the request body, which the
+// middleware does not see. We Consume up front (so concurrent
+// attempts cannot share one remaining unit) and Refund on success
+// (so a real user typing the right password does not pay the cost).
+// Both branches — user-not-found and bad-password — leave the
+// Consume in place; the design requires that the counter trips
+// identically for a real and a made-up username so an attacker
+// cannot probe the user namespace.
 func (s *AuthServer) SignIn(ctx context.Context, req *v1.SignInRequest) (*v1.SignInResponse, error) {
 	pw := req.GetPasswordCredentials()
 	if pw == nil {
 		return nil, connect.NewError(connect.CodeUnimplemented, "SSO sign-in is not implemented")
+	}
+
+	// Per-account budget: Consume on the submitted username, Refund
+	// on success. A nil rateLimiter is the production-default
+	// configuration (RIFF_RATE_LIMIT unset); the call sites are
+	// silent no-ops in that case, so this code is safe to leave in.
+	// When the Consume is refused, return ResourceExhausted (the
+	// gRPC counterpart of HTTP 429) before any password work so the
+	// server does not pay the bcrypt cost on a throttled peer.
+	if s.rateLimiter != nil && pw.Username != "" {
+		if dec := s.rateLimiter.Consume(ratelimit.ScopeSignInAccount, pw.Username, 1); !dec.Allowed {
+			return nil, connect.NewError(connect.CodeResourceExhausted, "too many sign-in attempts for this account")
+		}
 	}
 
 	rec, err := s.findByIdentity(pw.Username)
@@ -48,6 +82,12 @@ func (s *AuthServer) SignIn(ctx context.Context, req *v1.SignInRequest) (*v1.Sig
 	// simplest portable path is the dao-level check.
 	if err := s.verifyPassword(rec, pw.Password); err != nil {
 		return nil, connect.NewError(connect.CodeUnauthenticated, "invalid credentials")
+	}
+
+	// Successful auth: refund the per-account Consume so a real
+	// user typing the right password does not consume budget.
+	if s.rateLimiter != nil && pw.Username != "" {
+		s.rateLimiter.Refund(ratelimit.ScopeSignInAccount, pw.Username, 1)
 	}
 
 	tok, err := rec.NewAuthToken()

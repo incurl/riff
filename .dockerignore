@@ -2,8 +2,8 @@
 /build/
 /bin/
 /tmp/
-/memos
-/memos.exe
+/riff
+/riff.exe
 coverage.out
 /.pnpm-store/
 /.worktrees/

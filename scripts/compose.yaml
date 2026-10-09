@@ -1,8 +1,18 @@
 services:
-  memos:
-    image: neosmemo/memos:stable
-    container_name: memos
+  riff:
+    image: incurl/riff:stable
+    container_name: riff
+    # Bind the host's riff data dir to /var/opt/riff inside the
+    # container. The container writes pb_data/, attachments, and
+    # any S3-cached files under here, so it must be persistent.
     volumes:
-      - ~/.memos/:/var/opt/memos
+      - ~/.riff/:/var/opt/riff
+    # 8090 is the canonical riff port (PocketBase default; see
+    # AGENTS.md CI Reference). The Dockerfile EXPOSEs 8090.
     ports:
-      - 5230:5230
+      - 8090:8090
+    # Optional: pass the canonical instance URL for email
+    # notification links, MCP origin allow-list, and webhook
+    # callbacks. If unset, links fall back to relative paths.
+    # environment:
+    #   - RIFF_INSTANCE_URL=https://riff.example.com

@@ -1,0 +1,99 @@
+# Fly.io application manifest for riff.
+#
+# This file is a *template*. Before deploying, set:
+#
+#   1. `app` to your chosen Fly app name (must be globally unique).
+#   2. `primary_region` to the region closest to most users; riff
+#      will boot from a fresh image in the region and read the
+#      shared persistent volume. The default `iad` is US-East.
+#   3. Secrets via `fly secrets set RIFF_INSTANCE_URL=...`.
+#
+# Reference: https://fly.io/docs/reference/configuration/
+
+app = "riff"
+primary_region = "iad"
+kill_signal = "SIGINT"
+kill_timeout = "10s"
+
+[build]
+  # Use the production Dockerfile under scripts/. Frontend assets
+  # must already be present at pb/frontend/dist (run
+  # `cd web && pnpm release` before `fly deploy`).
+  dockerfile = "scripts/Dockerfile"
+
+[env]
+  # Listen on the canonical riff port (PocketBase default; see
+  # AGENTS.md CI Reference). The Fly proxy maps 80/443 to 8090.
+  PORT = "8090"
+  # Enable the Connect request rate limiter; off in dev by default.
+  RIFF_RATE_LIMIT = "1"
+  # The default data dir. PocketBase will create the SQLite
+  # database at /var/opt/riff/pb_data/data.db inside the
+  # persistent volume.
+  RIFF_DATA_DIR = "/var/opt/riff/pb_data"
+  # Required for outbound webhooks, link previews, and email
+  # notifications. Set via `fly secrets set RIFF_INSTANCE_URL=...`
+  # for the real hostname; the placeholder below is only for the
+  # local Fly proxy until secrets are populated.
+  RIFF_INSTANCE_URL = "http://localhost"
+
+[experimental]
+  # Required for [mounts] below; private volumes are not part of
+  # the public Fly API yet.
+  private_networking = true
+
+[mounts]
+  # Single shared persistent volume for PocketBase data and any
+  # local-disk attachment cache. Mounted at the path the entrypoint
+  # and the Dockerfile VOLUME agree on. Create the volume with
+  # `fly volumes create riff_data --size 1` before first deploy.
+  source = "riff_data"
+  destination = "/var/opt/riff"
+
+[[services]]
+  # Single-service HTTP/HTTPS. riff is a single binary; we don't
+  # need sidecar processes here. The MCP service, if enabled, is
+  # served at /mcp on the same internal port (see main.go).
+  internal_port = 8090
+  protocol = "tcp"
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+  [[services.ports]]
+    handlers = ["http"]
+    port = 80
+    force_https = true
+
+  [[services.ports]]
+    handlers = ["tls", "http"]
+    port = 443
+
+  [[services.tcp_checks]]
+    grace_period = "10s"
+    interval = "30s"
+    timeout = "5s"
+
+  [[services.http_checks]]
+    # PocketBase exposes a simple /api/health that returns 200 once
+    # the database is open and migrations have applied. We use it
+    # for liveness; readiness uses the same path because riff has
+    # no separate warm-up phase.
+    interval = "15s"
+    timeout = "5s"
+    grace_period = "30s"
+    method = "get"
+    path = "/api/health"
+
+[deploy]
+  # The release_command runs once per deploy before the new
+  # machine starts. We use it to print the resolved CalVer and
+  # verify migrations would apply. The actual `version` and
+  # `commit` are baked into the image at build time by
+  # scripts/Dockerfile.
+  release_command = "scripts/release_version.sh version \"$(git rev-parse --abbrev-ref HEAD)\" || true"
+
+[metrics]
+  port = 8090
+  path = "/api/health"

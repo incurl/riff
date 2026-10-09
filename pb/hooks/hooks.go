@@ -19,4 +19,10 @@ func Register(app core.App) {
 	registerReactions(app)
 	registerRealtime(app)
 	registerMemoLinks(app)
+	registerMotionMedia(app)
+	registerStorageBridge(app)
+	registerWebhookOutbox(app)
+	registerWebhookDrain(app)
+	registerNotifications(app)
+	registerNotificationsEmailHook(app)
 }

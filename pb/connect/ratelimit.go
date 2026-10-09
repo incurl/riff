@@ -1,3 +1,18 @@
+// RateLimit is the per-route middleware this file exposes; callers
+// attach it via Route.BindFunc(connect.RateLimit(limiter, scope,
+// keyFunc)) and it consumes one unit per request, returning a 429
+// with the Memos-shape envelope when the policy refuses. A nil
+// limiter is a no-op so operators who have not set RIFF_RATE_LIMIT
+// keep the previous unbounded behaviour.
+//
+// procedureScope maps a Connect procedure path to the ratelimit.Scope
+// the registration loop in connect.go should attach at the route
+// level. The table is opt-in: procedures with no row fall through to
+// the catch-all budgets the authorizer (a future wave) will layer on
+// top. Procedures whose key is in the request body (signin_account,
+// keyed on the submitted username) call Consume / Refund from the
+// handler instead of getting a row here. The package doc comment
+// lives in connect.go.
 package connect
 
 import (
@@ -8,6 +23,7 @@ import (
 	"github.com/pocketbase/pocketbase/core"
 
 	"github.com/incurl/riff/internal/ratelimit"
+	"github.com/incurl/riff/proto/gen/api/v1/apiv1connect"
 )
 
 // KeyFunc chooses the rate-limit bucket for a request. The returned key is
@@ -27,6 +43,70 @@ type KeyFunc func(e *core.RequestEvent) string
 // sees the real client and not the proxy.
 func IPKey(e *core.RequestEvent) string {
 	return e.RealIP()
+}
+
+// procedureScope is the *opt-in* override table: procedures that need a
+// tighter rule than the catch-all ScopeAuthenticated/ScopeAnonymous
+// defaults. Anything not in the table is treated as authenticated
+// (anonymous for procedures that may run without a Bearer token) by the
+// registration loop in connect.go, so the table only needs the rows that
+// deserve their own row in the policy.
+//
+// Scopes are assigned per docs/design/api-abuse-controls.md. The
+// signin_account counter for failed password attempts is intentionally
+// not here — it depends on the submitted username and is consumed inside
+// the SignIn handler (auth.go) so a successful sign-in refunds it.
+var procedureScope = map[string]ratelimit.Scope{
+	apiv1connect.AuthServiceSignInProcedure:                             ratelimit.ScopeSignInIP,
+	apiv1connect.UserServiceCreateUserProcedure:                         ratelimit.ScopeSignupIP,
+	apiv1connect.MemoServiceCreateMemoProcedure:                         ratelimit.ScopeWriteUser,
+	apiv1connect.MemoServiceUpdateMemoProcedure:                         ratelimit.ScopeWriteUser,
+	apiv1connect.MemoServiceDeleteMemoProcedure:                         ratelimit.ScopeWriteUser,
+	apiv1connect.MemoServiceUpsertMemoReactionProcedure:                 ratelimit.ScopeWriteUser,
+	apiv1connect.MemoServiceDeleteMemoReactionProcedure:                 ratelimit.ScopeWriteUser,
+	apiv1connect.MemoServiceCreateMemoCommentProcedure:                  ratelimit.ScopeWriteUser,
+	apiv1connect.MemoServiceSetMemoAttachmentsProcedure:                 ratelimit.ScopeWriteUser,
+	apiv1connect.MemoServiceSetMemoRelationsProcedure:                   ratelimit.ScopeWriteUser,
+	apiv1connect.MemoServiceCreateMemoShareProcedure:                    ratelimit.ScopeWriteUser,
+	apiv1connect.MemoServiceDeleteMemoShareProcedure:                    ratelimit.ScopeWriteUser,
+	apiv1connect.AttachmentServiceCreateAttachmentProcedure:             ratelimit.ScopeUploadUser,
+	apiv1connect.AttachmentServiceUploadAttachmentProcedure:             ratelimit.ScopeUploadUser,
+	apiv1connect.AttachmentServiceUpdateAttachmentProcedure:             ratelimit.ScopeUploadUser,
+	apiv1connect.AttachmentServiceDeleteAttachmentProcedure:             ratelimit.ScopeUploadUser,
+	apiv1connect.AttachmentServiceBatchDeleteAttachmentsProcedure:       ratelimit.ScopeUploadUser,
+	apiv1connect.MemoServiceGetLinkMetadataProcedure:                    ratelimit.ScopeLinkMetadata,
+	apiv1connect.MemoServiceBatchGetLinkMetadataProcedure:               ratelimit.ScopeLinkMetadata,
+	apiv1connect.AIServiceTranscribeProcedure:                           ratelimit.ScopeTranscribeUser,
+	apiv1connect.UserServiceExportMemosProcedure:                        ratelimit.ScopeArchiveUser,
+	apiv1connect.UserServiceImportMemosProcedure:                        ratelimit.ScopeArchiveUser,
+	apiv1connect.UserServiceCreatePersonalAccessTokenProcedure:          ratelimit.ScopeWriteUser,
+	apiv1connect.UserServiceDeletePersonalAccessTokenProcedure:          ratelimit.ScopeWriteUser,
+	apiv1connect.UserServiceCreateLinkedIdentityProcedure:               ratelimit.ScopeWriteUser,
+	apiv1connect.UserServiceDeleteLinkedIdentityProcedure:               ratelimit.ScopeWriteUser,
+	apiv1connect.UserServiceCreateMemoViewProcedure:                     ratelimit.ScopeWriteUser,
+	apiv1connect.UserServiceUpdateMemoViewProcedure:                     ratelimit.ScopeWriteUser,
+	apiv1connect.UserServiceDeleteMemoViewProcedure:                     ratelimit.ScopeWriteUser,
+	apiv1connect.UserServiceUpdateUserNotificationProcedure:             ratelimit.ScopeWriteUser,
+	apiv1connect.UserServiceDeleteUserNotificationProcedure:             ratelimit.ScopeWriteUser,
+	apiv1connect.SpaceServiceCreateSpaceProcedure:                       ratelimit.ScopeWriteUser,
+	apiv1connect.SpaceServiceUpdateSpaceProcedure:                       ratelimit.ScopeWriteUser,
+	apiv1connect.SpaceServiceDeleteSpaceProcedure:                       ratelimit.ScopeWriteUser,
+	apiv1connect.SpaceServiceCreateSpaceInvitationProcedure:             ratelimit.ScopeWriteUser,
+	apiv1connect.SpaceServiceUpdateSpaceMemberProcedure:                 ratelimit.ScopeWriteUser,
+	apiv1connect.SpaceServiceDeleteSpaceMemberProcedure:                 ratelimit.ScopeWriteUser,
+	apiv1connect.SpaceServiceAcceptSpaceInvitationProcedure:             ratelimit.ScopeWriteUser,
+	apiv1connect.SpaceServiceDeclineSpaceInvitationProcedure:            ratelimit.ScopeWriteUser,
+	apiv1connect.SpaceServiceDeleteSpaceInvitationProcedure:             ratelimit.ScopeWriteUser,
+	apiv1connect.InstanceServiceUpdateInstanceSettingProcedure:          ratelimit.ScopeWriteUser,
+	apiv1connect.InstanceServiceTestInstanceEmailSettingProcedure:       ratelimit.ScopeWriteUser,
+	apiv1connect.IdentityProviderServiceCreateIdentityProviderProcedure: ratelimit.ScopeWriteUser,
+	apiv1connect.IdentityProviderServiceUpdateIdentityProviderProcedure: ratelimit.ScopeWriteUser,
+	apiv1connect.IdentityProviderServiceDeleteIdentityProviderProcedure: ratelimit.ScopeWriteUser,
+	apiv1connect.UserServiceCreateUserWebhookProcedure:                  ratelimit.ScopeWriteUser,
+	apiv1connect.UserServiceUpdateUserWebhookProcedure:                  ratelimit.ScopeWriteUser,
+	apiv1connect.UserServiceDeleteUserWebhookProcedure:                  ratelimit.ScopeWriteUser,
+	apiv1connect.UserServiceGetUserWebhookSigningSecretProcedure:        ratelimit.ScopeWriteUser,
+	apiv1connect.UserServiceUpdateUserSettingProcedure:                  ratelimit.ScopeWriteUser,
 }
 
 // RateLimit returns a PocketBase-compatible middleware that consults

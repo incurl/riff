@@ -7,27 +7,34 @@ import (
 )
 
 // Config represents the SMTP configuration for email sending.
-// These settings should be provided by the self-hosted instance administrator.
+// These settings are provided by the instance administrator via
+// the InstanceSetting.NotificationSetting.EmailSetting proto
+// (see pb/hooks/notifications_email.go for the read side).
 type Config struct {
-	// SMTPHost is the SMTP server hostname (e.g., "smtp.gmail.com")
+	// SMTPHost is the SMTP server hostname (e.g., "smtp.gmail.com").
 	SMTPHost string
-	// SMTPPort is the SMTP server port (common: 587 for TLS, 465 for SSL, 25 for unencrypted)
+	// SMTPPort is the SMTP server port (587 for STARTTLS, 465 for SSL).
 	SMTPPort int
-	// SMTPUsername is the SMTP authentication username (usually the email address)
+	// SMTPUsername is the SMTP authentication username.
 	SMTPUsername string
-	// SMTPPassword is the SMTP authentication password or app-specific password
+	// SMTPPassword is the SMTP authentication password or app-specific password.
 	SMTPPassword string
-	// FromEmail is the email address that will appear in the "From" field
+	// FromEmail is the address that will appear in the "From" header.
 	FromEmail string
-	// FromName is the display name that will appear in the "From" field
+	// FromName is the display name in the "From" header.
 	FromName string
-	// UseTLS enables STARTTLS encryption (recommended for port 587)
+	// UseTLS enables STARTTLS on the unencrypted SMTP port.
 	UseTLS bool
-	// UseSSL enables SSL/TLS encryption (for port 465)
+	// UseSSL enables implicit TLS (port 465).
 	UseSSL bool
 }
 
-// Validate checks if the configuration is valid.
+// Validate returns an error when the config is missing the
+// fields required to actually open a connection. FromEmail is
+// the only one we strictly need to send a message; the other
+// failures are caught by the Client, but Validate gives the
+// admin's settings page a precise error before the network is
+// touched.
 func (c *Config) Validate() error {
 	if c.SMTPHost == "" {
 		return errors.New("SMTP host is required")
@@ -41,7 +48,8 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-// GetServerAddress returns the SMTP server address in the format "host:port".
+// GetServerAddress returns the SMTP server address in the
+// "host:port" form expected by net.Dial.
 func (c *Config) GetServerAddress() string {
 	return fmt.Sprintf("%s:%d", c.SMTPHost, c.SMTPPort)
 }

@@ -51,6 +51,30 @@ var memoLinkLog = slog.Default()
 var (
 	memoLinksActiveMemoIDsMu sync.Mutex
 	memoLinksActiveMemoIDs   = map[string]time.Time{}
+
+	// memoLinksShutdown is the cancellation signal
+	// the fan-out goroutines honour. The channel is
+	// closed by the OnTerminate hook registered in
+	// registerMemoLinks; once it fires, every in-
+	// flight fan-out aborts before its next DB
+	// write, which prevents the
+	// "sql: database is closed" race that
+	// otherwise surfaces when a test app (or a
+	// production app during a graceful shutdown)
+	// closes its DB while a fan-out is still
+	// running.
+	//
+	// See the AGENTS.md "Known Issues" section,
+	// entry 1, for the original report. The fix
+	// is intentionally narrow: the goroutine
+	// still owns the in-flight fetch but stops
+	// poking the DB as soon as shutdown is
+	// signalled. A fresh app boot re-creates a
+	// closed-channel value via sync.Once, so a
+	// second app in the same process still gets a
+	// usable signal.
+	memoLinksShutdown     chan struct{}
+	memoLinksShutdownOnce sync.Once
 )
 
 // registerMemoLinks subscribes the memo_links auto-fetch to the
@@ -67,6 +91,18 @@ func registerMemoLinks(app core.App) {
 		markdown.WithTagExtension(),
 		markdown.WithMentionExtension(),
 	)
+
+	// Per-app shutdown signal. We allocate the
+	// channel fresh on each registerMemoLinks call
+	// (once per app) and close it on terminate so
+	// every in-flight fan-out goroutine sees the
+	// signal at its next iteration.
+	memoLinksShutdownOnce = sync.Once{}
+	memoLinksShutdown = make(chan struct{})
+	app.OnTerminate().BindFunc(func(e *core.TerminateEvent) error {
+		memoLinksShutdownOnce.Do(func() { close(memoLinksShutdown) })
+		return e.Next()
+	})
 
 	bind := func(e *core.RecordEvent) error {
 		defer func() { _ = e.Next() }()
@@ -97,6 +133,16 @@ func registerMemoLinks(app core.App) {
 func memoLinksFanOut(app core.App, mdSvc markdown.Service, rec *core.Record) {
 	memoID := rec.Id
 	if memoID == "" {
+		return
+	}
+
+	// Fast-fail if the app is already shutting
+	// down. Without this check the goroutine would
+	// outlive the test's app.Bootstrap cleanup and
+	// hit "sql: database is closed" on its first
+	// DB call. A normal production shutdown hits
+	// the same path.
+	if isMemoLinksShutdown() {
 		return
 	}
 
@@ -143,6 +189,9 @@ func memoLinksFanOut(app core.App, mdSvc markdown.Service, rec *core.Record) {
 		go func() {
 			defer wg.Done()
 			for u := range jobs {
+				if isMemoLinksShutdown() {
+					continue
+				}
 				upsertOneMemoLink(app, ctx, memoID, u)
 			}
 		}()
@@ -188,6 +237,24 @@ func normaliseLinkURL(raw string) (string, bool) {
 // rows cheaply; the delete runs in a single statement per stale
 // URL to keep the hook fast and predictable.
 func pruneStaleMemoLinks(app core.App, memoID string, keep []string) {
+	// Two layers of shutdown check:
+	//
+	//  1. The cheap pre-check (isMemoLinksShutdown)
+	//     before any DB work.
+	//  2. A recover() around the call so a panic
+	//     from a closed DB (the test-app case) does
+	//     not crash the test runner. The goroutine
+	//     dies on the panic; the leaked DB error
+	//     is logged once and the system moves on.
+	defer func() {
+		if r := recover(); r != nil {
+			memoLinkLog.Warn("memo_links: prune panicked; app likely shutting down",
+				"memo", memoID, "panic", r)
+		}
+	}()
+	if isMemoLinksShutdown() {
+		return
+	}
 	existing, err := app.FindRecordsByFilter("memo_links",
 		"memo={:memo}", "", 0, 0, map[string]any{"memo": memoID})
 	if err != nil {
@@ -341,4 +408,24 @@ func truncateErr(err error) string {
 		return ""
 	}
 	return truncate(err.Error(), 500)
+}
+
+// isMemoLinksShutdown reports whether the fan-out
+// goroutines should stop. The channel is set in
+// registerMemoLinks and closed on app.OnTerminate,
+// so a closed channel means the app that owned the
+// goroutine is going away. A nil channel (before
+// registerMemoLinks has run, or after a fresh
+// process boot) returns false, so this is safe to
+// call from any goroutine.
+func isMemoLinksShutdown() bool {
+	if memoLinksShutdown == nil {
+		return false
+	}
+	select {
+	case <-memoLinksShutdown:
+		return true
+	default:
+		return false
+	}
 }

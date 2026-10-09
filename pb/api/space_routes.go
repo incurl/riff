@@ -148,27 +148,22 @@ func spaceInviteHandler(e *core.RequestEvent) error {
 		return err
 	}
 
-	// Create a notification (best-effort).
-	notifCol, _ := e.App.FindCollectionByNameOrId("notifications")
-	if notifCol != nil {
-		notif := core.NewRecord(notifCol)
-		notif.Set("user", invitee.Id)
-		notif.Set("type", "SPACE_INVITATION")
-		notif.Set("payload", map[string]any{
-			"space": map[string]any{
-				"id":    space.Id,
-				"uid":   space.GetString("uid"),
-				"title": space.GetString("title"),
-				"icon":  space.GetString("icon"),
-				"role":  body.Role,
-			},
-			"from_user": map[string]any{
-				"id":       e.Auth.Id,
-				"username": e.Auth.GetString("username"),
-			},
-		})
-		_ = e.App.Save(notif)
-	}
+	// Create a notification (best-effort). The helper is the
+	// only authorized insert path; the collection's createRule
+	// is nil (superuser-only) so we cannot write directly.
+	hooks.CreateNotificationBestEffort(e.App, invitee.Id, "SPACE_INVITATION", map[string]any{
+		"space": map[string]any{
+			"id":    space.Id,
+			"uid":   space.GetString("uid"),
+			"title": space.GetString("title"),
+			"icon":  space.GetString("icon"),
+			"role":  body.Role,
+		},
+		"from_user": map[string]any{
+			"id":       e.Auth.Id,
+			"username": e.Auth.GetString("username"),
+		},
+	})
 
 	return e.JSON(http.StatusOK, member.PublicExport())
 }

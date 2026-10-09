@@ -7,7 +7,8 @@ import (
 )
 
 // createNotificationsCollection adds the `notifications` inbox used
-// for server-pushed events like space invitations.
+// for server-pushed events like space invitations, memo comments, and
+// memo mentions.
 //
 // We use a custom collection rather than PocketBase's `mails` table
 // because the Memos 0.31 design doc specifies in-app inbox
@@ -17,11 +18,12 @@ import (
 // Fields:
 //
 //	user      (relation → users, single, required, indexed)
-//	type      (select, required, indexed; values: SPACE_INVITATION, MEMO_COMMENT, MEMO_REACTION)
+//	type      (select, required, indexed; values: SPACE_INVITATION,
+//	          MEMO_COMMENT, MEMO_MENTION)
 //	payload   (json, required) — type-specific shape:
 //	          SPACE_INVITATION: { space: { id, uid, title, icon, role } }
 //	          MEMO_COMMENT:     { memo: { id, author, snippet }, from_user }
-//	          MEMO_REACTION:    { memo: { id, author }, emoji, from_user }
+//	          MEMO_MENTION:     { memo: { id, author, snippet }, from_user }
 //	read      (bool, default false, indexed)
 //	created   (autodate, onCreate, indexed)
 //
@@ -45,10 +47,16 @@ func init() {
 			MinSelect:     1,
 			CascadeDelete: true, // deleting a user removes their inbox
 		})
+		// MEMO_MENTION matches the proto's
+		// memos.api.v1.UserNotification.MEMO_MENTION enum value;
+		// the previous "MEMO_REACTION" label was a Wave-3 placeholder
+		// the Connect handler never learned to decode (see
+		// pb/connect/user_notifications.go::recordToUserNotification).
+		// Reactions are not a notification kind in Memos.
 		n.Fields.Add(&core.SelectField{
 			Name:     "type",
 			Required: true,
-			Values:   []string{"SPACE_INVITATION", "MEMO_COMMENT", "MEMO_REACTION"},
+			Values:   []string{"SPACE_INVITATION", "MEMO_COMMENT", "MEMO_MENTION"},
 		})
 		n.Fields.Add(&core.JSONField{
 			Name:     "payload",

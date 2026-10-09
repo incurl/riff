@@ -22,7 +22,10 @@
 // REST route can attach via Route.BindFunc; it consumes one unit per
 // request from a ratelimit.Limiter and is a no-op when no limiter is
 // configured, so feature work can land before the policy wiring
-// exists.
+// exists. Register() consults procedureScope (in ratelimit.go) to
+// decide which Connect procedures get the middleware; the rest fall
+// through to the catch-all that the authorizer (a future wave) will
+// layer on top.
 package connect
 
 import (
@@ -33,18 +36,28 @@ import (
 	"connectrpc.com/connect/v2"
 	"connectrpc.com/connect/v2/connecthttp"
 	"github.com/pocketbase/pocketbase/core"
+	"github.com/pocketbase/pocketbase/tools/router"
 
+	"github.com/incurl/riff/internal/ratelimit"
 	"github.com/incurl/riff/proto/gen/api/v1/apiv1connect"
 )
 
 // Register mounts the Connect-RPC services onto the PocketBase
 // router. Memos uses Connect over HTTP/1.1; the standard URL
 // scheme is /<package>.<service>/<Method>.
-func Register(app core.App) error {
+//
+// limiter is the rate limiter to consult for every known procedure.
+// Pass nil to keep the previous unbounded behaviour; the registration
+// loop and the per-procedure BindFunc both treat a nil limiter as a
+// no-op (see RateLimit in ratelimit.go). When a non-nil limiter is
+// passed, the loop in OnServe consults procedureScope (also in
+// ratelimit.go) and attaches a Route.BindFunc(RateLimit(...)) for every
+// procedure that has a row.
+func Register(app core.App, limiter ratelimit.Limiter) error {
 	srv := connect.NewServer(withAuth(app))
 
 	// Implemented services.
-	apiv1connect.RegisterAuthServiceHandler(srv, NewAuthServer(app))
+	apiv1connect.RegisterAuthServiceHandler(srv, NewAuthServer(app, limiter))
 	apiv1connect.RegisterUserServiceHandler(srv, NewUserServer(app))
 	apiv1connect.RegisterSpaceServiceHandler(srv, NewSpaceServer(app))
 	apiv1connect.RegisterMemoServiceHandler(srv, NewMemoServer(app))
@@ -60,23 +73,34 @@ func Register(app core.App) error {
 	connecthttp.Mount(mux, srv)
 
 	app.OnServe().BindFunc(func(e *core.ServeEvent) error {
-		// Register the catch-all for any path under
-		// /memos.api.v1. PocketBase's router doesn't
-		// translate the {rpc...} wildcard to stdlib
-		// syntax the way Echo does, so we just bind the
-		// stdlib mux directly to the path the procedure
-		// will arrive at. We register a separate route
-		// per known procedure.
-		for spec := range srv.Specs() {
-			procedure := spec.Procedure // e.g. /memos.api.v1.AuthService/SignIn
-			e.Router.Any(procedure, func(re *core.RequestEvent) error {
-				mux.ServeHTTP(re.Response, re.Request)
-				return nil
-			})
-		}
+		registerConnectRoutes(srv, mux, e.Router, limiter)
 		return e.Next()
 	})
 	return nil
+}
+
+// registerConnectRoutes adds one PocketBase route per Connect
+// procedure exposed by srv, dispatching each one to the connect-go
+// stdlib mux. When limiter is non-nil and a procedure is present in
+// procedureScope (ratelimit.go), the route gets a RateLimit BindFunc
+// so the policy is enforced before the connect-go handler runs.
+// Procedures with no row in the table fall through to the catch-all
+// budgets that the authorizer (a future wave) will layer on top.
+//
+// Extracted from Register so tests can drive the same registration
+// path against a router they control, without spinning up the full
+// OnServe / app.Start machinery.
+func registerConnectRoutes(srv *connect.Server, mux *http.ServeMux, r *router.Router[*core.RequestEvent], limiter ratelimit.Limiter) {
+	for spec := range srv.Specs() {
+		procedure := spec.Procedure // e.g. /memos.api.v1.AuthService/SignIn
+		route := r.Any(procedure, func(re *core.RequestEvent) error {
+			mux.ServeHTTP(re.Response, re.Request)
+			return nil
+		})
+		if scope, ok := procedureScope[procedure]; ok {
+			route.BindFunc(RateLimit(limiter, scope, IPKey))
+		}
+	}
 }
 
 // withAuth is a server-side interceptor that authenticates the

@@ -185,10 +185,15 @@ func recordToUserNotification(user *core.Record, rec *core.Record) (*v1.UserNoti
 			}
 		}
 		n.Payload = &v1.UserNotification_MemoComment{MemoComment: body}
-	case "MEMO_REACTION":
-		// MEMO_REACTION is the Wave-3 type; proto has no payload variant for
-		// it yet, so we just surface the type without populating a payload.
-		n.Type = v1.UserNotification_TYPE_UNSPECIFIED
+	case "MEMO_MENTION":
+		n.Type = v1.UserNotification_MEMO_MENTION
+		body := &v1.UserNotification_MemoMentionPayload{}
+		if len(rawPayload) > 0 {
+			if err := protojson.Unmarshal(rawPayload, body); err != nil {
+				return nil, err
+			}
+		}
+		n.Payload = &v1.UserNotification_MemoMention{MemoMention: body}
 	default:
 		// Unknown type: ignore payload but don't fail.
 	}

@@ -2,30 +2,30 @@
 
 set -eu
 
-REPO="${REPO:-usememos/memos}"
-BIN_NAME="memos"
-VERSION="${MEMOS_VERSION:-}"
-INSTALL_DIR="${MEMOS_INSTALL_DIR:-}"
-SKIP_CHECKSUM="${MEMOS_SKIP_CHECKSUM:-0}"
-QUIET="${MEMOS_INSTALL_QUIET:-0}"
+REPO="${REPO:-incurl/riff}"
+BIN_NAME="riff"
+VERSION="${RIFF_VERSION:-}"
+INSTALL_DIR="${RIFF_INSTALL_DIR:-}"
+SKIP_CHECKSUM="${RIFF_SKIP_CHECKSUM:-0}"
+QUIET="${RIFF_INSTALL_QUIET:-0}"
 
 usage() {
   cat <<'EOF'
-Install Memos from GitHub Releases.
+Install riff from GitHub Releases.
 
 Usage:
   install.sh [--version <version>] [--install-dir <dir>] [--repo <owner/name>] [--skip-checksum]
 
 Environment:
-  MEMOS_VERSION         Version to install. Accepts "26.09" or "26.09.1". Defaults to latest release.
-  MEMOS_INSTALL_DIR     Directory to install the binary into.
-  MEMOS_SKIP_CHECKSUM   Set to 1 to skip checksum verification.
-  MEMOS_INSTALL_QUIET   Set to 1 to reduce log output.
-  REPO                  GitHub repository in owner/name form. Defaults to usememos/memos.
+  RIFF_VERSION         Version to install. Accepts "26.09" or "26.09.1". Defaults to latest release.
+  RIFF_INSTALL_DIR     Directory to install the binary into.
+  RIFF_SKIP_CHECKSUM   Set to 1 to skip checksum verification.
+  RIFF_INSTALL_QUIET   Set to 1 to reduce log output.
+  REPO                 GitHub repository in owner/name form. Defaults to incurl/riff.
 
 Examples:
-  curl -fsSL https://raw.githubusercontent.com/usememos/memos/main/scripts/install.sh | sh
-  curl -fsSL https://raw.githubusercontent.com/usememos/memos/main/scripts/install.sh | sh -s -- --version 26.09
+  curl -fsSL https://raw.githubusercontent.com/incurl/riff/main/scripts/install.sh | sh
+  curl -fsSL https://raw.githubusercontent.com/incurl/riff/main/scripts/install.sh | sh -s -- --version 26.09
 EOF
 }
 

@@ -1,6 +1,10 @@
-# Memos
+# riff vocabulary
 
-Memos is the note-taking domain centered on short-form memos and the resources attached to them.
+riff is a PocketBase backend for a PO-33 sampler community. The vocabulary
+below is shared with the public API (`proto/api/v1/`) and with the React
+frontend; the same terms appear in code as collection names (`memos`,
+`spaces`, `patches`, `samples`, `memo_links`) and as proto message fields.
+Use the **Avoid** synonyms as a signal that the term is not what you want.
 
 ## Language
 
@@ -41,11 +45,11 @@ The mutable, non-unique display label of a Space.
 _Avoid_: Space UID, Space resource name
 
 **Space invitation**:
-A pending offer for an existing active Memos user to join a Space with a specified Space role. It grants no membership or Space access until that user accepts it.
+A pending offer for an existing active riff user to join a Space with a specified Space role. It grants no membership or Space access until that user accepts it.
 _Avoid_: Pending membership, direct add
 
 **Space membership**:
-An accepted relationship between an active Memos user and a Space, carrying either the `ADMIN` or `USER` Space role.
+An accepted relationship between an active riff user and a Space, carrying either the `ADMIN` or `USER` Space role.
 _Avoid_: Invitation, application role
 
 **Memo collection scope**:

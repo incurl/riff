@@ -28,15 +28,15 @@ func TestEntrypointDoesNotLoopWhenTargetUIDIsRoot(t *testing.T) {
 	cmd := exec.CommandContext(ctx, "sh", entrypoint, "sh", "-c", "printf 'started-once'")
 	cmd.Env = append(os.Environ(),
 		"PATH="+mockBin+string(os.PathListSeparator)+os.Getenv("PATH"),
-		"MEMOS_UID=0",
-		"MEMOS_GID=0",
+		"RIFF_UID=0",
+		"RIFF_GID=0",
 	)
 
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, string(output))
 	require.NotEqual(t, context.DeadlineExceeded, ctx.Err(), "entrypoint recursed instead of launching the command")
-	require.Contains(t, string(output), "memos: starting as UID:GID 0:0")
-	require.Equal(t, 1, strings.Count(string(output), "memos: starting as UID:GID 0:0"))
+	require.Contains(t, string(output), "riff: starting as UID:GID 0:0")
+	require.Equal(t, 1, strings.Count(string(output), "riff: starting as UID:GID 0:0"))
 	require.Contains(t, string(output), "started-once")
 }
 

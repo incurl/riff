@@ -29,6 +29,10 @@ import (
 //	ListMemoRelations   — the memo's REFERENCE relations
 //	SetMemoRelations    — replace the memo's REFERENCE relations
 //	ListMemoReactions / UpsertMemoReaction / DeleteMemoReaction
+//	CreateMemoShare / ListMemoShares / DeleteMemoShare —
+//	                     memo share-link CRUD; see memo_shares.go
+//	GetSharedMemo      — public, no auth, resolves a share code
+//	                     to a memo (memo's own visibility still applies)
 //	GetLinkMetadata / BatchGetLinkMetadata — link preview metadata
 //	                     from internal/linkmeta, used by the composer
 //	                     to render link cards before the user posts.
@@ -46,7 +50,8 @@ import (
 // singleton, so the library's cache and concurrency limits cover every
 // caller.
 //
-// Still unimplemented: shares, memo views, webhooks, search and export.
+// Still unimplemented: memo views (per-memo view log, distinct from the
+// Wave 5 saved-CEL-filters collection), webhooks, search and export.
 type MemoServer struct {
 	apiv1connect.UnimplementedMemoServiceHandler
 	app core.App

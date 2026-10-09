@@ -115,6 +115,9 @@ func patchToAttachment(rec *core.Record) *v1.Attachment {
 		Type:         guessMime(filename, "application/octet-stream"),
 	}
 	a.CreateTime = timestampToProto(rec.GetDateTime("created"))
+	if mm := readMotionMedia(rec); mm != nil {
+		a.MotionMedia = mm
+	}
 	return a
 }
 
@@ -138,6 +141,9 @@ func sampleToAttachment(rec *core.Record) *v1.Attachment {
 		Type:         guessMime(filename, "audio/wav"),
 	}
 	a.CreateTime = timestampToProto(rec.GetDateTime("created"))
+	if mm := readMotionMedia(rec); mm != nil {
+		a.MotionMedia = mm
+	}
 	return a
 }
 
