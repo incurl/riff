@@ -5,577 +5,683 @@
 package apiv1connect
 
 import (
-	connect "connectrpc.com/connect"
+	connect "connectrpc.com/connect/v2"
 	context "context"
-	errors "errors"
-	v1 "github.com/usememos/memos/proto/gen/api/v1"
+	v1 "github.com/incurl/riff/proto/gen/api/v1"
 	emptypb "google.golang.org/protobuf/types/known/emptypb"
-	http "net/http"
-	strings "strings"
+	sync "sync"
 )
-
-// This is a compile-time assertion to ensure that this generated file and the connect package are
-// compatible. If you get a compiler error that this constant is not defined, this code was
-// generated with a version of connect newer than the one compiled into your binary. You can fix the
-// problem by either regenerating this code with an older version of connect or updating the connect
-// version compiled into your binary.
-const _ = connect.IsAtLeastVersion1_13_0
 
 const (
 	// SpaceServiceName is the fully-qualified name of the SpaceService service.
 	SpaceServiceName = "memos.api.v1.SpaceService"
 )
 
-// These constants are the fully-qualified names of the RPCs defined in this package. They're
-// exposed at runtime as Spec.Procedure and as the final two segments of the HTTP route.
+// These constants are the procedure names of the RPCs defined in this package. They're exposed at
+// runtime as Spec.Procedure and as the final two segments of the HTTP route.
 //
 // Note that these are different from the fully-qualified method names used by
 // google.golang.org/protobuf/reflect/protoreflect. To convert from these constants to
 // reflection-formatted method names, remove the leading slash and convert the remaining slash to a
 // period.
 const (
-	// SpaceServiceCreateSpaceProcedure is the fully-qualified name of the SpaceService's CreateSpace
-	// RPC.
+	// SpaceServiceCreateSpaceProcedure is the procedure name of the SpaceService's CreateSpace RPC.
 	SpaceServiceCreateSpaceProcedure = "/memos.api.v1.SpaceService/CreateSpace"
-	// SpaceServiceListSpacesProcedure is the fully-qualified name of the SpaceService's ListSpaces RPC.
+	// SpaceServiceListSpacesProcedure is the procedure name of the SpaceService's ListSpaces RPC.
 	SpaceServiceListSpacesProcedure = "/memos.api.v1.SpaceService/ListSpaces"
-	// SpaceServiceGetSpaceProcedure is the fully-qualified name of the SpaceService's GetSpace RPC.
+	// SpaceServiceGetSpaceProcedure is the procedure name of the SpaceService's GetSpace RPC.
 	SpaceServiceGetSpaceProcedure = "/memos.api.v1.SpaceService/GetSpace"
-	// SpaceServiceUpdateSpaceProcedure is the fully-qualified name of the SpaceService's UpdateSpace
-	// RPC.
+	// SpaceServiceUpdateSpaceProcedure is the procedure name of the SpaceService's UpdateSpace RPC.
 	SpaceServiceUpdateSpaceProcedure = "/memos.api.v1.SpaceService/UpdateSpace"
-	// SpaceServiceDeleteSpaceProcedure is the fully-qualified name of the SpaceService's DeleteSpace
-	// RPC.
+	// SpaceServiceDeleteSpaceProcedure is the procedure name of the SpaceService's DeleteSpace RPC.
 	SpaceServiceDeleteSpaceProcedure = "/memos.api.v1.SpaceService/DeleteSpace"
-	// SpaceServiceCreateSpaceInvitationProcedure is the fully-qualified name of the SpaceService's
+	// SpaceServiceCreateSpaceInvitationProcedure is the procedure name of the SpaceService's
 	// CreateSpaceInvitation RPC.
 	SpaceServiceCreateSpaceInvitationProcedure = "/memos.api.v1.SpaceService/CreateSpaceInvitation"
-	// SpaceServiceListSpaceInvitationsProcedure is the fully-qualified name of the SpaceService's
+	// SpaceServiceListSpaceInvitationsProcedure is the procedure name of the SpaceService's
 	// ListSpaceInvitations RPC.
 	SpaceServiceListSpaceInvitationsProcedure = "/memos.api.v1.SpaceService/ListSpaceInvitations"
-	// SpaceServiceListUserSpaceInvitationsProcedure is the fully-qualified name of the SpaceService's
+	// SpaceServiceListUserSpaceInvitationsProcedure is the procedure name of the SpaceService's
 	// ListUserSpaceInvitations RPC.
 	SpaceServiceListUserSpaceInvitationsProcedure = "/memos.api.v1.SpaceService/ListUserSpaceInvitations"
-	// SpaceServiceGetSpaceInvitationProcedure is the fully-qualified name of the SpaceService's
+	// SpaceServiceGetSpaceInvitationProcedure is the procedure name of the SpaceService's
 	// GetSpaceInvitation RPC.
 	SpaceServiceGetSpaceInvitationProcedure = "/memos.api.v1.SpaceService/GetSpaceInvitation"
-	// SpaceServiceDeleteSpaceInvitationProcedure is the fully-qualified name of the SpaceService's
+	// SpaceServiceDeleteSpaceInvitationProcedure is the procedure name of the SpaceService's
 	// DeleteSpaceInvitation RPC.
 	SpaceServiceDeleteSpaceInvitationProcedure = "/memos.api.v1.SpaceService/DeleteSpaceInvitation"
-	// SpaceServiceAcceptSpaceInvitationProcedure is the fully-qualified name of the SpaceService's
+	// SpaceServiceAcceptSpaceInvitationProcedure is the procedure name of the SpaceService's
 	// AcceptSpaceInvitation RPC.
 	SpaceServiceAcceptSpaceInvitationProcedure = "/memos.api.v1.SpaceService/AcceptSpaceInvitation"
-	// SpaceServiceDeclineSpaceInvitationProcedure is the fully-qualified name of the SpaceService's
+	// SpaceServiceDeclineSpaceInvitationProcedure is the procedure name of the SpaceService's
 	// DeclineSpaceInvitation RPC.
 	SpaceServiceDeclineSpaceInvitationProcedure = "/memos.api.v1.SpaceService/DeclineSpaceInvitation"
-	// SpaceServiceListSpaceMembersProcedure is the fully-qualified name of the SpaceService's
+	// SpaceServiceListSpaceMembersProcedure is the procedure name of the SpaceService's
 	// ListSpaceMembers RPC.
 	SpaceServiceListSpaceMembersProcedure = "/memos.api.v1.SpaceService/ListSpaceMembers"
-	// SpaceServiceGetSpaceMemberProcedure is the fully-qualified name of the SpaceService's
-	// GetSpaceMember RPC.
+	// SpaceServiceGetSpaceMemberProcedure is the procedure name of the SpaceService's GetSpaceMember
+	// RPC.
 	SpaceServiceGetSpaceMemberProcedure = "/memos.api.v1.SpaceService/GetSpaceMember"
-	// SpaceServiceUpdateSpaceMemberProcedure is the fully-qualified name of the SpaceService's
+	// SpaceServiceUpdateSpaceMemberProcedure is the procedure name of the SpaceService's
 	// UpdateSpaceMember RPC.
 	SpaceServiceUpdateSpaceMemberProcedure = "/memos.api.v1.SpaceService/UpdateSpaceMember"
-	// SpaceServiceDeleteSpaceMemberProcedure is the fully-qualified name of the SpaceService's
+	// SpaceServiceDeleteSpaceMemberProcedure is the procedure name of the SpaceService's
 	// DeleteSpaceMember RPC.
 	SpaceServiceDeleteSpaceMemberProcedure = "/memos.api.v1.SpaceService/DeleteSpaceMember"
+)
+
+var (
+	spaceServiceCreateSpaceSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_api_v1_space_service_proto.Services().ByName("SpaceService").Methods().ByName("CreateSpace"),
+			Procedure:  SpaceServiceCreateSpaceProcedure,
+		}
+	})
+	spaceServiceListSpacesSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_api_v1_space_service_proto.Services().ByName("SpaceService").Methods().ByName("ListSpaces"),
+			Procedure:  SpaceServiceListSpacesProcedure,
+		}
+	})
+	spaceServiceGetSpaceSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_api_v1_space_service_proto.Services().ByName("SpaceService").Methods().ByName("GetSpace"),
+			Procedure:  SpaceServiceGetSpaceProcedure,
+		}
+	})
+	spaceServiceUpdateSpaceSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_api_v1_space_service_proto.Services().ByName("SpaceService").Methods().ByName("UpdateSpace"),
+			Procedure:  SpaceServiceUpdateSpaceProcedure,
+		}
+	})
+	spaceServiceDeleteSpaceSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_api_v1_space_service_proto.Services().ByName("SpaceService").Methods().ByName("DeleteSpace"),
+			Procedure:  SpaceServiceDeleteSpaceProcedure,
+		}
+	})
+	spaceServiceCreateSpaceInvitationSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_api_v1_space_service_proto.Services().ByName("SpaceService").Methods().ByName("CreateSpaceInvitation"),
+			Procedure:  SpaceServiceCreateSpaceInvitationProcedure,
+		}
+	})
+	spaceServiceListSpaceInvitationsSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_api_v1_space_service_proto.Services().ByName("SpaceService").Methods().ByName("ListSpaceInvitations"),
+			Procedure:  SpaceServiceListSpaceInvitationsProcedure,
+		}
+	})
+	spaceServiceListUserSpaceInvitationsSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_api_v1_space_service_proto.Services().ByName("SpaceService").Methods().ByName("ListUserSpaceInvitations"),
+			Procedure:  SpaceServiceListUserSpaceInvitationsProcedure,
+		}
+	})
+	spaceServiceGetSpaceInvitationSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_api_v1_space_service_proto.Services().ByName("SpaceService").Methods().ByName("GetSpaceInvitation"),
+			Procedure:  SpaceServiceGetSpaceInvitationProcedure,
+		}
+	})
+	spaceServiceDeleteSpaceInvitationSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_api_v1_space_service_proto.Services().ByName("SpaceService").Methods().ByName("DeleteSpaceInvitation"),
+			Procedure:  SpaceServiceDeleteSpaceInvitationProcedure,
+		}
+	})
+	spaceServiceAcceptSpaceInvitationSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_api_v1_space_service_proto.Services().ByName("SpaceService").Methods().ByName("AcceptSpaceInvitation"),
+			Procedure:  SpaceServiceAcceptSpaceInvitationProcedure,
+		}
+	})
+	spaceServiceDeclineSpaceInvitationSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_api_v1_space_service_proto.Services().ByName("SpaceService").Methods().ByName("DeclineSpaceInvitation"),
+			Procedure:  SpaceServiceDeclineSpaceInvitationProcedure,
+		}
+	})
+	spaceServiceListSpaceMembersSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_api_v1_space_service_proto.Services().ByName("SpaceService").Methods().ByName("ListSpaceMembers"),
+			Procedure:  SpaceServiceListSpaceMembersProcedure,
+		}
+	})
+	spaceServiceGetSpaceMemberSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_api_v1_space_service_proto.Services().ByName("SpaceService").Methods().ByName("GetSpaceMember"),
+			Procedure:  SpaceServiceGetSpaceMemberProcedure,
+		}
+	})
+	spaceServiceUpdateSpaceMemberSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_api_v1_space_service_proto.Services().ByName("SpaceService").Methods().ByName("UpdateSpaceMember"),
+			Procedure:  SpaceServiceUpdateSpaceMemberProcedure,
+		}
+	})
+	spaceServiceDeleteSpaceMemberSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_api_v1_space_service_proto.Services().ByName("SpaceService").Methods().ByName("DeleteSpaceMember"),
+			Procedure:  SpaceServiceDeleteSpaceMemberProcedure,
+		}
+	})
 )
 
 // SpaceServiceClient is a client for the memos.api.v1.SpaceService service.
 type SpaceServiceClient interface {
 	// CreateSpace creates a space and makes the authenticated caller its first
 	// administrator.
-	CreateSpace(context.Context, *connect.Request[v1.CreateSpaceRequest]) (*connect.Response[v1.Space], error)
+	CreateSpace(context.Context, *v1.CreateSpaceRequest) (*v1.Space, error)
 	// ListSpaces lists spaces of which the authenticated caller is a member.
-	ListSpaces(context.Context, *connect.Request[v1.ListSpacesRequest]) (*connect.Response[v1.ListSpacesResponse], error)
+	ListSpaces(context.Context, *v1.ListSpacesRequest) (*v1.ListSpacesResponse, error)
 	// GetSpace gets a space of which the authenticated caller is a member.
-	GetSpace(context.Context, *connect.Request[v1.GetSpaceRequest]) (*connect.Response[v1.Space], error)
+	GetSpace(context.Context, *v1.GetSpaceRequest) (*v1.Space, error)
 	// UpdateSpace updates space metadata.
-	UpdateSpace(context.Context, *connect.Request[v1.UpdateSpaceRequest]) (*connect.Response[v1.Space], error)
+	UpdateSpace(context.Context, *v1.UpdateSpaceRequest) (*v1.Space, error)
 	// DeleteSpace permanently deletes a space and every memo currently placed
 	// in it. It never follows memo relations to other memos.
-	DeleteSpace(context.Context, *connect.Request[v1.DeleteSpaceRequest]) (*connect.Response[emptypb.Empty], error)
+	DeleteSpace(context.Context, *v1.DeleteSpaceRequest) (*emptypb.Empty, error)
 	// CreateSpaceInvitation invites an existing active user to a space.
-	CreateSpaceInvitation(context.Context, *connect.Request[v1.CreateSpaceInvitationRequest]) (*connect.Response[v1.SpaceInvitation], error)
+	CreateSpaceInvitation(context.Context, *v1.CreateSpaceInvitationRequest) (*v1.SpaceInvitation, error)
 	// ListSpaceInvitations lists the pending invitations for a space.
-	ListSpaceInvitations(context.Context, *connect.Request[v1.ListSpaceInvitationsRequest]) (*connect.Response[v1.ListSpaceInvitationsResponse], error)
+	ListSpaceInvitations(context.Context, *v1.ListSpaceInvitationsRequest) (*v1.ListSpaceInvitationsResponse, error)
 	// ListUserSpaceInvitations lists the authenticated user's pending space invitations.
-	ListUserSpaceInvitations(context.Context, *connect.Request[v1.ListUserSpaceInvitationsRequest]) (*connect.Response[v1.ListUserSpaceInvitationsResponse], error)
+	ListUserSpaceInvitations(context.Context, *v1.ListUserSpaceInvitationsRequest) (*v1.ListUserSpaceInvitationsResponse, error)
 	// GetSpaceInvitation gets one pending invitation.
-	GetSpaceInvitation(context.Context, *connect.Request[v1.GetSpaceInvitationRequest]) (*connect.Response[v1.SpaceInvitation], error)
+	GetSpaceInvitation(context.Context, *v1.GetSpaceInvitationRequest) (*v1.SpaceInvitation, error)
 	// DeleteSpaceInvitation revokes a pending invitation.
-	DeleteSpaceInvitation(context.Context, *connect.Request[v1.DeleteSpaceInvitationRequest]) (*connect.Response[emptypb.Empty], error)
+	DeleteSpaceInvitation(context.Context, *v1.DeleteSpaceInvitationRequest) (*emptypb.Empty, error)
 	// AcceptSpaceInvitation accepts a pending invitation and creates a membership.
-	AcceptSpaceInvitation(context.Context, *connect.Request[v1.AcceptSpaceInvitationRequest]) (*connect.Response[v1.SpaceMember], error)
+	AcceptSpaceInvitation(context.Context, *v1.AcceptSpaceInvitationRequest) (*v1.SpaceMember, error)
 	// DeclineSpaceInvitation declines a pending invitation.
-	DeclineSpaceInvitation(context.Context, *connect.Request[v1.DeclineSpaceInvitationRequest]) (*connect.Response[emptypb.Empty], error)
+	DeclineSpaceInvitation(context.Context, *v1.DeclineSpaceInvitationRequest) (*emptypb.Empty, error)
 	// ListSpaceMembers lists the members of a space.
-	ListSpaceMembers(context.Context, *connect.Request[v1.ListSpaceMembersRequest]) (*connect.Response[v1.ListSpaceMembersResponse], error)
+	ListSpaceMembers(context.Context, *v1.ListSpaceMembersRequest) (*v1.ListSpaceMembersResponse, error)
 	// GetSpaceMember gets one membership in a space.
-	GetSpaceMember(context.Context, *connect.Request[v1.GetSpaceMemberRequest]) (*connect.Response[v1.SpaceMember], error)
+	GetSpaceMember(context.Context, *v1.GetSpaceMemberRequest) (*v1.SpaceMember, error)
 	// UpdateSpaceMember changes a member's space role.
-	UpdateSpaceMember(context.Context, *connect.Request[v1.UpdateSpaceMemberRequest]) (*connect.Response[v1.SpaceMember], error)
+	UpdateSpaceMember(context.Context, *v1.UpdateSpaceMemberRequest) (*v1.SpaceMember, error)
 	// DeleteSpaceMember removes a member. A member may delete their own
 	// membership to leave the space.
-	DeleteSpaceMember(context.Context, *connect.Request[v1.DeleteSpaceMemberRequest]) (*connect.Response[emptypb.Empty], error)
+	DeleteSpaceMember(context.Context, *v1.DeleteSpaceMemberRequest) (*emptypb.Empty, error)
 }
 
-// NewSpaceServiceClient constructs a client for the memos.api.v1.SpaceService service. By default,
-// it uses the Connect protocol with the binary Protobuf Codec, asks for gzipped responses, and
-// sends uncompressed requests. To use the gRPC or gRPC-Web protocols, supply the connect.WithGRPC()
-// or connect.WithGRPCWeb() options.
-//
-// The URL supplied here should be the base URL for the Connect or gRPC server (for example,
-// http://api.acme.com or https://acme.com/grpc).
-func NewSpaceServiceClient(httpClient connect.HTTPClient, baseURL string, opts ...connect.ClientOption) SpaceServiceClient {
-	baseURL = strings.TrimRight(baseURL, "/")
-	spaceServiceMethods := v1.File_api_v1_space_service_proto.Services().ByName("SpaceService").Methods()
-	return &spaceServiceClient{
-		createSpace: connect.NewClient[v1.CreateSpaceRequest, v1.Space](
-			httpClient,
-			baseURL+SpaceServiceCreateSpaceProcedure,
-			connect.WithSchema(spaceServiceMethods.ByName("CreateSpace")),
-			connect.WithClientOptions(opts...),
-		),
-		listSpaces: connect.NewClient[v1.ListSpacesRequest, v1.ListSpacesResponse](
-			httpClient,
-			baseURL+SpaceServiceListSpacesProcedure,
-			connect.WithSchema(spaceServiceMethods.ByName("ListSpaces")),
-			connect.WithClientOptions(opts...),
-		),
-		getSpace: connect.NewClient[v1.GetSpaceRequest, v1.Space](
-			httpClient,
-			baseURL+SpaceServiceGetSpaceProcedure,
-			connect.WithSchema(spaceServiceMethods.ByName("GetSpace")),
-			connect.WithClientOptions(opts...),
-		),
-		updateSpace: connect.NewClient[v1.UpdateSpaceRequest, v1.Space](
-			httpClient,
-			baseURL+SpaceServiceUpdateSpaceProcedure,
-			connect.WithSchema(spaceServiceMethods.ByName("UpdateSpace")),
-			connect.WithClientOptions(opts...),
-		),
-		deleteSpace: connect.NewClient[v1.DeleteSpaceRequest, emptypb.Empty](
-			httpClient,
-			baseURL+SpaceServiceDeleteSpaceProcedure,
-			connect.WithSchema(spaceServiceMethods.ByName("DeleteSpace")),
-			connect.WithClientOptions(opts...),
-		),
-		createSpaceInvitation: connect.NewClient[v1.CreateSpaceInvitationRequest, v1.SpaceInvitation](
-			httpClient,
-			baseURL+SpaceServiceCreateSpaceInvitationProcedure,
-			connect.WithSchema(spaceServiceMethods.ByName("CreateSpaceInvitation")),
-			connect.WithClientOptions(opts...),
-		),
-		listSpaceInvitations: connect.NewClient[v1.ListSpaceInvitationsRequest, v1.ListSpaceInvitationsResponse](
-			httpClient,
-			baseURL+SpaceServiceListSpaceInvitationsProcedure,
-			connect.WithSchema(spaceServiceMethods.ByName("ListSpaceInvitations")),
-			connect.WithClientOptions(opts...),
-		),
-		listUserSpaceInvitations: connect.NewClient[v1.ListUserSpaceInvitationsRequest, v1.ListUserSpaceInvitationsResponse](
-			httpClient,
-			baseURL+SpaceServiceListUserSpaceInvitationsProcedure,
-			connect.WithSchema(spaceServiceMethods.ByName("ListUserSpaceInvitations")),
-			connect.WithClientOptions(opts...),
-		),
-		getSpaceInvitation: connect.NewClient[v1.GetSpaceInvitationRequest, v1.SpaceInvitation](
-			httpClient,
-			baseURL+SpaceServiceGetSpaceInvitationProcedure,
-			connect.WithSchema(spaceServiceMethods.ByName("GetSpaceInvitation")),
-			connect.WithClientOptions(opts...),
-		),
-		deleteSpaceInvitation: connect.NewClient[v1.DeleteSpaceInvitationRequest, emptypb.Empty](
-			httpClient,
-			baseURL+SpaceServiceDeleteSpaceInvitationProcedure,
-			connect.WithSchema(spaceServiceMethods.ByName("DeleteSpaceInvitation")),
-			connect.WithClientOptions(opts...),
-		),
-		acceptSpaceInvitation: connect.NewClient[v1.AcceptSpaceInvitationRequest, v1.SpaceMember](
-			httpClient,
-			baseURL+SpaceServiceAcceptSpaceInvitationProcedure,
-			connect.WithSchema(spaceServiceMethods.ByName("AcceptSpaceInvitation")),
-			connect.WithClientOptions(opts...),
-		),
-		declineSpaceInvitation: connect.NewClient[v1.DeclineSpaceInvitationRequest, emptypb.Empty](
-			httpClient,
-			baseURL+SpaceServiceDeclineSpaceInvitationProcedure,
-			connect.WithSchema(spaceServiceMethods.ByName("DeclineSpaceInvitation")),
-			connect.WithClientOptions(opts...),
-		),
-		listSpaceMembers: connect.NewClient[v1.ListSpaceMembersRequest, v1.ListSpaceMembersResponse](
-			httpClient,
-			baseURL+SpaceServiceListSpaceMembersProcedure,
-			connect.WithSchema(spaceServiceMethods.ByName("ListSpaceMembers")),
-			connect.WithClientOptions(opts...),
-		),
-		getSpaceMember: connect.NewClient[v1.GetSpaceMemberRequest, v1.SpaceMember](
-			httpClient,
-			baseURL+SpaceServiceGetSpaceMemberProcedure,
-			connect.WithSchema(spaceServiceMethods.ByName("GetSpaceMember")),
-			connect.WithClientOptions(opts...),
-		),
-		updateSpaceMember: connect.NewClient[v1.UpdateSpaceMemberRequest, v1.SpaceMember](
-			httpClient,
-			baseURL+SpaceServiceUpdateSpaceMemberProcedure,
-			connect.WithSchema(spaceServiceMethods.ByName("UpdateSpaceMember")),
-			connect.WithClientOptions(opts...),
-		),
-		deleteSpaceMember: connect.NewClient[v1.DeleteSpaceMemberRequest, emptypb.Empty](
-			httpClient,
-			baseURL+SpaceServiceDeleteSpaceMemberProcedure,
-			connect.WithSchema(spaceServiceMethods.ByName("DeleteSpaceMember")),
-			connect.WithClientOptions(opts...),
-		),
-	}
-}
-
-// spaceServiceClient implements SpaceServiceClient.
-type spaceServiceClient struct {
-	createSpace              *connect.Client[v1.CreateSpaceRequest, v1.Space]
-	listSpaces               *connect.Client[v1.ListSpacesRequest, v1.ListSpacesResponse]
-	getSpace                 *connect.Client[v1.GetSpaceRequest, v1.Space]
-	updateSpace              *connect.Client[v1.UpdateSpaceRequest, v1.Space]
-	deleteSpace              *connect.Client[v1.DeleteSpaceRequest, emptypb.Empty]
-	createSpaceInvitation    *connect.Client[v1.CreateSpaceInvitationRequest, v1.SpaceInvitation]
-	listSpaceInvitations     *connect.Client[v1.ListSpaceInvitationsRequest, v1.ListSpaceInvitationsResponse]
-	listUserSpaceInvitations *connect.Client[v1.ListUserSpaceInvitationsRequest, v1.ListUserSpaceInvitationsResponse]
-	getSpaceInvitation       *connect.Client[v1.GetSpaceInvitationRequest, v1.SpaceInvitation]
-	deleteSpaceInvitation    *connect.Client[v1.DeleteSpaceInvitationRequest, emptypb.Empty]
-	acceptSpaceInvitation    *connect.Client[v1.AcceptSpaceInvitationRequest, v1.SpaceMember]
-	declineSpaceInvitation   *connect.Client[v1.DeclineSpaceInvitationRequest, emptypb.Empty]
-	listSpaceMembers         *connect.Client[v1.ListSpaceMembersRequest, v1.ListSpaceMembersResponse]
-	getSpaceMember           *connect.Client[v1.GetSpaceMemberRequest, v1.SpaceMember]
-	updateSpaceMember        *connect.Client[v1.UpdateSpaceMemberRequest, v1.SpaceMember]
-	deleteSpaceMember        *connect.Client[v1.DeleteSpaceMemberRequest, emptypb.Empty]
-}
-
-// CreateSpace calls memos.api.v1.SpaceService.CreateSpace.
-func (c *spaceServiceClient) CreateSpace(ctx context.Context, req *connect.Request[v1.CreateSpaceRequest]) (*connect.Response[v1.Space], error) {
-	return c.createSpace.CallUnary(ctx, req)
-}
-
-// ListSpaces calls memos.api.v1.SpaceService.ListSpaces.
-func (c *spaceServiceClient) ListSpaces(ctx context.Context, req *connect.Request[v1.ListSpacesRequest]) (*connect.Response[v1.ListSpacesResponse], error) {
-	return c.listSpaces.CallUnary(ctx, req)
-}
-
-// GetSpace calls memos.api.v1.SpaceService.GetSpace.
-func (c *spaceServiceClient) GetSpace(ctx context.Context, req *connect.Request[v1.GetSpaceRequest]) (*connect.Response[v1.Space], error) {
-	return c.getSpace.CallUnary(ctx, req)
-}
-
-// UpdateSpace calls memos.api.v1.SpaceService.UpdateSpace.
-func (c *spaceServiceClient) UpdateSpace(ctx context.Context, req *connect.Request[v1.UpdateSpaceRequest]) (*connect.Response[v1.Space], error) {
-	return c.updateSpace.CallUnary(ctx, req)
-}
-
-// DeleteSpace calls memos.api.v1.SpaceService.DeleteSpace.
-func (c *spaceServiceClient) DeleteSpace(ctx context.Context, req *connect.Request[v1.DeleteSpaceRequest]) (*connect.Response[emptypb.Empty], error) {
-	return c.deleteSpace.CallUnary(ctx, req)
-}
-
-// CreateSpaceInvitation calls memos.api.v1.SpaceService.CreateSpaceInvitation.
-func (c *spaceServiceClient) CreateSpaceInvitation(ctx context.Context, req *connect.Request[v1.CreateSpaceInvitationRequest]) (*connect.Response[v1.SpaceInvitation], error) {
-	return c.createSpaceInvitation.CallUnary(ctx, req)
-}
-
-// ListSpaceInvitations calls memos.api.v1.SpaceService.ListSpaceInvitations.
-func (c *spaceServiceClient) ListSpaceInvitations(ctx context.Context, req *connect.Request[v1.ListSpaceInvitationsRequest]) (*connect.Response[v1.ListSpaceInvitationsResponse], error) {
-	return c.listSpaceInvitations.CallUnary(ctx, req)
-}
-
-// ListUserSpaceInvitations calls memos.api.v1.SpaceService.ListUserSpaceInvitations.
-func (c *spaceServiceClient) ListUserSpaceInvitations(ctx context.Context, req *connect.Request[v1.ListUserSpaceInvitationsRequest]) (*connect.Response[v1.ListUserSpaceInvitationsResponse], error) {
-	return c.listUserSpaceInvitations.CallUnary(ctx, req)
-}
-
-// GetSpaceInvitation calls memos.api.v1.SpaceService.GetSpaceInvitation.
-func (c *spaceServiceClient) GetSpaceInvitation(ctx context.Context, req *connect.Request[v1.GetSpaceInvitationRequest]) (*connect.Response[v1.SpaceInvitation], error) {
-	return c.getSpaceInvitation.CallUnary(ctx, req)
-}
-
-// DeleteSpaceInvitation calls memos.api.v1.SpaceService.DeleteSpaceInvitation.
-func (c *spaceServiceClient) DeleteSpaceInvitation(ctx context.Context, req *connect.Request[v1.DeleteSpaceInvitationRequest]) (*connect.Response[emptypb.Empty], error) {
-	return c.deleteSpaceInvitation.CallUnary(ctx, req)
-}
-
-// AcceptSpaceInvitation calls memos.api.v1.SpaceService.AcceptSpaceInvitation.
-func (c *spaceServiceClient) AcceptSpaceInvitation(ctx context.Context, req *connect.Request[v1.AcceptSpaceInvitationRequest]) (*connect.Response[v1.SpaceMember], error) {
-	return c.acceptSpaceInvitation.CallUnary(ctx, req)
-}
-
-// DeclineSpaceInvitation calls memos.api.v1.SpaceService.DeclineSpaceInvitation.
-func (c *spaceServiceClient) DeclineSpaceInvitation(ctx context.Context, req *connect.Request[v1.DeclineSpaceInvitationRequest]) (*connect.Response[emptypb.Empty], error) {
-	return c.declineSpaceInvitation.CallUnary(ctx, req)
-}
-
-// ListSpaceMembers calls memos.api.v1.SpaceService.ListSpaceMembers.
-func (c *spaceServiceClient) ListSpaceMembers(ctx context.Context, req *connect.Request[v1.ListSpaceMembersRequest]) (*connect.Response[v1.ListSpaceMembersResponse], error) {
-	return c.listSpaceMembers.CallUnary(ctx, req)
-}
-
-// GetSpaceMember calls memos.api.v1.SpaceService.GetSpaceMember.
-func (c *spaceServiceClient) GetSpaceMember(ctx context.Context, req *connect.Request[v1.GetSpaceMemberRequest]) (*connect.Response[v1.SpaceMember], error) {
-	return c.getSpaceMember.CallUnary(ctx, req)
-}
-
-// UpdateSpaceMember calls memos.api.v1.SpaceService.UpdateSpaceMember.
-func (c *spaceServiceClient) UpdateSpaceMember(ctx context.Context, req *connect.Request[v1.UpdateSpaceMemberRequest]) (*connect.Response[v1.SpaceMember], error) {
-	return c.updateSpaceMember.CallUnary(ctx, req)
-}
-
-// DeleteSpaceMember calls memos.api.v1.SpaceService.DeleteSpaceMember.
-func (c *spaceServiceClient) DeleteSpaceMember(ctx context.Context, req *connect.Request[v1.DeleteSpaceMemberRequest]) (*connect.Response[emptypb.Empty], error) {
-	return c.deleteSpaceMember.CallUnary(ctx, req)
+// NewSpaceServiceClient constructs a client for the memos.api.v1.SpaceService service. Multiple
+// service clients may share a single connect.Client.
+func NewSpaceServiceClient(client *connect.Client) SpaceServiceClient {
+	return &spaceServiceClient{client: client}
 }
 
 // SpaceServiceHandler is an implementation of the memos.api.v1.SpaceService service.
 type SpaceServiceHandler interface {
 	// CreateSpace creates a space and makes the authenticated caller its first
 	// administrator.
-	CreateSpace(context.Context, *connect.Request[v1.CreateSpaceRequest]) (*connect.Response[v1.Space], error)
+	CreateSpace(context.Context, *v1.CreateSpaceRequest) (*v1.Space, error)
 	// ListSpaces lists spaces of which the authenticated caller is a member.
-	ListSpaces(context.Context, *connect.Request[v1.ListSpacesRequest]) (*connect.Response[v1.ListSpacesResponse], error)
+	ListSpaces(context.Context, *v1.ListSpacesRequest) (*v1.ListSpacesResponse, error)
 	// GetSpace gets a space of which the authenticated caller is a member.
-	GetSpace(context.Context, *connect.Request[v1.GetSpaceRequest]) (*connect.Response[v1.Space], error)
+	GetSpace(context.Context, *v1.GetSpaceRequest) (*v1.Space, error)
 	// UpdateSpace updates space metadata.
-	UpdateSpace(context.Context, *connect.Request[v1.UpdateSpaceRequest]) (*connect.Response[v1.Space], error)
+	UpdateSpace(context.Context, *v1.UpdateSpaceRequest) (*v1.Space, error)
 	// DeleteSpace permanently deletes a space and every memo currently placed
 	// in it. It never follows memo relations to other memos.
-	DeleteSpace(context.Context, *connect.Request[v1.DeleteSpaceRequest]) (*connect.Response[emptypb.Empty], error)
+	DeleteSpace(context.Context, *v1.DeleteSpaceRequest) (*emptypb.Empty, error)
 	// CreateSpaceInvitation invites an existing active user to a space.
-	CreateSpaceInvitation(context.Context, *connect.Request[v1.CreateSpaceInvitationRequest]) (*connect.Response[v1.SpaceInvitation], error)
+	CreateSpaceInvitation(context.Context, *v1.CreateSpaceInvitationRequest) (*v1.SpaceInvitation, error)
 	// ListSpaceInvitations lists the pending invitations for a space.
-	ListSpaceInvitations(context.Context, *connect.Request[v1.ListSpaceInvitationsRequest]) (*connect.Response[v1.ListSpaceInvitationsResponse], error)
+	ListSpaceInvitations(context.Context, *v1.ListSpaceInvitationsRequest) (*v1.ListSpaceInvitationsResponse, error)
 	// ListUserSpaceInvitations lists the authenticated user's pending space invitations.
-	ListUserSpaceInvitations(context.Context, *connect.Request[v1.ListUserSpaceInvitationsRequest]) (*connect.Response[v1.ListUserSpaceInvitationsResponse], error)
+	ListUserSpaceInvitations(context.Context, *v1.ListUserSpaceInvitationsRequest) (*v1.ListUserSpaceInvitationsResponse, error)
 	// GetSpaceInvitation gets one pending invitation.
-	GetSpaceInvitation(context.Context, *connect.Request[v1.GetSpaceInvitationRequest]) (*connect.Response[v1.SpaceInvitation], error)
+	GetSpaceInvitation(context.Context, *v1.GetSpaceInvitationRequest) (*v1.SpaceInvitation, error)
 	// DeleteSpaceInvitation revokes a pending invitation.
-	DeleteSpaceInvitation(context.Context, *connect.Request[v1.DeleteSpaceInvitationRequest]) (*connect.Response[emptypb.Empty], error)
+	DeleteSpaceInvitation(context.Context, *v1.DeleteSpaceInvitationRequest) (*emptypb.Empty, error)
 	// AcceptSpaceInvitation accepts a pending invitation and creates a membership.
-	AcceptSpaceInvitation(context.Context, *connect.Request[v1.AcceptSpaceInvitationRequest]) (*connect.Response[v1.SpaceMember], error)
+	AcceptSpaceInvitation(context.Context, *v1.AcceptSpaceInvitationRequest) (*v1.SpaceMember, error)
 	// DeclineSpaceInvitation declines a pending invitation.
-	DeclineSpaceInvitation(context.Context, *connect.Request[v1.DeclineSpaceInvitationRequest]) (*connect.Response[emptypb.Empty], error)
+	DeclineSpaceInvitation(context.Context, *v1.DeclineSpaceInvitationRequest) (*emptypb.Empty, error)
 	// ListSpaceMembers lists the members of a space.
-	ListSpaceMembers(context.Context, *connect.Request[v1.ListSpaceMembersRequest]) (*connect.Response[v1.ListSpaceMembersResponse], error)
+	ListSpaceMembers(context.Context, *v1.ListSpaceMembersRequest) (*v1.ListSpaceMembersResponse, error)
 	// GetSpaceMember gets one membership in a space.
-	GetSpaceMember(context.Context, *connect.Request[v1.GetSpaceMemberRequest]) (*connect.Response[v1.SpaceMember], error)
+	GetSpaceMember(context.Context, *v1.GetSpaceMemberRequest) (*v1.SpaceMember, error)
 	// UpdateSpaceMember changes a member's space role.
-	UpdateSpaceMember(context.Context, *connect.Request[v1.UpdateSpaceMemberRequest]) (*connect.Response[v1.SpaceMember], error)
+	UpdateSpaceMember(context.Context, *v1.UpdateSpaceMemberRequest) (*v1.SpaceMember, error)
 	// DeleteSpaceMember removes a member. A member may delete their own
 	// membership to leave the space.
-	DeleteSpaceMember(context.Context, *connect.Request[v1.DeleteSpaceMemberRequest]) (*connect.Response[emptypb.Empty], error)
+	DeleteSpaceMember(context.Context, *v1.DeleteSpaceMemberRequest) (*emptypb.Empty, error)
 }
 
-// NewSpaceServiceHandler builds an HTTP handler from the service implementation. It returns the
-// path on which to mount the handler and the handler itself.
-//
-// By default, handlers support the Connect, gRPC, and gRPC-Web protocols with the binary Protobuf
-// and JSON codecs. They also support gzip compression.
-func NewSpaceServiceHandler(svc SpaceServiceHandler, opts ...connect.HandlerOption) (string, http.Handler) {
-	spaceServiceMethods := v1.File_api_v1_space_service_proto.Services().ByName("SpaceService").Methods()
-	spaceServiceCreateSpaceHandler := connect.NewUnaryHandler(
-		SpaceServiceCreateSpaceProcedure,
-		svc.CreateSpace,
-		connect.WithSchema(spaceServiceMethods.ByName("CreateSpace")),
-		connect.WithHandlerOptions(opts...),
+// RegisterSpaceServiceHandler registers svc as the memos.api.v1.SpaceService implementation on
+// server.
+func RegisterSpaceServiceHandler(server *connect.Server, svc SpaceServiceHandler) {
+	adapter := spaceServiceHandler{svc: svc}
+	server.Register(
+		connect.Method{Spec: spaceServiceCreateSpaceSpec(), Handler: adapter.createSpace},
+		connect.Method{Spec: spaceServiceListSpacesSpec(), Handler: adapter.listSpaces},
+		connect.Method{Spec: spaceServiceGetSpaceSpec(), Handler: adapter.getSpace},
+		connect.Method{Spec: spaceServiceUpdateSpaceSpec(), Handler: adapter.updateSpace},
+		connect.Method{Spec: spaceServiceDeleteSpaceSpec(), Handler: adapter.deleteSpace},
+		connect.Method{Spec: spaceServiceCreateSpaceInvitationSpec(), Handler: adapter.createSpaceInvitation},
+		connect.Method{Spec: spaceServiceListSpaceInvitationsSpec(), Handler: adapter.listSpaceInvitations},
+		connect.Method{Spec: spaceServiceListUserSpaceInvitationsSpec(), Handler: adapter.listUserSpaceInvitations},
+		connect.Method{Spec: spaceServiceGetSpaceInvitationSpec(), Handler: adapter.getSpaceInvitation},
+		connect.Method{Spec: spaceServiceDeleteSpaceInvitationSpec(), Handler: adapter.deleteSpaceInvitation},
+		connect.Method{Spec: spaceServiceAcceptSpaceInvitationSpec(), Handler: adapter.acceptSpaceInvitation},
+		connect.Method{Spec: spaceServiceDeclineSpaceInvitationSpec(), Handler: adapter.declineSpaceInvitation},
+		connect.Method{Spec: spaceServiceListSpaceMembersSpec(), Handler: adapter.listSpaceMembers},
+		connect.Method{Spec: spaceServiceGetSpaceMemberSpec(), Handler: adapter.getSpaceMember},
+		connect.Method{Spec: spaceServiceUpdateSpaceMemberSpec(), Handler: adapter.updateSpaceMember},
+		connect.Method{Spec: spaceServiceDeleteSpaceMemberSpec(), Handler: adapter.deleteSpaceMember},
 	)
-	spaceServiceListSpacesHandler := connect.NewUnaryHandler(
-		SpaceServiceListSpacesProcedure,
-		svc.ListSpaces,
-		connect.WithSchema(spaceServiceMethods.ByName("ListSpaces")),
-		connect.WithHandlerOptions(opts...),
-	)
-	spaceServiceGetSpaceHandler := connect.NewUnaryHandler(
-		SpaceServiceGetSpaceProcedure,
-		svc.GetSpace,
-		connect.WithSchema(spaceServiceMethods.ByName("GetSpace")),
-		connect.WithHandlerOptions(opts...),
-	)
-	spaceServiceUpdateSpaceHandler := connect.NewUnaryHandler(
-		SpaceServiceUpdateSpaceProcedure,
-		svc.UpdateSpace,
-		connect.WithSchema(spaceServiceMethods.ByName("UpdateSpace")),
-		connect.WithHandlerOptions(opts...),
-	)
-	spaceServiceDeleteSpaceHandler := connect.NewUnaryHandler(
-		SpaceServiceDeleteSpaceProcedure,
-		svc.DeleteSpace,
-		connect.WithSchema(spaceServiceMethods.ByName("DeleteSpace")),
-		connect.WithHandlerOptions(opts...),
-	)
-	spaceServiceCreateSpaceInvitationHandler := connect.NewUnaryHandler(
-		SpaceServiceCreateSpaceInvitationProcedure,
-		svc.CreateSpaceInvitation,
-		connect.WithSchema(spaceServiceMethods.ByName("CreateSpaceInvitation")),
-		connect.WithHandlerOptions(opts...),
-	)
-	spaceServiceListSpaceInvitationsHandler := connect.NewUnaryHandler(
-		SpaceServiceListSpaceInvitationsProcedure,
-		svc.ListSpaceInvitations,
-		connect.WithSchema(spaceServiceMethods.ByName("ListSpaceInvitations")),
-		connect.WithHandlerOptions(opts...),
-	)
-	spaceServiceListUserSpaceInvitationsHandler := connect.NewUnaryHandler(
-		SpaceServiceListUserSpaceInvitationsProcedure,
-		svc.ListUserSpaceInvitations,
-		connect.WithSchema(spaceServiceMethods.ByName("ListUserSpaceInvitations")),
-		connect.WithHandlerOptions(opts...),
-	)
-	spaceServiceGetSpaceInvitationHandler := connect.NewUnaryHandler(
-		SpaceServiceGetSpaceInvitationProcedure,
-		svc.GetSpaceInvitation,
-		connect.WithSchema(spaceServiceMethods.ByName("GetSpaceInvitation")),
-		connect.WithHandlerOptions(opts...),
-	)
-	spaceServiceDeleteSpaceInvitationHandler := connect.NewUnaryHandler(
-		SpaceServiceDeleteSpaceInvitationProcedure,
-		svc.DeleteSpaceInvitation,
-		connect.WithSchema(spaceServiceMethods.ByName("DeleteSpaceInvitation")),
-		connect.WithHandlerOptions(opts...),
-	)
-	spaceServiceAcceptSpaceInvitationHandler := connect.NewUnaryHandler(
-		SpaceServiceAcceptSpaceInvitationProcedure,
-		svc.AcceptSpaceInvitation,
-		connect.WithSchema(spaceServiceMethods.ByName("AcceptSpaceInvitation")),
-		connect.WithHandlerOptions(opts...),
-	)
-	spaceServiceDeclineSpaceInvitationHandler := connect.NewUnaryHandler(
-		SpaceServiceDeclineSpaceInvitationProcedure,
-		svc.DeclineSpaceInvitation,
-		connect.WithSchema(spaceServiceMethods.ByName("DeclineSpaceInvitation")),
-		connect.WithHandlerOptions(opts...),
-	)
-	spaceServiceListSpaceMembersHandler := connect.NewUnaryHandler(
-		SpaceServiceListSpaceMembersProcedure,
-		svc.ListSpaceMembers,
-		connect.WithSchema(spaceServiceMethods.ByName("ListSpaceMembers")),
-		connect.WithHandlerOptions(opts...),
-	)
-	spaceServiceGetSpaceMemberHandler := connect.NewUnaryHandler(
-		SpaceServiceGetSpaceMemberProcedure,
-		svc.GetSpaceMember,
-		connect.WithSchema(spaceServiceMethods.ByName("GetSpaceMember")),
-		connect.WithHandlerOptions(opts...),
-	)
-	spaceServiceUpdateSpaceMemberHandler := connect.NewUnaryHandler(
-		SpaceServiceUpdateSpaceMemberProcedure,
-		svc.UpdateSpaceMember,
-		connect.WithSchema(spaceServiceMethods.ByName("UpdateSpaceMember")),
-		connect.WithHandlerOptions(opts...),
-	)
-	spaceServiceDeleteSpaceMemberHandler := connect.NewUnaryHandler(
-		SpaceServiceDeleteSpaceMemberProcedure,
-		svc.DeleteSpaceMember,
-		connect.WithSchema(spaceServiceMethods.ByName("DeleteSpaceMember")),
-		connect.WithHandlerOptions(opts...),
-	)
-	return "/memos.api.v1.SpaceService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case SpaceServiceCreateSpaceProcedure:
-			spaceServiceCreateSpaceHandler.ServeHTTP(w, r)
-		case SpaceServiceListSpacesProcedure:
-			spaceServiceListSpacesHandler.ServeHTTP(w, r)
-		case SpaceServiceGetSpaceProcedure:
-			spaceServiceGetSpaceHandler.ServeHTTP(w, r)
-		case SpaceServiceUpdateSpaceProcedure:
-			spaceServiceUpdateSpaceHandler.ServeHTTP(w, r)
-		case SpaceServiceDeleteSpaceProcedure:
-			spaceServiceDeleteSpaceHandler.ServeHTTP(w, r)
-		case SpaceServiceCreateSpaceInvitationProcedure:
-			spaceServiceCreateSpaceInvitationHandler.ServeHTTP(w, r)
-		case SpaceServiceListSpaceInvitationsProcedure:
-			spaceServiceListSpaceInvitationsHandler.ServeHTTP(w, r)
-		case SpaceServiceListUserSpaceInvitationsProcedure:
-			spaceServiceListUserSpaceInvitationsHandler.ServeHTTP(w, r)
-		case SpaceServiceGetSpaceInvitationProcedure:
-			spaceServiceGetSpaceInvitationHandler.ServeHTTP(w, r)
-		case SpaceServiceDeleteSpaceInvitationProcedure:
-			spaceServiceDeleteSpaceInvitationHandler.ServeHTTP(w, r)
-		case SpaceServiceAcceptSpaceInvitationProcedure:
-			spaceServiceAcceptSpaceInvitationHandler.ServeHTTP(w, r)
-		case SpaceServiceDeclineSpaceInvitationProcedure:
-			spaceServiceDeclineSpaceInvitationHandler.ServeHTTP(w, r)
-		case SpaceServiceListSpaceMembersProcedure:
-			spaceServiceListSpaceMembersHandler.ServeHTTP(w, r)
-		case SpaceServiceGetSpaceMemberProcedure:
-			spaceServiceGetSpaceMemberHandler.ServeHTTP(w, r)
-		case SpaceServiceUpdateSpaceMemberProcedure:
-			spaceServiceUpdateSpaceMemberHandler.ServeHTTP(w, r)
-		case SpaceServiceDeleteSpaceMemberProcedure:
-			spaceServiceDeleteSpaceMemberHandler.ServeHTTP(w, r)
-		default:
-			http.NotFound(w, r)
-		}
-	})
 }
 
 // UnimplementedSpaceServiceHandler returns CodeUnimplemented from all methods.
 type UnimplementedSpaceServiceHandler struct{}
 
-func (UnimplementedSpaceServiceHandler) CreateSpace(context.Context, *connect.Request[v1.CreateSpaceRequest]) (*connect.Response[v1.Space], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("memos.api.v1.SpaceService.CreateSpace is not implemented"))
+func (UnimplementedSpaceServiceHandler) CreateSpace(context.Context, *v1.CreateSpaceRequest) (*v1.Space, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "memos.api.v1.SpaceService.CreateSpace is not implemented")
 }
 
-func (UnimplementedSpaceServiceHandler) ListSpaces(context.Context, *connect.Request[v1.ListSpacesRequest]) (*connect.Response[v1.ListSpacesResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("memos.api.v1.SpaceService.ListSpaces is not implemented"))
+func (UnimplementedSpaceServiceHandler) ListSpaces(context.Context, *v1.ListSpacesRequest) (*v1.ListSpacesResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "memos.api.v1.SpaceService.ListSpaces is not implemented")
 }
 
-func (UnimplementedSpaceServiceHandler) GetSpace(context.Context, *connect.Request[v1.GetSpaceRequest]) (*connect.Response[v1.Space], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("memos.api.v1.SpaceService.GetSpace is not implemented"))
+func (UnimplementedSpaceServiceHandler) GetSpace(context.Context, *v1.GetSpaceRequest) (*v1.Space, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "memos.api.v1.SpaceService.GetSpace is not implemented")
 }
 
-func (UnimplementedSpaceServiceHandler) UpdateSpace(context.Context, *connect.Request[v1.UpdateSpaceRequest]) (*connect.Response[v1.Space], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("memos.api.v1.SpaceService.UpdateSpace is not implemented"))
+func (UnimplementedSpaceServiceHandler) UpdateSpace(context.Context, *v1.UpdateSpaceRequest) (*v1.Space, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "memos.api.v1.SpaceService.UpdateSpace is not implemented")
 }
 
-func (UnimplementedSpaceServiceHandler) DeleteSpace(context.Context, *connect.Request[v1.DeleteSpaceRequest]) (*connect.Response[emptypb.Empty], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("memos.api.v1.SpaceService.DeleteSpace is not implemented"))
+func (UnimplementedSpaceServiceHandler) DeleteSpace(context.Context, *v1.DeleteSpaceRequest) (*emptypb.Empty, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "memos.api.v1.SpaceService.DeleteSpace is not implemented")
 }
 
-func (UnimplementedSpaceServiceHandler) CreateSpaceInvitation(context.Context, *connect.Request[v1.CreateSpaceInvitationRequest]) (*connect.Response[v1.SpaceInvitation], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("memos.api.v1.SpaceService.CreateSpaceInvitation is not implemented"))
+func (UnimplementedSpaceServiceHandler) CreateSpaceInvitation(context.Context, *v1.CreateSpaceInvitationRequest) (*v1.SpaceInvitation, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "memos.api.v1.SpaceService.CreateSpaceInvitation is not implemented")
 }
 
-func (UnimplementedSpaceServiceHandler) ListSpaceInvitations(context.Context, *connect.Request[v1.ListSpaceInvitationsRequest]) (*connect.Response[v1.ListSpaceInvitationsResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("memos.api.v1.SpaceService.ListSpaceInvitations is not implemented"))
+func (UnimplementedSpaceServiceHandler) ListSpaceInvitations(context.Context, *v1.ListSpaceInvitationsRequest) (*v1.ListSpaceInvitationsResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "memos.api.v1.SpaceService.ListSpaceInvitations is not implemented")
 }
 
-func (UnimplementedSpaceServiceHandler) ListUserSpaceInvitations(context.Context, *connect.Request[v1.ListUserSpaceInvitationsRequest]) (*connect.Response[v1.ListUserSpaceInvitationsResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("memos.api.v1.SpaceService.ListUserSpaceInvitations is not implemented"))
+func (UnimplementedSpaceServiceHandler) ListUserSpaceInvitations(context.Context, *v1.ListUserSpaceInvitationsRequest) (*v1.ListUserSpaceInvitationsResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "memos.api.v1.SpaceService.ListUserSpaceInvitations is not implemented")
 }
 
-func (UnimplementedSpaceServiceHandler) GetSpaceInvitation(context.Context, *connect.Request[v1.GetSpaceInvitationRequest]) (*connect.Response[v1.SpaceInvitation], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("memos.api.v1.SpaceService.GetSpaceInvitation is not implemented"))
+func (UnimplementedSpaceServiceHandler) GetSpaceInvitation(context.Context, *v1.GetSpaceInvitationRequest) (*v1.SpaceInvitation, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "memos.api.v1.SpaceService.GetSpaceInvitation is not implemented")
 }
 
-func (UnimplementedSpaceServiceHandler) DeleteSpaceInvitation(context.Context, *connect.Request[v1.DeleteSpaceInvitationRequest]) (*connect.Response[emptypb.Empty], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("memos.api.v1.SpaceService.DeleteSpaceInvitation is not implemented"))
+func (UnimplementedSpaceServiceHandler) DeleteSpaceInvitation(context.Context, *v1.DeleteSpaceInvitationRequest) (*emptypb.Empty, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "memos.api.v1.SpaceService.DeleteSpaceInvitation is not implemented")
 }
 
-func (UnimplementedSpaceServiceHandler) AcceptSpaceInvitation(context.Context, *connect.Request[v1.AcceptSpaceInvitationRequest]) (*connect.Response[v1.SpaceMember], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("memos.api.v1.SpaceService.AcceptSpaceInvitation is not implemented"))
+func (UnimplementedSpaceServiceHandler) AcceptSpaceInvitation(context.Context, *v1.AcceptSpaceInvitationRequest) (*v1.SpaceMember, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "memos.api.v1.SpaceService.AcceptSpaceInvitation is not implemented")
 }
 
-func (UnimplementedSpaceServiceHandler) DeclineSpaceInvitation(context.Context, *connect.Request[v1.DeclineSpaceInvitationRequest]) (*connect.Response[emptypb.Empty], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("memos.api.v1.SpaceService.DeclineSpaceInvitation is not implemented"))
+func (UnimplementedSpaceServiceHandler) DeclineSpaceInvitation(context.Context, *v1.DeclineSpaceInvitationRequest) (*emptypb.Empty, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "memos.api.v1.SpaceService.DeclineSpaceInvitation is not implemented")
 }
 
-func (UnimplementedSpaceServiceHandler) ListSpaceMembers(context.Context, *connect.Request[v1.ListSpaceMembersRequest]) (*connect.Response[v1.ListSpaceMembersResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("memos.api.v1.SpaceService.ListSpaceMembers is not implemented"))
+func (UnimplementedSpaceServiceHandler) ListSpaceMembers(context.Context, *v1.ListSpaceMembersRequest) (*v1.ListSpaceMembersResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "memos.api.v1.SpaceService.ListSpaceMembers is not implemented")
 }
 
-func (UnimplementedSpaceServiceHandler) GetSpaceMember(context.Context, *connect.Request[v1.GetSpaceMemberRequest]) (*connect.Response[v1.SpaceMember], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("memos.api.v1.SpaceService.GetSpaceMember is not implemented"))
+func (UnimplementedSpaceServiceHandler) GetSpaceMember(context.Context, *v1.GetSpaceMemberRequest) (*v1.SpaceMember, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "memos.api.v1.SpaceService.GetSpaceMember is not implemented")
 }
 
-func (UnimplementedSpaceServiceHandler) UpdateSpaceMember(context.Context, *connect.Request[v1.UpdateSpaceMemberRequest]) (*connect.Response[v1.SpaceMember], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("memos.api.v1.SpaceService.UpdateSpaceMember is not implemented"))
+func (UnimplementedSpaceServiceHandler) UpdateSpaceMember(context.Context, *v1.UpdateSpaceMemberRequest) (*v1.SpaceMember, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "memos.api.v1.SpaceService.UpdateSpaceMember is not implemented")
 }
 
-func (UnimplementedSpaceServiceHandler) DeleteSpaceMember(context.Context, *connect.Request[v1.DeleteSpaceMemberRequest]) (*connect.Response[emptypb.Empty], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("memos.api.v1.SpaceService.DeleteSpaceMember is not implemented"))
+func (UnimplementedSpaceServiceHandler) DeleteSpaceMember(context.Context, *v1.DeleteSpaceMemberRequest) (*emptypb.Empty, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "memos.api.v1.SpaceService.DeleteSpaceMember is not implemented")
+}
+
+type spaceServiceClient struct {
+	client *connect.Client
+}
+
+func (c *spaceServiceClient) CreateSpace(ctx context.Context, req *v1.CreateSpaceRequest) (*v1.Space, error) {
+	var res v1.Space
+	if err := c.client.CallUnary(ctx, spaceServiceCreateSpaceSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *spaceServiceClient) ListSpaces(ctx context.Context, req *v1.ListSpacesRequest) (*v1.ListSpacesResponse, error) {
+	var res v1.ListSpacesResponse
+	if err := c.client.CallUnary(ctx, spaceServiceListSpacesSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *spaceServiceClient) GetSpace(ctx context.Context, req *v1.GetSpaceRequest) (*v1.Space, error) {
+	var res v1.Space
+	if err := c.client.CallUnary(ctx, spaceServiceGetSpaceSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *spaceServiceClient) UpdateSpace(ctx context.Context, req *v1.UpdateSpaceRequest) (*v1.Space, error) {
+	var res v1.Space
+	if err := c.client.CallUnary(ctx, spaceServiceUpdateSpaceSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *spaceServiceClient) DeleteSpace(ctx context.Context, req *v1.DeleteSpaceRequest) (*emptypb.Empty, error) {
+	var res emptypb.Empty
+	if err := c.client.CallUnary(ctx, spaceServiceDeleteSpaceSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *spaceServiceClient) CreateSpaceInvitation(ctx context.Context, req *v1.CreateSpaceInvitationRequest) (*v1.SpaceInvitation, error) {
+	var res v1.SpaceInvitation
+	if err := c.client.CallUnary(ctx, spaceServiceCreateSpaceInvitationSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *spaceServiceClient) ListSpaceInvitations(ctx context.Context, req *v1.ListSpaceInvitationsRequest) (*v1.ListSpaceInvitationsResponse, error) {
+	var res v1.ListSpaceInvitationsResponse
+	if err := c.client.CallUnary(ctx, spaceServiceListSpaceInvitationsSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *spaceServiceClient) ListUserSpaceInvitations(ctx context.Context, req *v1.ListUserSpaceInvitationsRequest) (*v1.ListUserSpaceInvitationsResponse, error) {
+	var res v1.ListUserSpaceInvitationsResponse
+	if err := c.client.CallUnary(ctx, spaceServiceListUserSpaceInvitationsSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *spaceServiceClient) GetSpaceInvitation(ctx context.Context, req *v1.GetSpaceInvitationRequest) (*v1.SpaceInvitation, error) {
+	var res v1.SpaceInvitation
+	if err := c.client.CallUnary(ctx, spaceServiceGetSpaceInvitationSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *spaceServiceClient) DeleteSpaceInvitation(ctx context.Context, req *v1.DeleteSpaceInvitationRequest) (*emptypb.Empty, error) {
+	var res emptypb.Empty
+	if err := c.client.CallUnary(ctx, spaceServiceDeleteSpaceInvitationSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *spaceServiceClient) AcceptSpaceInvitation(ctx context.Context, req *v1.AcceptSpaceInvitationRequest) (*v1.SpaceMember, error) {
+	var res v1.SpaceMember
+	if err := c.client.CallUnary(ctx, spaceServiceAcceptSpaceInvitationSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *spaceServiceClient) DeclineSpaceInvitation(ctx context.Context, req *v1.DeclineSpaceInvitationRequest) (*emptypb.Empty, error) {
+	var res emptypb.Empty
+	if err := c.client.CallUnary(ctx, spaceServiceDeclineSpaceInvitationSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *spaceServiceClient) ListSpaceMembers(ctx context.Context, req *v1.ListSpaceMembersRequest) (*v1.ListSpaceMembersResponse, error) {
+	var res v1.ListSpaceMembersResponse
+	if err := c.client.CallUnary(ctx, spaceServiceListSpaceMembersSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *spaceServiceClient) GetSpaceMember(ctx context.Context, req *v1.GetSpaceMemberRequest) (*v1.SpaceMember, error) {
+	var res v1.SpaceMember
+	if err := c.client.CallUnary(ctx, spaceServiceGetSpaceMemberSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *spaceServiceClient) UpdateSpaceMember(ctx context.Context, req *v1.UpdateSpaceMemberRequest) (*v1.SpaceMember, error) {
+	var res v1.SpaceMember
+	if err := c.client.CallUnary(ctx, spaceServiceUpdateSpaceMemberSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *spaceServiceClient) DeleteSpaceMember(ctx context.Context, req *v1.DeleteSpaceMemberRequest) (*emptypb.Empty, error) {
+	var res emptypb.Empty
+	if err := c.client.CallUnary(ctx, spaceServiceDeleteSpaceMemberSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+type spaceServiceHandler struct{ svc SpaceServiceHandler }
+
+func (h spaceServiceHandler) createSpace(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.CreateSpaceRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.CreateSpace(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h spaceServiceHandler) listSpaces(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.ListSpacesRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.ListSpaces(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h spaceServiceHandler) getSpace(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.GetSpaceRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.GetSpace(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h spaceServiceHandler) updateSpace(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.UpdateSpaceRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.UpdateSpace(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h spaceServiceHandler) deleteSpace(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.DeleteSpaceRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.DeleteSpace(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h spaceServiceHandler) createSpaceInvitation(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.CreateSpaceInvitationRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.CreateSpaceInvitation(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h spaceServiceHandler) listSpaceInvitations(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.ListSpaceInvitationsRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.ListSpaceInvitations(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h spaceServiceHandler) listUserSpaceInvitations(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.ListUserSpaceInvitationsRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.ListUserSpaceInvitations(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h spaceServiceHandler) getSpaceInvitation(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.GetSpaceInvitationRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.GetSpaceInvitation(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h spaceServiceHandler) deleteSpaceInvitation(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.DeleteSpaceInvitationRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.DeleteSpaceInvitation(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h spaceServiceHandler) acceptSpaceInvitation(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.AcceptSpaceInvitationRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.AcceptSpaceInvitation(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h spaceServiceHandler) declineSpaceInvitation(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.DeclineSpaceInvitationRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.DeclineSpaceInvitation(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h spaceServiceHandler) listSpaceMembers(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.ListSpaceMembersRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.ListSpaceMembers(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h spaceServiceHandler) getSpaceMember(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.GetSpaceMemberRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.GetSpaceMember(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h spaceServiceHandler) updateSpaceMember(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.UpdateSpaceMemberRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.UpdateSpaceMember(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h spaceServiceHandler) deleteSpaceMember(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.DeleteSpaceMemberRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.DeleteSpaceMember(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
 }

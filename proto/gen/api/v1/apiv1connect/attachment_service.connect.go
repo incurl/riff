@@ -5,300 +5,337 @@
 package apiv1connect
 
 import (
-	connect "connectrpc.com/connect"
+	connect "connectrpc.com/connect/v2"
 	context "context"
-	errors "errors"
-	v1 "github.com/usememos/memos/proto/gen/api/v1"
+	v1 "github.com/incurl/riff/proto/gen/api/v1"
 	emptypb "google.golang.org/protobuf/types/known/emptypb"
-	http "net/http"
-	strings "strings"
+	sync "sync"
 )
-
-// This is a compile-time assertion to ensure that this generated file and the connect package are
-// compatible. If you get a compiler error that this constant is not defined, this code was
-// generated with a version of connect newer than the one compiled into your binary. You can fix the
-// problem by either regenerating this code with an older version of connect or updating the connect
-// version compiled into your binary.
-const _ = connect.IsAtLeastVersion1_13_0
 
 const (
 	// AttachmentServiceName is the fully-qualified name of the AttachmentService service.
 	AttachmentServiceName = "memos.api.v1.AttachmentService"
 )
 
-// These constants are the fully-qualified names of the RPCs defined in this package. They're
-// exposed at runtime as Spec.Procedure and as the final two segments of the HTTP route.
+// These constants are the procedure names of the RPCs defined in this package. They're exposed at
+// runtime as Spec.Procedure and as the final two segments of the HTTP route.
 //
 // Note that these are different from the fully-qualified method names used by
 // google.golang.org/protobuf/reflect/protoreflect. To convert from these constants to
 // reflection-formatted method names, remove the leading slash and convert the remaining slash to a
 // period.
 const (
-	// AttachmentServiceCreateAttachmentProcedure is the fully-qualified name of the AttachmentService's
+	// AttachmentServiceCreateAttachmentProcedure is the procedure name of the AttachmentService's
 	// CreateAttachment RPC.
 	AttachmentServiceCreateAttachmentProcedure = "/memos.api.v1.AttachmentService/CreateAttachment"
-	// AttachmentServiceUploadAttachmentProcedure is the fully-qualified name of the AttachmentService's
+	// AttachmentServiceUploadAttachmentProcedure is the procedure name of the AttachmentService's
 	// UploadAttachment RPC.
 	AttachmentServiceUploadAttachmentProcedure = "/memos.api.v1.AttachmentService/UploadAttachment"
-	// AttachmentServiceListAttachmentsProcedure is the fully-qualified name of the AttachmentService's
+	// AttachmentServiceListAttachmentsProcedure is the procedure name of the AttachmentService's
 	// ListAttachments RPC.
 	AttachmentServiceListAttachmentsProcedure = "/memos.api.v1.AttachmentService/ListAttachments"
-	// AttachmentServiceGetAttachmentProcedure is the fully-qualified name of the AttachmentService's
+	// AttachmentServiceGetAttachmentProcedure is the procedure name of the AttachmentService's
 	// GetAttachment RPC.
 	AttachmentServiceGetAttachmentProcedure = "/memos.api.v1.AttachmentService/GetAttachment"
-	// AttachmentServiceUpdateAttachmentProcedure is the fully-qualified name of the AttachmentService's
+	// AttachmentServiceUpdateAttachmentProcedure is the procedure name of the AttachmentService's
 	// UpdateAttachment RPC.
 	AttachmentServiceUpdateAttachmentProcedure = "/memos.api.v1.AttachmentService/UpdateAttachment"
-	// AttachmentServiceDeleteAttachmentProcedure is the fully-qualified name of the AttachmentService's
+	// AttachmentServiceDeleteAttachmentProcedure is the procedure name of the AttachmentService's
 	// DeleteAttachment RPC.
 	AttachmentServiceDeleteAttachmentProcedure = "/memos.api.v1.AttachmentService/DeleteAttachment"
-	// AttachmentServiceBatchDeleteAttachmentsProcedure is the fully-qualified name of the
-	// AttachmentService's BatchDeleteAttachments RPC.
+	// AttachmentServiceBatchDeleteAttachmentsProcedure is the procedure name of the AttachmentService's
+	// BatchDeleteAttachments RPC.
 	AttachmentServiceBatchDeleteAttachmentsProcedure = "/memos.api.v1.AttachmentService/BatchDeleteAttachments"
+)
+
+var (
+	attachmentServiceCreateAttachmentSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_api_v1_attachment_service_proto.Services().ByName("AttachmentService").Methods().ByName("CreateAttachment"),
+			Procedure:  AttachmentServiceCreateAttachmentProcedure,
+		}
+	})
+	attachmentServiceUploadAttachmentSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_api_v1_attachment_service_proto.Services().ByName("AttachmentService").Methods().ByName("UploadAttachment"),
+			Procedure:  AttachmentServiceUploadAttachmentProcedure,
+		}
+	})
+	attachmentServiceListAttachmentsSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_api_v1_attachment_service_proto.Services().ByName("AttachmentService").Methods().ByName("ListAttachments"),
+			Procedure:  AttachmentServiceListAttachmentsProcedure,
+		}
+	})
+	attachmentServiceGetAttachmentSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_api_v1_attachment_service_proto.Services().ByName("AttachmentService").Methods().ByName("GetAttachment"),
+			Procedure:  AttachmentServiceGetAttachmentProcedure,
+		}
+	})
+	attachmentServiceUpdateAttachmentSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_api_v1_attachment_service_proto.Services().ByName("AttachmentService").Methods().ByName("UpdateAttachment"),
+			Procedure:  AttachmentServiceUpdateAttachmentProcedure,
+		}
+	})
+	attachmentServiceDeleteAttachmentSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_api_v1_attachment_service_proto.Services().ByName("AttachmentService").Methods().ByName("DeleteAttachment"),
+			Procedure:  AttachmentServiceDeleteAttachmentProcedure,
+		}
+	})
+	attachmentServiceBatchDeleteAttachmentsSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_api_v1_attachment_service_proto.Services().ByName("AttachmentService").Methods().ByName("BatchDeleteAttachments"),
+			Procedure:  AttachmentServiceBatchDeleteAttachmentsProcedure,
+		}
+	})
 )
 
 // AttachmentServiceClient is a client for the memos.api.v1.AttachmentService service.
 type AttachmentServiceClient interface {
 	// CreateAttachment creates a new attachment.
-	CreateAttachment(context.Context, *connect.Request[v1.CreateAttachmentRequest]) (*connect.Response[v1.Attachment], error)
+	CreateAttachment(context.Context, *v1.CreateAttachmentRequest) (*v1.Attachment, error)
 	// UploadAttachment uploads a file in bounded chunks. The first call carries
 	// the spec and returns an upload_id; later calls carry that upload_id.
 	// Uploads are bound to the authenticated user, expire after 30 minutes of
 	// inactivity, and do not survive a server restart.
-	UploadAttachment(context.Context, *connect.Request[v1.UploadAttachmentRequest]) (*connect.Response[v1.UploadAttachmentResponse], error)
+	UploadAttachment(context.Context, *v1.UploadAttachmentRequest) (*v1.UploadAttachmentResponse, error)
 	// ListAttachments lists attachments linked to readable memos and the caller's unlinked uploads.
-	ListAttachments(context.Context, *connect.Request[v1.ListAttachmentsRequest]) (*connect.Response[v1.ListAttachmentsResponse], error)
+	ListAttachments(context.Context, *v1.ListAttachmentsRequest) (*v1.ListAttachmentsResponse, error)
 	// GetAttachment returns an attachment by name.
-	GetAttachment(context.Context, *connect.Request[v1.GetAttachmentRequest]) (*connect.Response[v1.Attachment], error)
+	GetAttachment(context.Context, *v1.GetAttachmentRequest) (*v1.Attachment, error)
 	// UpdateAttachment updates an attachment.
-	UpdateAttachment(context.Context, *connect.Request[v1.UpdateAttachmentRequest]) (*connect.Response[v1.Attachment], error)
+	UpdateAttachment(context.Context, *v1.UpdateAttachmentRequest) (*v1.Attachment, error)
 	// DeleteAttachment deletes an attachment by name.
-	DeleteAttachment(context.Context, *connect.Request[v1.DeleteAttachmentRequest]) (*connect.Response[emptypb.Empty], error)
+	DeleteAttachment(context.Context, *v1.DeleteAttachmentRequest) (*emptypb.Empty, error)
 	// BatchDeleteAttachments deletes multiple attachments in one request.
-	BatchDeleteAttachments(context.Context, *connect.Request[v1.BatchDeleteAttachmentsRequest]) (*connect.Response[emptypb.Empty], error)
+	BatchDeleteAttachments(context.Context, *v1.BatchDeleteAttachmentsRequest) (*emptypb.Empty, error)
 }
 
-// NewAttachmentServiceClient constructs a client for the memos.api.v1.AttachmentService service. By
-// default, it uses the Connect protocol with the binary Protobuf Codec, asks for gzipped responses,
-// and sends uncompressed requests. To use the gRPC or gRPC-Web protocols, supply the
-// connect.WithGRPC() or connect.WithGRPCWeb() options.
-//
-// The URL supplied here should be the base URL for the Connect or gRPC server (for example,
-// http://api.acme.com or https://acme.com/grpc).
-func NewAttachmentServiceClient(httpClient connect.HTTPClient, baseURL string, opts ...connect.ClientOption) AttachmentServiceClient {
-	baseURL = strings.TrimRight(baseURL, "/")
-	attachmentServiceMethods := v1.File_api_v1_attachment_service_proto.Services().ByName("AttachmentService").Methods()
-	return &attachmentServiceClient{
-		createAttachment: connect.NewClient[v1.CreateAttachmentRequest, v1.Attachment](
-			httpClient,
-			baseURL+AttachmentServiceCreateAttachmentProcedure,
-			connect.WithSchema(attachmentServiceMethods.ByName("CreateAttachment")),
-			connect.WithClientOptions(opts...),
-		),
-		uploadAttachment: connect.NewClient[v1.UploadAttachmentRequest, v1.UploadAttachmentResponse](
-			httpClient,
-			baseURL+AttachmentServiceUploadAttachmentProcedure,
-			connect.WithSchema(attachmentServiceMethods.ByName("UploadAttachment")),
-			connect.WithClientOptions(opts...),
-		),
-		listAttachments: connect.NewClient[v1.ListAttachmentsRequest, v1.ListAttachmentsResponse](
-			httpClient,
-			baseURL+AttachmentServiceListAttachmentsProcedure,
-			connect.WithSchema(attachmentServiceMethods.ByName("ListAttachments")),
-			connect.WithClientOptions(opts...),
-		),
-		getAttachment: connect.NewClient[v1.GetAttachmentRequest, v1.Attachment](
-			httpClient,
-			baseURL+AttachmentServiceGetAttachmentProcedure,
-			connect.WithSchema(attachmentServiceMethods.ByName("GetAttachment")),
-			connect.WithClientOptions(opts...),
-		),
-		updateAttachment: connect.NewClient[v1.UpdateAttachmentRequest, v1.Attachment](
-			httpClient,
-			baseURL+AttachmentServiceUpdateAttachmentProcedure,
-			connect.WithSchema(attachmentServiceMethods.ByName("UpdateAttachment")),
-			connect.WithClientOptions(opts...),
-		),
-		deleteAttachment: connect.NewClient[v1.DeleteAttachmentRequest, emptypb.Empty](
-			httpClient,
-			baseURL+AttachmentServiceDeleteAttachmentProcedure,
-			connect.WithSchema(attachmentServiceMethods.ByName("DeleteAttachment")),
-			connect.WithClientOptions(opts...),
-		),
-		batchDeleteAttachments: connect.NewClient[v1.BatchDeleteAttachmentsRequest, emptypb.Empty](
-			httpClient,
-			baseURL+AttachmentServiceBatchDeleteAttachmentsProcedure,
-			connect.WithSchema(attachmentServiceMethods.ByName("BatchDeleteAttachments")),
-			connect.WithClientOptions(opts...),
-		),
-	}
-}
-
-// attachmentServiceClient implements AttachmentServiceClient.
-type attachmentServiceClient struct {
-	createAttachment       *connect.Client[v1.CreateAttachmentRequest, v1.Attachment]
-	uploadAttachment       *connect.Client[v1.UploadAttachmentRequest, v1.UploadAttachmentResponse]
-	listAttachments        *connect.Client[v1.ListAttachmentsRequest, v1.ListAttachmentsResponse]
-	getAttachment          *connect.Client[v1.GetAttachmentRequest, v1.Attachment]
-	updateAttachment       *connect.Client[v1.UpdateAttachmentRequest, v1.Attachment]
-	deleteAttachment       *connect.Client[v1.DeleteAttachmentRequest, emptypb.Empty]
-	batchDeleteAttachments *connect.Client[v1.BatchDeleteAttachmentsRequest, emptypb.Empty]
-}
-
-// CreateAttachment calls memos.api.v1.AttachmentService.CreateAttachment.
-func (c *attachmentServiceClient) CreateAttachment(ctx context.Context, req *connect.Request[v1.CreateAttachmentRequest]) (*connect.Response[v1.Attachment], error) {
-	return c.createAttachment.CallUnary(ctx, req)
-}
-
-// UploadAttachment calls memos.api.v1.AttachmentService.UploadAttachment.
-func (c *attachmentServiceClient) UploadAttachment(ctx context.Context, req *connect.Request[v1.UploadAttachmentRequest]) (*connect.Response[v1.UploadAttachmentResponse], error) {
-	return c.uploadAttachment.CallUnary(ctx, req)
-}
-
-// ListAttachments calls memos.api.v1.AttachmentService.ListAttachments.
-func (c *attachmentServiceClient) ListAttachments(ctx context.Context, req *connect.Request[v1.ListAttachmentsRequest]) (*connect.Response[v1.ListAttachmentsResponse], error) {
-	return c.listAttachments.CallUnary(ctx, req)
-}
-
-// GetAttachment calls memos.api.v1.AttachmentService.GetAttachment.
-func (c *attachmentServiceClient) GetAttachment(ctx context.Context, req *connect.Request[v1.GetAttachmentRequest]) (*connect.Response[v1.Attachment], error) {
-	return c.getAttachment.CallUnary(ctx, req)
-}
-
-// UpdateAttachment calls memos.api.v1.AttachmentService.UpdateAttachment.
-func (c *attachmentServiceClient) UpdateAttachment(ctx context.Context, req *connect.Request[v1.UpdateAttachmentRequest]) (*connect.Response[v1.Attachment], error) {
-	return c.updateAttachment.CallUnary(ctx, req)
-}
-
-// DeleteAttachment calls memos.api.v1.AttachmentService.DeleteAttachment.
-func (c *attachmentServiceClient) DeleteAttachment(ctx context.Context, req *connect.Request[v1.DeleteAttachmentRequest]) (*connect.Response[emptypb.Empty], error) {
-	return c.deleteAttachment.CallUnary(ctx, req)
-}
-
-// BatchDeleteAttachments calls memos.api.v1.AttachmentService.BatchDeleteAttachments.
-func (c *attachmentServiceClient) BatchDeleteAttachments(ctx context.Context, req *connect.Request[v1.BatchDeleteAttachmentsRequest]) (*connect.Response[emptypb.Empty], error) {
-	return c.batchDeleteAttachments.CallUnary(ctx, req)
+// NewAttachmentServiceClient constructs a client for the memos.api.v1.AttachmentService service.
+// Multiple service clients may share a single connect.Client.
+func NewAttachmentServiceClient(client *connect.Client) AttachmentServiceClient {
+	return &attachmentServiceClient{client: client}
 }
 
 // AttachmentServiceHandler is an implementation of the memos.api.v1.AttachmentService service.
 type AttachmentServiceHandler interface {
 	// CreateAttachment creates a new attachment.
-	CreateAttachment(context.Context, *connect.Request[v1.CreateAttachmentRequest]) (*connect.Response[v1.Attachment], error)
+	CreateAttachment(context.Context, *v1.CreateAttachmentRequest) (*v1.Attachment, error)
 	// UploadAttachment uploads a file in bounded chunks. The first call carries
 	// the spec and returns an upload_id; later calls carry that upload_id.
 	// Uploads are bound to the authenticated user, expire after 30 minutes of
 	// inactivity, and do not survive a server restart.
-	UploadAttachment(context.Context, *connect.Request[v1.UploadAttachmentRequest]) (*connect.Response[v1.UploadAttachmentResponse], error)
+	UploadAttachment(context.Context, *v1.UploadAttachmentRequest) (*v1.UploadAttachmentResponse, error)
 	// ListAttachments lists attachments linked to readable memos and the caller's unlinked uploads.
-	ListAttachments(context.Context, *connect.Request[v1.ListAttachmentsRequest]) (*connect.Response[v1.ListAttachmentsResponse], error)
+	ListAttachments(context.Context, *v1.ListAttachmentsRequest) (*v1.ListAttachmentsResponse, error)
 	// GetAttachment returns an attachment by name.
-	GetAttachment(context.Context, *connect.Request[v1.GetAttachmentRequest]) (*connect.Response[v1.Attachment], error)
+	GetAttachment(context.Context, *v1.GetAttachmentRequest) (*v1.Attachment, error)
 	// UpdateAttachment updates an attachment.
-	UpdateAttachment(context.Context, *connect.Request[v1.UpdateAttachmentRequest]) (*connect.Response[v1.Attachment], error)
+	UpdateAttachment(context.Context, *v1.UpdateAttachmentRequest) (*v1.Attachment, error)
 	// DeleteAttachment deletes an attachment by name.
-	DeleteAttachment(context.Context, *connect.Request[v1.DeleteAttachmentRequest]) (*connect.Response[emptypb.Empty], error)
+	DeleteAttachment(context.Context, *v1.DeleteAttachmentRequest) (*emptypb.Empty, error)
 	// BatchDeleteAttachments deletes multiple attachments in one request.
-	BatchDeleteAttachments(context.Context, *connect.Request[v1.BatchDeleteAttachmentsRequest]) (*connect.Response[emptypb.Empty], error)
+	BatchDeleteAttachments(context.Context, *v1.BatchDeleteAttachmentsRequest) (*emptypb.Empty, error)
 }
 
-// NewAttachmentServiceHandler builds an HTTP handler from the service implementation. It returns
-// the path on which to mount the handler and the handler itself.
-//
-// By default, handlers support the Connect, gRPC, and gRPC-Web protocols with the binary Protobuf
-// and JSON codecs. They also support gzip compression.
-func NewAttachmentServiceHandler(svc AttachmentServiceHandler, opts ...connect.HandlerOption) (string, http.Handler) {
-	attachmentServiceMethods := v1.File_api_v1_attachment_service_proto.Services().ByName("AttachmentService").Methods()
-	attachmentServiceCreateAttachmentHandler := connect.NewUnaryHandler(
-		AttachmentServiceCreateAttachmentProcedure,
-		svc.CreateAttachment,
-		connect.WithSchema(attachmentServiceMethods.ByName("CreateAttachment")),
-		connect.WithHandlerOptions(opts...),
+// RegisterAttachmentServiceHandler registers svc as the memos.api.v1.AttachmentService
+// implementation on server.
+func RegisterAttachmentServiceHandler(server *connect.Server, svc AttachmentServiceHandler) {
+	adapter := attachmentServiceHandler{svc: svc}
+	server.Register(
+		connect.Method{Spec: attachmentServiceCreateAttachmentSpec(), Handler: adapter.createAttachment},
+		connect.Method{Spec: attachmentServiceUploadAttachmentSpec(), Handler: adapter.uploadAttachment},
+		connect.Method{Spec: attachmentServiceListAttachmentsSpec(), Handler: adapter.listAttachments},
+		connect.Method{Spec: attachmentServiceGetAttachmentSpec(), Handler: adapter.getAttachment},
+		connect.Method{Spec: attachmentServiceUpdateAttachmentSpec(), Handler: adapter.updateAttachment},
+		connect.Method{Spec: attachmentServiceDeleteAttachmentSpec(), Handler: adapter.deleteAttachment},
+		connect.Method{Spec: attachmentServiceBatchDeleteAttachmentsSpec(), Handler: adapter.batchDeleteAttachments},
 	)
-	attachmentServiceUploadAttachmentHandler := connect.NewUnaryHandler(
-		AttachmentServiceUploadAttachmentProcedure,
-		svc.UploadAttachment,
-		connect.WithSchema(attachmentServiceMethods.ByName("UploadAttachment")),
-		connect.WithHandlerOptions(opts...),
-	)
-	attachmentServiceListAttachmentsHandler := connect.NewUnaryHandler(
-		AttachmentServiceListAttachmentsProcedure,
-		svc.ListAttachments,
-		connect.WithSchema(attachmentServiceMethods.ByName("ListAttachments")),
-		connect.WithHandlerOptions(opts...),
-	)
-	attachmentServiceGetAttachmentHandler := connect.NewUnaryHandler(
-		AttachmentServiceGetAttachmentProcedure,
-		svc.GetAttachment,
-		connect.WithSchema(attachmentServiceMethods.ByName("GetAttachment")),
-		connect.WithHandlerOptions(opts...),
-	)
-	attachmentServiceUpdateAttachmentHandler := connect.NewUnaryHandler(
-		AttachmentServiceUpdateAttachmentProcedure,
-		svc.UpdateAttachment,
-		connect.WithSchema(attachmentServiceMethods.ByName("UpdateAttachment")),
-		connect.WithHandlerOptions(opts...),
-	)
-	attachmentServiceDeleteAttachmentHandler := connect.NewUnaryHandler(
-		AttachmentServiceDeleteAttachmentProcedure,
-		svc.DeleteAttachment,
-		connect.WithSchema(attachmentServiceMethods.ByName("DeleteAttachment")),
-		connect.WithHandlerOptions(opts...),
-	)
-	attachmentServiceBatchDeleteAttachmentsHandler := connect.NewUnaryHandler(
-		AttachmentServiceBatchDeleteAttachmentsProcedure,
-		svc.BatchDeleteAttachments,
-		connect.WithSchema(attachmentServiceMethods.ByName("BatchDeleteAttachments")),
-		connect.WithHandlerOptions(opts...),
-	)
-	return "/memos.api.v1.AttachmentService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case AttachmentServiceCreateAttachmentProcedure:
-			attachmentServiceCreateAttachmentHandler.ServeHTTP(w, r)
-		case AttachmentServiceUploadAttachmentProcedure:
-			attachmentServiceUploadAttachmentHandler.ServeHTTP(w, r)
-		case AttachmentServiceListAttachmentsProcedure:
-			attachmentServiceListAttachmentsHandler.ServeHTTP(w, r)
-		case AttachmentServiceGetAttachmentProcedure:
-			attachmentServiceGetAttachmentHandler.ServeHTTP(w, r)
-		case AttachmentServiceUpdateAttachmentProcedure:
-			attachmentServiceUpdateAttachmentHandler.ServeHTTP(w, r)
-		case AttachmentServiceDeleteAttachmentProcedure:
-			attachmentServiceDeleteAttachmentHandler.ServeHTTP(w, r)
-		case AttachmentServiceBatchDeleteAttachmentsProcedure:
-			attachmentServiceBatchDeleteAttachmentsHandler.ServeHTTP(w, r)
-		default:
-			http.NotFound(w, r)
-		}
-	})
 }
 
 // UnimplementedAttachmentServiceHandler returns CodeUnimplemented from all methods.
 type UnimplementedAttachmentServiceHandler struct{}
 
-func (UnimplementedAttachmentServiceHandler) CreateAttachment(context.Context, *connect.Request[v1.CreateAttachmentRequest]) (*connect.Response[v1.Attachment], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("memos.api.v1.AttachmentService.CreateAttachment is not implemented"))
+func (UnimplementedAttachmentServiceHandler) CreateAttachment(context.Context, *v1.CreateAttachmentRequest) (*v1.Attachment, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "memos.api.v1.AttachmentService.CreateAttachment is not implemented")
 }
 
-func (UnimplementedAttachmentServiceHandler) UploadAttachment(context.Context, *connect.Request[v1.UploadAttachmentRequest]) (*connect.Response[v1.UploadAttachmentResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("memos.api.v1.AttachmentService.UploadAttachment is not implemented"))
+func (UnimplementedAttachmentServiceHandler) UploadAttachment(context.Context, *v1.UploadAttachmentRequest) (*v1.UploadAttachmentResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "memos.api.v1.AttachmentService.UploadAttachment is not implemented")
 }
 
-func (UnimplementedAttachmentServiceHandler) ListAttachments(context.Context, *connect.Request[v1.ListAttachmentsRequest]) (*connect.Response[v1.ListAttachmentsResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("memos.api.v1.AttachmentService.ListAttachments is not implemented"))
+func (UnimplementedAttachmentServiceHandler) ListAttachments(context.Context, *v1.ListAttachmentsRequest) (*v1.ListAttachmentsResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "memos.api.v1.AttachmentService.ListAttachments is not implemented")
 }
 
-func (UnimplementedAttachmentServiceHandler) GetAttachment(context.Context, *connect.Request[v1.GetAttachmentRequest]) (*connect.Response[v1.Attachment], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("memos.api.v1.AttachmentService.GetAttachment is not implemented"))
+func (UnimplementedAttachmentServiceHandler) GetAttachment(context.Context, *v1.GetAttachmentRequest) (*v1.Attachment, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "memos.api.v1.AttachmentService.GetAttachment is not implemented")
 }
 
-func (UnimplementedAttachmentServiceHandler) UpdateAttachment(context.Context, *connect.Request[v1.UpdateAttachmentRequest]) (*connect.Response[v1.Attachment], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("memos.api.v1.AttachmentService.UpdateAttachment is not implemented"))
+func (UnimplementedAttachmentServiceHandler) UpdateAttachment(context.Context, *v1.UpdateAttachmentRequest) (*v1.Attachment, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "memos.api.v1.AttachmentService.UpdateAttachment is not implemented")
 }
 
-func (UnimplementedAttachmentServiceHandler) DeleteAttachment(context.Context, *connect.Request[v1.DeleteAttachmentRequest]) (*connect.Response[emptypb.Empty], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("memos.api.v1.AttachmentService.DeleteAttachment is not implemented"))
+func (UnimplementedAttachmentServiceHandler) DeleteAttachment(context.Context, *v1.DeleteAttachmentRequest) (*emptypb.Empty, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "memos.api.v1.AttachmentService.DeleteAttachment is not implemented")
 }
 
-func (UnimplementedAttachmentServiceHandler) BatchDeleteAttachments(context.Context, *connect.Request[v1.BatchDeleteAttachmentsRequest]) (*connect.Response[emptypb.Empty], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("memos.api.v1.AttachmentService.BatchDeleteAttachments is not implemented"))
+func (UnimplementedAttachmentServiceHandler) BatchDeleteAttachments(context.Context, *v1.BatchDeleteAttachmentsRequest) (*emptypb.Empty, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "memos.api.v1.AttachmentService.BatchDeleteAttachments is not implemented")
+}
+
+type attachmentServiceClient struct {
+	client *connect.Client
+}
+
+func (c *attachmentServiceClient) CreateAttachment(ctx context.Context, req *v1.CreateAttachmentRequest) (*v1.Attachment, error) {
+	var res v1.Attachment
+	if err := c.client.CallUnary(ctx, attachmentServiceCreateAttachmentSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *attachmentServiceClient) UploadAttachment(ctx context.Context, req *v1.UploadAttachmentRequest) (*v1.UploadAttachmentResponse, error) {
+	var res v1.UploadAttachmentResponse
+	if err := c.client.CallUnary(ctx, attachmentServiceUploadAttachmentSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *attachmentServiceClient) ListAttachments(ctx context.Context, req *v1.ListAttachmentsRequest) (*v1.ListAttachmentsResponse, error) {
+	var res v1.ListAttachmentsResponse
+	if err := c.client.CallUnary(ctx, attachmentServiceListAttachmentsSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *attachmentServiceClient) GetAttachment(ctx context.Context, req *v1.GetAttachmentRequest) (*v1.Attachment, error) {
+	var res v1.Attachment
+	if err := c.client.CallUnary(ctx, attachmentServiceGetAttachmentSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *attachmentServiceClient) UpdateAttachment(ctx context.Context, req *v1.UpdateAttachmentRequest) (*v1.Attachment, error) {
+	var res v1.Attachment
+	if err := c.client.CallUnary(ctx, attachmentServiceUpdateAttachmentSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *attachmentServiceClient) DeleteAttachment(ctx context.Context, req *v1.DeleteAttachmentRequest) (*emptypb.Empty, error) {
+	var res emptypb.Empty
+	if err := c.client.CallUnary(ctx, attachmentServiceDeleteAttachmentSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *attachmentServiceClient) BatchDeleteAttachments(ctx context.Context, req *v1.BatchDeleteAttachmentsRequest) (*emptypb.Empty, error) {
+	var res emptypb.Empty
+	if err := c.client.CallUnary(ctx, attachmentServiceBatchDeleteAttachmentsSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+type attachmentServiceHandler struct{ svc AttachmentServiceHandler }
+
+func (h attachmentServiceHandler) createAttachment(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.CreateAttachmentRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.CreateAttachment(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h attachmentServiceHandler) uploadAttachment(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.UploadAttachmentRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.UploadAttachment(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h attachmentServiceHandler) listAttachments(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.ListAttachmentsRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.ListAttachments(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h attachmentServiceHandler) getAttachment(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.GetAttachmentRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.GetAttachment(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h attachmentServiceHandler) updateAttachment(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.UpdateAttachmentRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.UpdateAttachment(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h attachmentServiceHandler) deleteAttachment(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.DeleteAttachmentRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.DeleteAttachment(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h attachmentServiceHandler) batchDeleteAttachments(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.BatchDeleteAttachmentsRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.BatchDeleteAttachments(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
 }

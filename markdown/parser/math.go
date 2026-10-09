@@ -10,7 +10,7 @@ import (
 	"github.com/yuin/goldmark/text"
 	"github.com/yuin/goldmark/util"
 
-	mast "github.com/usememos/memos/markdown/ast"
+	mast "github.com/incurl/riff/markdown/ast"
 )
 
 type inlineMathParser struct{}

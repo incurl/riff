@@ -19,6 +19,13 @@ import (
 // ErrInternalIP indicates that a link preview target resolves to a disallowed internal address.
 var ErrInternalIP = errors.New("internal IP addresses are not allowed")
 
+// ErrInvalidURL indicates the URL passed to Get is malformed in a
+// way validateURL can detect (parse failure, non-http(s) scheme,
+// or a leading colon / empty host that survive url.Parse). It is
+// returned before any network call, so consumers can map it to a
+// client-facing 4xx without paying the cost of a fetch.
+var ErrInvalidURL = errors.New("invalid URL")
+
 const (
 	defaultLinkPreviewUserAgent = "MemosBot/1.0 (+https://usememos.com)"
 
@@ -125,11 +132,11 @@ func isInternalIP(ip net.IP) bool {
 func validateURL(urlStr string) error {
 	u, err := url.Parse(urlStr)
 	if err != nil {
-		return errors.New("invalid URL format")
+		return errors.Wrap(ErrInvalidURL, "invalid URL format")
 	}
 
 	if u.Scheme != "http" && u.Scheme != "https" {
-		return errors.New("only http/https protocols are allowed")
+		return errors.Wrap(ErrInvalidURL, "only http/https protocols are allowed")
 	}
 
 	host := u.Hostname()
@@ -177,6 +184,15 @@ func NewHTMLMetaFetcher() *HTMLMetaFetcher {
 		now:       time.Now,
 		cache:     make(map[string]cacheEntry),
 	}
+}
+
+// WithTransport swaps the underlying http.RoundTripper. It is
+// intended for tests that want to inject an in-memory transport
+// without giving up the SSRF-safe defaults NewHTMLMetaFetcher
+// builds (dialer, timeouts, redirect policy).
+func (f *HTMLMetaFetcher) WithTransport(transport http.RoundTripper) *HTMLMetaFetcher {
+	f.client = &http.Client{Transport: transport}
+	return f
 }
 
 // Get fetches metadata for a URL.
@@ -363,7 +379,7 @@ func (f *HTMLMetaFetcher) setCached(key string, meta *HTMLMeta, err error, ttl t
 func normalizeURL(urlStr string) (string, error) {
 	parsed, err := url.Parse(strings.TrimSpace(urlStr))
 	if err != nil {
-		return "", errors.New("invalid URL format")
+		return "", errors.Wrap(ErrInvalidURL, "invalid URL format")
 	}
 	parsed.Scheme = strings.ToLower(parsed.Scheme)
 	parsed.Host = strings.ToLower(parsed.Host)

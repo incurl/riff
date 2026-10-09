@@ -3,7 +3,7 @@ package parser
 import (
 	"github.com/yuin/goldmark/util"
 
-	"github.com/usememos/memos/internal/identifier"
+	"github.com/incurl/riff/internal/identifier"
 )
 
 // MentionMatch is one username reference in an eligible literal-source run.

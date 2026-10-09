@@ -465,6 +465,28 @@ func TestHTMLMetaFetcherRejectsUnsafeURLsAndRedirects(t *testing.T) {
 	require.ErrorIs(t, err, ErrInternalIP)
 }
 
+func TestHTMLMetaFetcherRejectsInvalidURL(t *testing.T) {
+	fetcher := NewHTMLMetaFetcher()
+
+	tests := []struct {
+		name string
+		url  string
+	}{
+		{name: "non-http scheme", url: "file:///etc/passwd"},
+		{name: "ftp scheme", url: "ftp://example.com/file"},
+		{name: "javascript scheme", url: "javascript:alert(1)"},
+		{name: "data scheme", url: "data:text/html,foo"},
+		{name: "empty after trim", url: "   "},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := fetcher.Get(context.Background(), tc.url)
+			require.Error(t, err, "url %q must be rejected before any network call", tc.url)
+			require.ErrorIs(t, err, ErrInvalidURL, "url %q must surface ErrInvalidURL, got %v", tc.url, err)
+		})
+	}
+}
+
 func TestValidateURLCGNAT(t *testing.T) {
 	tests := []struct {
 		ip      string

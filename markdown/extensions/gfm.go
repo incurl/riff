@@ -13,8 +13,8 @@ import (
 	"github.com/yuin/goldmark/text"
 	"github.com/yuin/goldmark/util"
 
-	mast "github.com/usememos/memos/markdown/ast"
-	mparser "github.com/usememos/memos/markdown/parser"
+	mast "github.com/incurl/riff/markdown/ast"
+	mparser "github.com/incurl/riff/markdown/parser"
 )
 
 const gfmDomainPattern = `(?:[\p{L}\p{N}_-]+\.)*[\p{L}\p{N}-]+\.[\p{L}\p{N}-]+`

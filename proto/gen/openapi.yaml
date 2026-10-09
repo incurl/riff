@@ -3170,22 +3170,22 @@ components:
                     format: float
             description: |-
                 Represents a color in the RGBA color space. This representation is designed
-                 for simplicity of conversion to/from color representations in various
+                 for simplicity of conversion to and from color representations in various
                  languages over compactness. For example, the fields of this representation
                  can be trivially provided to the constructor of `java.awt.Color` in Java; it
                  can also be trivially provided to UIColor's `+colorWithRed:green:blue:alpha`
                  method in iOS; and, with just a little work, it can be easily formatted into
                  a CSS `rgba()` string in JavaScript.
 
-                 This reference page doesn't carry information about the absolute color
-                 space
-                 that should be used to interpret the RGB value (e.g. sRGB, Adobe RGB,
-                 DCI-P3, BT.2020, etc.). By default, applications should assume the sRGB color
+                 This reference page doesn't have information about the absolute color
+                 space that should be used to interpret the RGB value—for example, sRGB,
+                 Adobe RGB,
+                 DCI-P3, and BT.2020. By default, applications should assume the sRGB color
                  space.
 
-                 When color equality needs to be decided, implementations, unless
-                 documented otherwise, treat two colors as equal if all their red,
-                 green, blue, and alpha values each differ by at most 1e-5.
+                 When color equality needs to be decided, implementations, unless documented
+                 otherwise, treat two colors as equal if all their red, green, blue, and alpha
+                 values each differ by at most `1e-5`.
 
                  Example (Java):
 
@@ -4081,33 +4081,43 @@ components:
             properties:
                 localDateTime:
                     type: string
+                    description: Local date and time without a time zone, formatted as YYYY-MM-DDTHH:mm:ss[.fraction].
                 utcOffset:
                     type: string
+                    description: Optional. UTC offset formatted as Z or +/-HH:MM.
         MediaLocation:
             type: object
             properties:
                 latitude:
                     type: number
+                    description: Optional. WGS84 latitude in decimal degrees. Must be provided with longitude.
                     format: double
                 longitude:
                     type: number
+                    description: Optional. WGS84 longitude in decimal degrees. Must be provided with latitude.
                     format: double
                 altitudeMeters:
                     type: number
+                    description: Optional. Signed altitude in meters relative to sea level.
                     format: double
         MediaMetadata:
             type: object
             properties:
                 width:
                     type: integer
+                    description: Optional. Display-oriented width in pixels.
                     format: int32
                 height:
                     type: integer
+                    description: Optional. Display-oriented height in pixels.
                     format: int32
                 photo:
                     $ref: '#/components/schemas/PhotoMetadata'
                 video:
                     $ref: '#/components/schemas/VideoMetadata'
+            description: |-
+                MediaMetadata contains normalized metadata explicitly supplied by a client.
+                 The server validates and stores this data but does not extract it from the media file.
         Memo:
             required:
                 - state
@@ -4214,6 +4224,16 @@ components:
                     description: |-
                         Optional. The space in which this memo is placed. Format: spaces/{space}.
                          Every memo, including a comment, owns its placement independently.
+                payload:
+                    readOnly: true
+                    allOf:
+                        - $ref: '#/components/schemas/MemoPayload'
+                    description: |-
+                        Output only. The full memo payload envelope. Mirrors the
+                         `memos.payload` JSON column: server-computed property flags plus
+                         the empty `Location` shell a future geo migration will populate.
+                         Clients can keep reading the flat `property` and `location`
+                         fields for backwards compatibility; both surface the same data.
         MemoImportIssue:
             type: object
             properties:
@@ -4289,6 +4309,40 @@ components:
                         $ref: '#/components/schemas/MemoImportIssue'
                     description: One entry per failed memo, with the reason.
             description: MemoImportReport is the outcome of an import.
+        MemoPayload:
+            type: object
+            properties:
+                property:
+                    allOf:
+                        - $ref: '#/components/schemas/MemoPayload_Property'
+                    description: Computed markdown properties.
+                location:
+                    allOf:
+                        - $ref: '#/components/schemas/Location'
+                    description: |-
+                        Empty until a future geo feature lands; kept here so the column
+                         shape matches the upstream proto from day one.
+            description: |-
+                MemoPayload is the server-computed envelope stored in the
+                 `memos.payload` JSON column and re-exposed here for clients that
+                 prefer the upstream-shaped object over the flat `property` and
+                 `location` convenience fields. `tags` deliberately stays at the
+                 top level of `Memo` so the existing feed filter keeps working.
+        MemoPayload_Property:
+            type: object
+            properties:
+                hasLink:
+                    type: boolean
+                hasTaskList:
+                    type: boolean
+                hasCode:
+                    type: boolean
+                hasIncompleteTasks:
+                    type: boolean
+                title:
+                    type: string
+                    description: The title extracted from the first H1 heading, if present.
+            description: Computed properties of a memo, mirroring `Memo.Property`.
         MemoRelation:
             required:
                 - memo
@@ -4497,11 +4551,19 @@ components:
             type: object
             properties:
                 captureTime:
-                    $ref: '#/components/schemas/MediaCaptureTime'
+                    allOf:
+                        - $ref: '#/components/schemas/MediaCaptureTime'
+                    description: Optional. Capture time as recorded by the source media.
                 location:
-                    $ref: '#/components/schemas/MediaLocation'
+                    allOf:
+                        - $ref: '#/components/schemas/MediaLocation'
+                    description: Optional. Geographic location recorded by the source media.
                 sourceExifOrientation:
                     type: integer
+                    description: |-
+                        Optional. EXIF orientation value from 1 through 8 as recorded by the source file.
+                         This value is informational and must not be reapplied to the stored attachment;
+                         width and height already describe its display-oriented dimensions.
                     format: int32
                 cameraMake:
                     type: string

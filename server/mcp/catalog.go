@@ -53,6 +53,18 @@ var curatedOperationIDs = []string{
 	"SpaceService_DeleteSpaceInvitation",
 }
 
+// CuratedOperationIDs returns a copy of the curated OpenAPI
+// operation list the MCP server exposes as tools. It is exported
+// so external callers — primarily the registration wiring tests
+// under main_test.go — can build a spec that satisfies the
+// catalog without duplicating the list. The returned slice is a
+// fresh copy and may be mutated by the caller.
+func CuratedOperationIDs() []string {
+	out := make([]string, len(curatedOperationIDs))
+	copy(out, curatedOperationIDs)
+	return out
+}
+
 type registeredOperation struct {
 	ToolName    string
 	OperationID string

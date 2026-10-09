@@ -8,7 +8,7 @@ import (
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/text"
 
-	mast "github.com/usememos/memos/markdown/ast"
+	mast "github.com/incurl/riff/markdown/ast"
 )
 
 func TestReplaceMentionsInPaddedText(t *testing.T) {

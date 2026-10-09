@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/usememos/memos/internal/identifier"
+	"github.com/incurl/riff/internal/identifier"
 )
 
 func TestNewService(t *testing.T) {
@@ -1061,4 +1061,31 @@ func BenchmarkExtractProperties(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
+}
+
+// TestExtractAllCapturesLinkDestinations covers the new
+// `LinkDestinations` field on `ExtractedData`. The Phase 3
+// memo_links auto-fetch hook in pb/hooks/memo_links.go uses this
+// to drive linkmeta's per-URL fetches without re-walking the AST.
+//
+// Phase 3 covers only the explicit `[text](url)` `KindLink` node —
+// autolinks and GFM emails reconstruct their URL from the source
+// bytes, which the AST walker does not have. That is good enough
+// for the linkmeta use case (https(s) only) and is pinned in
+// the comment above the capture site.
+func TestExtractAllCapturesLinkDestinations(t *testing.T) {
+	svc := NewService()
+	data, err := svc.ExtractAll([]byte(strings.Join([]string{
+		"See [one](https://example.com/one) and [two](https://example.com/two).",
+		"Duplicate: [again](https://example.com/one) and [different text](https://example.com/two).",
+		"Image: ![pic](https://example.com/pic.png) — must NOT appear in LinkDestinations.",
+		"Autolink <https://example.com/auto> and email <foo@bar.com> are not captured.",
+		"Backtick `[not](https://example.com/in-code)` is not captured either.",
+	}, "\n")))
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{
+		"https://example.com/one",
+		"https://example.com/two",
+	}, data.LinkDestinations, "link destinations must be extracted and deduplicated")
+	assert.NotContains(t, data.LinkDestinations, "https://example.com/pic.png", "image destinations are not link destinations")
 }

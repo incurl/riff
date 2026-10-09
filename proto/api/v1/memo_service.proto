@@ -281,7 +281,38 @@ message Memo {
     (google.api.resource_reference) = {type: "memos.api.v1/Space"}
   ];
 
+  // Output only. The full memo payload envelope. Mirrors the
+  // `memos.payload` JSON column: server-computed property flags plus
+  // the empty `Location` shell a future geo migration will populate.
+  // Clients can keep reading the flat `property` and `location`
+  // fields for backwards compatibility; both surface the same data.
+  optional MemoPayload payload = 20 [(google.api.field_behavior) = OUTPUT_ONLY];
+
   // Computed properties of a memo.
+  message Property {
+    bool has_link = 1;
+    bool has_task_list = 2;
+    bool has_code = 3;
+    bool has_incomplete_tasks = 4;
+    // The title extracted from the first H1 heading, if present.
+    string title = 5;
+  }
+}
+
+// MemoPayload is the server-computed envelope stored in the
+// `memos.payload` JSON column and re-exposed here for clients that
+// prefer the upstream-shaped object over the flat `property` and
+// `location` convenience fields. `tags` deliberately stays at the
+// top level of `Memo` so the existing feed filter keeps working.
+message MemoPayload {
+  // Computed markdown properties.
+  Property property = 1;
+
+  // Empty until a future geo feature lands; kept here so the column
+  // shape matches the upstream proto from day one.
+  Location location = 2;
+
+  // Computed properties of a memo, mirroring `Memo.Property`.
   message Property {
     bool has_link = 1;
     bool has_task_list = 2;

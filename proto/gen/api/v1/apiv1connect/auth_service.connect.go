@@ -5,45 +5,65 @@
 package apiv1connect
 
 import (
-	connect "connectrpc.com/connect"
+	connect "connectrpc.com/connect/v2"
 	context "context"
-	errors "errors"
-	v1 "github.com/usememos/memos/proto/gen/api/v1"
+	v1 "github.com/incurl/riff/proto/gen/api/v1"
 	emptypb "google.golang.org/protobuf/types/known/emptypb"
-	http "net/http"
-	strings "strings"
+	sync "sync"
 )
-
-// This is a compile-time assertion to ensure that this generated file and the connect package are
-// compatible. If you get a compiler error that this constant is not defined, this code was
-// generated with a version of connect newer than the one compiled into your binary. You can fix the
-// problem by either regenerating this code with an older version of connect or updating the connect
-// version compiled into your binary.
-const _ = connect.IsAtLeastVersion1_13_0
 
 const (
 	// AuthServiceName is the fully-qualified name of the AuthService service.
 	AuthServiceName = "memos.api.v1.AuthService"
 )
 
-// These constants are the fully-qualified names of the RPCs defined in this package. They're
-// exposed at runtime as Spec.Procedure and as the final two segments of the HTTP route.
+// These constants are the procedure names of the RPCs defined in this package. They're exposed at
+// runtime as Spec.Procedure and as the final two segments of the HTTP route.
 //
 // Note that these are different from the fully-qualified method names used by
 // google.golang.org/protobuf/reflect/protoreflect. To convert from these constants to
 // reflection-formatted method names, remove the leading slash and convert the remaining slash to a
 // period.
 const (
-	// AuthServiceGetCurrentUserProcedure is the fully-qualified name of the AuthService's
-	// GetCurrentUser RPC.
+	// AuthServiceGetCurrentUserProcedure is the procedure name of the AuthService's GetCurrentUser RPC.
 	AuthServiceGetCurrentUserProcedure = "/memos.api.v1.AuthService/GetCurrentUser"
-	// AuthServiceSignInProcedure is the fully-qualified name of the AuthService's SignIn RPC.
+	// AuthServiceSignInProcedure is the procedure name of the AuthService's SignIn RPC.
 	AuthServiceSignInProcedure = "/memos.api.v1.AuthService/SignIn"
-	// AuthServiceSignOutProcedure is the fully-qualified name of the AuthService's SignOut RPC.
+	// AuthServiceSignOutProcedure is the procedure name of the AuthService's SignOut RPC.
 	AuthServiceSignOutProcedure = "/memos.api.v1.AuthService/SignOut"
-	// AuthServiceRefreshTokenProcedure is the fully-qualified name of the AuthService's RefreshToken
-	// RPC.
+	// AuthServiceRefreshTokenProcedure is the procedure name of the AuthService's RefreshToken RPC.
 	AuthServiceRefreshTokenProcedure = "/memos.api.v1.AuthService/RefreshToken"
+)
+
+var (
+	authServiceGetCurrentUserSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_api_v1_auth_service_proto.Services().ByName("AuthService").Methods().ByName("GetCurrentUser"),
+			Procedure:  AuthServiceGetCurrentUserProcedure,
+		}
+	})
+	authServiceSignInSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_api_v1_auth_service_proto.Services().ByName("AuthService").Methods().ByName("SignIn"),
+			Procedure:  AuthServiceSignInProcedure,
+		}
+	})
+	authServiceSignOutSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_api_v1_auth_service_proto.Services().ByName("AuthService").Methods().ByName("SignOut"),
+			Procedure:  AuthServiceSignOutProcedure,
+		}
+	})
+	authServiceRefreshTokenSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_api_v1_auth_service_proto.Services().ByName("AuthService").Methods().ByName("RefreshToken"),
+			Procedure:  AuthServiceRefreshTokenProcedure,
+		}
+	})
 )
 
 // AuthServiceClient is a client for the memos.api.v1.AuthService service.
@@ -51,84 +71,24 @@ type AuthServiceClient interface {
 	// GetCurrentUser returns the authenticated user's information.
 	// Validates the access token and returns user details.
 	// Similar to OIDC's /userinfo endpoint.
-	GetCurrentUser(context.Context, *connect.Request[v1.GetCurrentUserRequest]) (*connect.Response[v1.GetCurrentUserResponse], error)
+	GetCurrentUser(context.Context, *v1.GetCurrentUserRequest) (*v1.GetCurrentUserResponse, error)
 	// SignIn authenticates a user with credentials and returns tokens.
 	// On success, returns an access token and sets a refresh token cookie.
 	// Supports password-based and SSO authentication methods.
-	SignIn(context.Context, *connect.Request[v1.SignInRequest]) (*connect.Response[v1.SignInResponse], error)
+	SignIn(context.Context, *v1.SignInRequest) (*v1.SignInResponse, error)
 	// SignOut terminates the user's authentication.
 	// Revokes the refresh token and clears the authentication cookie.
-	SignOut(context.Context, *connect.Request[v1.SignOutRequest]) (*connect.Response[emptypb.Empty], error)
+	SignOut(context.Context, *v1.SignOutRequest) (*emptypb.Empty, error)
 	// RefreshToken exchanges a valid refresh token for a new access token.
 	// The refresh token is read from the HttpOnly cookie.
 	// Returns a new short-lived access token.
-	RefreshToken(context.Context, *connect.Request[v1.RefreshTokenRequest]) (*connect.Response[v1.RefreshTokenResponse], error)
+	RefreshToken(context.Context, *v1.RefreshTokenRequest) (*v1.RefreshTokenResponse, error)
 }
 
-// NewAuthServiceClient constructs a client for the memos.api.v1.AuthService service. By default, it
-// uses the Connect protocol with the binary Protobuf Codec, asks for gzipped responses, and sends
-// uncompressed requests. To use the gRPC or gRPC-Web protocols, supply the connect.WithGRPC() or
-// connect.WithGRPCWeb() options.
-//
-// The URL supplied here should be the base URL for the Connect or gRPC server (for example,
-// http://api.acme.com or https://acme.com/grpc).
-func NewAuthServiceClient(httpClient connect.HTTPClient, baseURL string, opts ...connect.ClientOption) AuthServiceClient {
-	baseURL = strings.TrimRight(baseURL, "/")
-	authServiceMethods := v1.File_api_v1_auth_service_proto.Services().ByName("AuthService").Methods()
-	return &authServiceClient{
-		getCurrentUser: connect.NewClient[v1.GetCurrentUserRequest, v1.GetCurrentUserResponse](
-			httpClient,
-			baseURL+AuthServiceGetCurrentUserProcedure,
-			connect.WithSchema(authServiceMethods.ByName("GetCurrentUser")),
-			connect.WithClientOptions(opts...),
-		),
-		signIn: connect.NewClient[v1.SignInRequest, v1.SignInResponse](
-			httpClient,
-			baseURL+AuthServiceSignInProcedure,
-			connect.WithSchema(authServiceMethods.ByName("SignIn")),
-			connect.WithClientOptions(opts...),
-		),
-		signOut: connect.NewClient[v1.SignOutRequest, emptypb.Empty](
-			httpClient,
-			baseURL+AuthServiceSignOutProcedure,
-			connect.WithSchema(authServiceMethods.ByName("SignOut")),
-			connect.WithClientOptions(opts...),
-		),
-		refreshToken: connect.NewClient[v1.RefreshTokenRequest, v1.RefreshTokenResponse](
-			httpClient,
-			baseURL+AuthServiceRefreshTokenProcedure,
-			connect.WithSchema(authServiceMethods.ByName("RefreshToken")),
-			connect.WithClientOptions(opts...),
-		),
-	}
-}
-
-// authServiceClient implements AuthServiceClient.
-type authServiceClient struct {
-	getCurrentUser *connect.Client[v1.GetCurrentUserRequest, v1.GetCurrentUserResponse]
-	signIn         *connect.Client[v1.SignInRequest, v1.SignInResponse]
-	signOut        *connect.Client[v1.SignOutRequest, emptypb.Empty]
-	refreshToken   *connect.Client[v1.RefreshTokenRequest, v1.RefreshTokenResponse]
-}
-
-// GetCurrentUser calls memos.api.v1.AuthService.GetCurrentUser.
-func (c *authServiceClient) GetCurrentUser(ctx context.Context, req *connect.Request[v1.GetCurrentUserRequest]) (*connect.Response[v1.GetCurrentUserResponse], error) {
-	return c.getCurrentUser.CallUnary(ctx, req)
-}
-
-// SignIn calls memos.api.v1.AuthService.SignIn.
-func (c *authServiceClient) SignIn(ctx context.Context, req *connect.Request[v1.SignInRequest]) (*connect.Response[v1.SignInResponse], error) {
-	return c.signIn.CallUnary(ctx, req)
-}
-
-// SignOut calls memos.api.v1.AuthService.SignOut.
-func (c *authServiceClient) SignOut(ctx context.Context, req *connect.Request[v1.SignOutRequest]) (*connect.Response[emptypb.Empty], error) {
-	return c.signOut.CallUnary(ctx, req)
-}
-
-// RefreshToken calls memos.api.v1.AuthService.RefreshToken.
-func (c *authServiceClient) RefreshToken(ctx context.Context, req *connect.Request[v1.RefreshTokenRequest]) (*connect.Response[v1.RefreshTokenResponse], error) {
-	return c.refreshToken.CallUnary(ctx, req)
+// NewAuthServiceClient constructs a client for the memos.api.v1.AuthService service. Multiple
+// service clients may share a single connect.Client.
+func NewAuthServiceClient(client *connect.Client) AuthServiceClient {
+	return &authServiceClient{client: client}
 }
 
 // AuthServiceHandler is an implementation of the memos.api.v1.AuthService service.
@@ -136,82 +96,133 @@ type AuthServiceHandler interface {
 	// GetCurrentUser returns the authenticated user's information.
 	// Validates the access token and returns user details.
 	// Similar to OIDC's /userinfo endpoint.
-	GetCurrentUser(context.Context, *connect.Request[v1.GetCurrentUserRequest]) (*connect.Response[v1.GetCurrentUserResponse], error)
+	GetCurrentUser(context.Context, *v1.GetCurrentUserRequest) (*v1.GetCurrentUserResponse, error)
 	// SignIn authenticates a user with credentials and returns tokens.
 	// On success, returns an access token and sets a refresh token cookie.
 	// Supports password-based and SSO authentication methods.
-	SignIn(context.Context, *connect.Request[v1.SignInRequest]) (*connect.Response[v1.SignInResponse], error)
+	SignIn(context.Context, *v1.SignInRequest) (*v1.SignInResponse, error)
 	// SignOut terminates the user's authentication.
 	// Revokes the refresh token and clears the authentication cookie.
-	SignOut(context.Context, *connect.Request[v1.SignOutRequest]) (*connect.Response[emptypb.Empty], error)
+	SignOut(context.Context, *v1.SignOutRequest) (*emptypb.Empty, error)
 	// RefreshToken exchanges a valid refresh token for a new access token.
 	// The refresh token is read from the HttpOnly cookie.
 	// Returns a new short-lived access token.
-	RefreshToken(context.Context, *connect.Request[v1.RefreshTokenRequest]) (*connect.Response[v1.RefreshTokenResponse], error)
+	RefreshToken(context.Context, *v1.RefreshTokenRequest) (*v1.RefreshTokenResponse, error)
 }
 
-// NewAuthServiceHandler builds an HTTP handler from the service implementation. It returns the path
-// on which to mount the handler and the handler itself.
-//
-// By default, handlers support the Connect, gRPC, and gRPC-Web protocols with the binary Protobuf
-// and JSON codecs. They also support gzip compression.
-func NewAuthServiceHandler(svc AuthServiceHandler, opts ...connect.HandlerOption) (string, http.Handler) {
-	authServiceMethods := v1.File_api_v1_auth_service_proto.Services().ByName("AuthService").Methods()
-	authServiceGetCurrentUserHandler := connect.NewUnaryHandler(
-		AuthServiceGetCurrentUserProcedure,
-		svc.GetCurrentUser,
-		connect.WithSchema(authServiceMethods.ByName("GetCurrentUser")),
-		connect.WithHandlerOptions(opts...),
+// RegisterAuthServiceHandler registers svc as the memos.api.v1.AuthService implementation on
+// server.
+func RegisterAuthServiceHandler(server *connect.Server, svc AuthServiceHandler) {
+	adapter := authServiceHandler{svc: svc}
+	server.Register(
+		connect.Method{Spec: authServiceGetCurrentUserSpec(), Handler: adapter.getCurrentUser},
+		connect.Method{Spec: authServiceSignInSpec(), Handler: adapter.signIn},
+		connect.Method{Spec: authServiceSignOutSpec(), Handler: adapter.signOut},
+		connect.Method{Spec: authServiceRefreshTokenSpec(), Handler: adapter.refreshToken},
 	)
-	authServiceSignInHandler := connect.NewUnaryHandler(
-		AuthServiceSignInProcedure,
-		svc.SignIn,
-		connect.WithSchema(authServiceMethods.ByName("SignIn")),
-		connect.WithHandlerOptions(opts...),
-	)
-	authServiceSignOutHandler := connect.NewUnaryHandler(
-		AuthServiceSignOutProcedure,
-		svc.SignOut,
-		connect.WithSchema(authServiceMethods.ByName("SignOut")),
-		connect.WithHandlerOptions(opts...),
-	)
-	authServiceRefreshTokenHandler := connect.NewUnaryHandler(
-		AuthServiceRefreshTokenProcedure,
-		svc.RefreshToken,
-		connect.WithSchema(authServiceMethods.ByName("RefreshToken")),
-		connect.WithHandlerOptions(opts...),
-	)
-	return "/memos.api.v1.AuthService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case AuthServiceGetCurrentUserProcedure:
-			authServiceGetCurrentUserHandler.ServeHTTP(w, r)
-		case AuthServiceSignInProcedure:
-			authServiceSignInHandler.ServeHTTP(w, r)
-		case AuthServiceSignOutProcedure:
-			authServiceSignOutHandler.ServeHTTP(w, r)
-		case AuthServiceRefreshTokenProcedure:
-			authServiceRefreshTokenHandler.ServeHTTP(w, r)
-		default:
-			http.NotFound(w, r)
-		}
-	})
 }
 
 // UnimplementedAuthServiceHandler returns CodeUnimplemented from all methods.
 type UnimplementedAuthServiceHandler struct{}
 
-func (UnimplementedAuthServiceHandler) GetCurrentUser(context.Context, *connect.Request[v1.GetCurrentUserRequest]) (*connect.Response[v1.GetCurrentUserResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("memos.api.v1.AuthService.GetCurrentUser is not implemented"))
+func (UnimplementedAuthServiceHandler) GetCurrentUser(context.Context, *v1.GetCurrentUserRequest) (*v1.GetCurrentUserResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "memos.api.v1.AuthService.GetCurrentUser is not implemented")
 }
 
-func (UnimplementedAuthServiceHandler) SignIn(context.Context, *connect.Request[v1.SignInRequest]) (*connect.Response[v1.SignInResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("memos.api.v1.AuthService.SignIn is not implemented"))
+func (UnimplementedAuthServiceHandler) SignIn(context.Context, *v1.SignInRequest) (*v1.SignInResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "memos.api.v1.AuthService.SignIn is not implemented")
 }
 
-func (UnimplementedAuthServiceHandler) SignOut(context.Context, *connect.Request[v1.SignOutRequest]) (*connect.Response[emptypb.Empty], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("memos.api.v1.AuthService.SignOut is not implemented"))
+func (UnimplementedAuthServiceHandler) SignOut(context.Context, *v1.SignOutRequest) (*emptypb.Empty, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "memos.api.v1.AuthService.SignOut is not implemented")
 }
 
-func (UnimplementedAuthServiceHandler) RefreshToken(context.Context, *connect.Request[v1.RefreshTokenRequest]) (*connect.Response[v1.RefreshTokenResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("memos.api.v1.AuthService.RefreshToken is not implemented"))
+func (UnimplementedAuthServiceHandler) RefreshToken(context.Context, *v1.RefreshTokenRequest) (*v1.RefreshTokenResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "memos.api.v1.AuthService.RefreshToken is not implemented")
+}
+
+type authServiceClient struct {
+	client *connect.Client
+}
+
+func (c *authServiceClient) GetCurrentUser(ctx context.Context, req *v1.GetCurrentUserRequest) (*v1.GetCurrentUserResponse, error) {
+	var res v1.GetCurrentUserResponse
+	if err := c.client.CallUnary(ctx, authServiceGetCurrentUserSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *authServiceClient) SignIn(ctx context.Context, req *v1.SignInRequest) (*v1.SignInResponse, error) {
+	var res v1.SignInResponse
+	if err := c.client.CallUnary(ctx, authServiceSignInSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *authServiceClient) SignOut(ctx context.Context, req *v1.SignOutRequest) (*emptypb.Empty, error) {
+	var res emptypb.Empty
+	if err := c.client.CallUnary(ctx, authServiceSignOutSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *authServiceClient) RefreshToken(ctx context.Context, req *v1.RefreshTokenRequest) (*v1.RefreshTokenResponse, error) {
+	var res v1.RefreshTokenResponse
+	if err := c.client.CallUnary(ctx, authServiceRefreshTokenSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+type authServiceHandler struct{ svc AuthServiceHandler }
+
+func (h authServiceHandler) getCurrentUser(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.GetCurrentUserRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.GetCurrentUser(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h authServiceHandler) signIn(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.SignInRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.SignIn(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h authServiceHandler) signOut(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.SignOutRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.SignOut(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h authServiceHandler) refreshToken(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.RefreshTokenRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.RefreshToken(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
 }

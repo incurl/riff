@@ -1,3 +1,10 @@
+// adapter.go is a port of github.com/usememos/memos/server/mcp/adapter.go
+// with import paths rewritten. The single behavioral change is the dispatch
+// type: upstream holds *echo.Echo and calls echoServer.ServeHTTP, riff holds
+// http.Handler and calls the same ServeHTTP method. This lets the MCP server
+// dispatch tool calls into any HTTP handler riff exposes, without requiring
+// riff to import or instantiate labstack/echo/v5 just for this one call site.
+
 package mcp
 
 import (
@@ -12,18 +19,17 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/labstack/echo/v5"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/pkg/errors"
 
-	"github.com/usememos/memos/internal/clientip"
+	"github.com/incurl/riff/internal/clientip"
 )
 
 type apiAdapter struct {
-	echoServer *echo.Echo
+	echoServer http.Handler
 }
 
-func newAPIAdapter(echoServer *echo.Echo) *apiAdapter {
+func newAPIAdapter(echoServer http.Handler) *apiAdapter {
 	return &apiAdapter{echoServer: echoServer}
 }
 

@@ -105,6 +105,11 @@ Black-box service tests live in `server/api/v1/test/`, unit tests next to the co
 | Frontend production output | Vite config or release-sensitive UI | `cd web && pnpm build` or `pnpm release` |
 | Proto API | `.proto` source plus generated outputs | `cd proto && buf generate && buf lint` |
 | Public unauthenticated route | `server/api/v1/acl_config.go` | Targeted server test or manual route check |
+| Rate limit middleware on a route | `pb/connect/ratelimit.go` (`RateLimit`) plus `Route.BindFunc` at the call site | `go test -v -run TestRateLimit ./pb/connect/...` |
+| Link preview metadata RPC | `pb/connect/link_meta.go` (`GetLinkMetadata` / `BatchGetLinkMetadata`); the library lives in `internal/linkmeta`. New sentinels (`ErrInvalidURL`) belong in the library, not the handler. | `go test -v -run 'TestGetLinkMetadata\|TestBatchGetLinkMetadata' ./pb/connect/...` and `go test -race ./internal/linkmeta/...` |
+| `Memo.Payload` proto field | `proto/api/v1/memo_service.proto` (`MemoPayload` + `payload` on `Memo`); the API translator that fills it from the `memos.payload` JSON column lives in `pb/connect/memos_translate.go`. | `go test -v -run 'TestMemoPayloadFromRecord\|TestRecordToMemo_PopulatesPayload' ./pb/connect/...`; regen with `cd proto && buf generate`. |
+| Link preview auto-fetch on memo save | `pb/hooks/memo_links.go` (the after-save hook) plus `pb/migrations/1740000000_create_memo_links.go` (the `memo_links` collection). URL extraction is `markdown.ExtractedData.LinkDestinations` populated by `markdown.Service.ExtractAll` from `gast.Link` nodes. | `go test -v -run 'TestNormaliseLinkURL\|TestTruncate\|TestTruncateErr' ./pb/hooks/...`; `go test -v -run TestExtractAllCapturesLinkDestinations ./markdown/...`. |
+| `buf generate` OpenAPI output | `proto/buf.gen.yaml` includes `buf.build/community/google-gnostic-openapi`. The MCP service reads `proto/gen/openapi.yaml` at startup. | `cd proto && buf generate && buf lint` — confirm `proto/gen/openapi.yaml` is regenerated. |
 
 ## Go Conventions
 

@@ -1,0 +1,27 @@
+openapi: 3.0.0
+info:
+  title: riff MCP test fixture
+  version: "0.0.0"
+paths:
+  /api/v1/memos/{memo}/reactions/{reaction}:
+    delete:
+      operationId: MemoService_DeleteMemoReaction
+      description: Test fixture for canonical reaction name binding.
+      parameters:
+        - name: memo
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: reaction
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object

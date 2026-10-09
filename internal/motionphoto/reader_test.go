@@ -6,7 +6,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/usememos/memos/internal/testutil"
+	"github.com/incurl/riff/internal/testutil"
 )
 
 func TestDetectJPEGReader(t *testing.T) {

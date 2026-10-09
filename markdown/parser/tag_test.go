@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	mast "github.com/usememos/memos/markdown/ast"
+	mast "github.com/incurl/riff/markdown/ast"
 )
 
 func TestFindTagMatches(t *testing.T) {

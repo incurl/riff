@@ -14,12 +14,29 @@ import (
 	"github.com/yuin/goldmark/parser"
 	"github.com/yuin/goldmark/text"
 
-	"github.com/usememos/memos/internal/identifier"
-	mast "github.com/usememos/memos/markdown/ast"
-	"github.com/usememos/memos/markdown/extensions"
-	"github.com/usememos/memos/markdown/renderer"
-	storepb "github.com/usememos/memos/proto/gen/store"
+	"github.com/incurl/riff/internal/identifier"
+	mast "github.com/incurl/riff/markdown/ast"
+	"github.com/incurl/riff/markdown/extensions"
+	"github.com/incurl/riff/markdown/renderer"
 )
+
+// Property is the riff-local equivalent of upstream's
+// proto/gen/store MemoPayload_Property. We mirror its exact shape so
+// future hooks (search filters, snippet rendering, attachment
+// validation) can build on it without taking a proto dependency.
+//
+// Title is the plain-text content of the document's first H1, if any.
+// HasLink is true if the memo contains any link, autolink, or GFM email.
+// HasCode is true if any code block or inline code span is present.
+// HasTaskList is true if any GFM task-list marker is present.
+// HasIncompleteTasks is true if at least one task is unchecked.
+type Property struct {
+	Title              string
+	HasLink            bool
+	HasCode            bool
+	HasTaskList        bool
+	HasIncompleteTasks bool
+}
 
 // ManagedAttachmentReference is an attachment URL embedded using Markdown image syntax.
 type ManagedAttachmentReference struct {
@@ -30,10 +47,11 @@ type ManagedAttachmentReference struct {
 type ExtractedData struct {
 	Tags                               []string
 	Mentions                           []string
+	LinkDestinations                   []string
 	ImageDestinations                  []string
 	ManagedAttachmentReferences        []ManagedAttachmentReference
 	InvalidManagedAttachmentReferences []string
-	Property                           *storepb.MemoPayload_Property
+	Property                           *Property
 }
 
 // Service handles markdown metadata extraction.
@@ -46,7 +64,7 @@ type Service interface {
 	ExtractTags(content []byte) ([]string, error)
 
 	// ExtractProperties computes boolean properties
-	ExtractProperties(content []byte) (*storepb.MemoPayload_Property, error)
+	ExtractProperties(content []byte) (*Property, error)
 
 	// RenderMarkdown renders goldmark AST back to markdown text
 	RenderMarkdown(content []byte) (string, error)
@@ -221,13 +239,13 @@ func extractTextFromNode(n gast.Node, source []byte, buf *strings.Builder) {
 }
 
 // ExtractProperties computes boolean properties about the content.
-func (s *service) ExtractProperties(content []byte) (*storepb.MemoPayload_Property, error) {
+func (s *service) ExtractProperties(content []byte) (*Property, error) {
 	root, err := s.parse(content)
 	if err != nil {
 		return nil, err
 	}
 
-	prop := &storepb.MemoPayload_Property{}
+	prop := &Property{}
 	firstBlockChecked := false
 
 	err = gast.Walk(root, func(n gast.Node, entering bool) (gast.WalkStatus, error) {
@@ -395,9 +413,10 @@ func (s *service) ExtractAll(content []byte) (*ExtractedData, error) {
 	data := &ExtractedData{
 		Tags:                        []string{},
 		Mentions:                    []string{},
+		LinkDestinations:            []string{},
 		ImageDestinations:           []string{},
 		ManagedAttachmentReferences: []ManagedAttachmentReference{},
-		Property:                    &storepb.MemoPayload_Property{},
+		Property:                    &Property{},
 	}
 
 	firstBlockChecked := false
@@ -444,6 +463,23 @@ func (s *service) ExtractAll(content []byte) (*ExtractedData, error) {
 		switch n.Kind() {
 		case gast.KindLink, gast.KindAutoLink, mast.KindGFMEmail:
 			data.Property.HasLink = true
+			// Capture the link URL so callers (the memo_links
+			// auto-fetch hook in pb/hooks/memo_links.go, in
+			// particular) can decide which URLs to fetch
+			// without re-walking the AST.
+			//
+			// Only the explicit `gast.Link` node carries a
+			// `.Destination` byte slice; autolinks and GFM
+			// email nodes reconstruct their URL from the
+			// source bytes, which the AST walker does not
+			// have. Markdown link destinations are the
+			// common case for linkmeta's fetch target, so
+			// covering `KindLink` is enough for Phase 3.
+			if link, ok := n.(*gast.Link); ok {
+				if dst := string(link.Destination); dst != "" {
+					data.LinkDestinations = append(data.LinkDestinations, dst)
+				}
+			}
 
 		case gast.KindCodeBlock, gast.KindFencedCodeBlock, gast.KindCodeSpan:
 			data.Property.HasCode = true
@@ -469,6 +505,7 @@ func (s *service) ExtractAll(content []byte) (*ExtractedData, error) {
 	// Deduplicate tags while preserving original case
 	data.Tags = uniquePreserveCase(data.Tags)
 	data.Mentions = uniquePreserveCase(data.Mentions)
+	data.LinkDestinations = uniquePreserveCase(data.LinkDestinations)
 	data.ManagedAttachmentReferences = uniqueManagedAttachmentReferences(data.ManagedAttachmentReferences)
 	data.InvalidManagedAttachmentReferences = uniquePreserveCase(data.InvalidManagedAttachmentReferences)
 

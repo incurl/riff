@@ -5,263 +5,292 @@
 package apiv1connect
 
 import (
-	connect "connectrpc.com/connect"
+	connect "connectrpc.com/connect/v2"
 	context "context"
-	errors "errors"
-	v1 "github.com/usememos/memos/proto/gen/api/v1"
+	v1 "github.com/incurl/riff/proto/gen/api/v1"
 	emptypb "google.golang.org/protobuf/types/known/emptypb"
-	http "net/http"
-	strings "strings"
+	sync "sync"
 )
-
-// This is a compile-time assertion to ensure that this generated file and the connect package are
-// compatible. If you get a compiler error that this constant is not defined, this code was
-// generated with a version of connect newer than the one compiled into your binary. You can fix the
-// problem by either regenerating this code with an older version of connect or updating the connect
-// version compiled into your binary.
-const _ = connect.IsAtLeastVersion1_13_0
 
 const (
 	// InstanceServiceName is the fully-qualified name of the InstanceService service.
 	InstanceServiceName = "memos.api.v1.InstanceService"
 )
 
-// These constants are the fully-qualified names of the RPCs defined in this package. They're
-// exposed at runtime as Spec.Procedure and as the final two segments of the HTTP route.
+// These constants are the procedure names of the RPCs defined in this package. They're exposed at
+// runtime as Spec.Procedure and as the final two segments of the HTTP route.
 //
 // Note that these are different from the fully-qualified method names used by
 // google.golang.org/protobuf/reflect/protoreflect. To convert from these constants to
 // reflection-formatted method names, remove the leading slash and convert the remaining slash to a
 // period.
 const (
-	// InstanceServiceGetInstanceProfileProcedure is the fully-qualified name of the InstanceService's
+	// InstanceServiceGetInstanceProfileProcedure is the procedure name of the InstanceService's
 	// GetInstanceProfile RPC.
 	InstanceServiceGetInstanceProfileProcedure = "/memos.api.v1.InstanceService/GetInstanceProfile"
-	// InstanceServiceGetInstanceSettingProcedure is the fully-qualified name of the InstanceService's
+	// InstanceServiceGetInstanceSettingProcedure is the procedure name of the InstanceService's
 	// GetInstanceSetting RPC.
 	InstanceServiceGetInstanceSettingProcedure = "/memos.api.v1.InstanceService/GetInstanceSetting"
-	// InstanceServiceBatchGetInstanceSettingsProcedure is the fully-qualified name of the
-	// InstanceService's BatchGetInstanceSettings RPC.
+	// InstanceServiceBatchGetInstanceSettingsProcedure is the procedure name of the InstanceService's
+	// BatchGetInstanceSettings RPC.
 	InstanceServiceBatchGetInstanceSettingsProcedure = "/memos.api.v1.InstanceService/BatchGetInstanceSettings"
-	// InstanceServiceUpdateInstanceSettingProcedure is the fully-qualified name of the
-	// InstanceService's UpdateInstanceSetting RPC.
+	// InstanceServiceUpdateInstanceSettingProcedure is the procedure name of the InstanceService's
+	// UpdateInstanceSetting RPC.
 	InstanceServiceUpdateInstanceSettingProcedure = "/memos.api.v1.InstanceService/UpdateInstanceSetting"
-	// InstanceServiceTestInstanceEmailSettingProcedure is the fully-qualified name of the
-	// InstanceService's TestInstanceEmailSetting RPC.
+	// InstanceServiceTestInstanceEmailSettingProcedure is the procedure name of the InstanceService's
+	// TestInstanceEmailSetting RPC.
 	InstanceServiceTestInstanceEmailSettingProcedure = "/memos.api.v1.InstanceService/TestInstanceEmailSetting"
-	// InstanceServiceGetInstanceStatsProcedure is the fully-qualified name of the InstanceService's
+	// InstanceServiceGetInstanceStatsProcedure is the procedure name of the InstanceService's
 	// GetInstanceStats RPC.
 	InstanceServiceGetInstanceStatsProcedure = "/memos.api.v1.InstanceService/GetInstanceStats"
+)
+
+var (
+	instanceServiceGetInstanceProfileSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_api_v1_instance_service_proto.Services().ByName("InstanceService").Methods().ByName("GetInstanceProfile"),
+			Procedure:  InstanceServiceGetInstanceProfileProcedure,
+		}
+	})
+	instanceServiceGetInstanceSettingSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_api_v1_instance_service_proto.Services().ByName("InstanceService").Methods().ByName("GetInstanceSetting"),
+			Procedure:  InstanceServiceGetInstanceSettingProcedure,
+		}
+	})
+	instanceServiceBatchGetInstanceSettingsSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_api_v1_instance_service_proto.Services().ByName("InstanceService").Methods().ByName("BatchGetInstanceSettings"),
+			Procedure:  InstanceServiceBatchGetInstanceSettingsProcedure,
+		}
+	})
+	instanceServiceUpdateInstanceSettingSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_api_v1_instance_service_proto.Services().ByName("InstanceService").Methods().ByName("UpdateInstanceSetting"),
+			Procedure:  InstanceServiceUpdateInstanceSettingProcedure,
+		}
+	})
+	instanceServiceTestInstanceEmailSettingSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_api_v1_instance_service_proto.Services().ByName("InstanceService").Methods().ByName("TestInstanceEmailSetting"),
+			Procedure:  InstanceServiceTestInstanceEmailSettingProcedure,
+		}
+	})
+	instanceServiceGetInstanceStatsSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_api_v1_instance_service_proto.Services().ByName("InstanceService").Methods().ByName("GetInstanceStats"),
+			Procedure:  InstanceServiceGetInstanceStatsProcedure,
+		}
+	})
 )
 
 // InstanceServiceClient is a client for the memos.api.v1.InstanceService service.
 type InstanceServiceClient interface {
 	// Gets the instance profile.
-	GetInstanceProfile(context.Context, *connect.Request[v1.GetInstanceProfileRequest]) (*connect.Response[v1.InstanceProfile], error)
+	GetInstanceProfile(context.Context, *v1.GetInstanceProfileRequest) (*v1.InstanceProfile, error)
 	// Gets an instance setting.
-	GetInstanceSetting(context.Context, *connect.Request[v1.GetInstanceSettingRequest]) (*connect.Response[v1.InstanceSetting], error)
+	GetInstanceSetting(context.Context, *v1.GetInstanceSettingRequest) (*v1.InstanceSetting, error)
 	// Batch gets instance settings.
-	BatchGetInstanceSettings(context.Context, *connect.Request[v1.BatchGetInstanceSettingsRequest]) (*connect.Response[v1.BatchGetInstanceSettingsResponse], error)
+	BatchGetInstanceSettings(context.Context, *v1.BatchGetInstanceSettingsRequest) (*v1.BatchGetInstanceSettingsResponse, error)
 	// Updates an instance setting.
-	UpdateInstanceSetting(context.Context, *connect.Request[v1.UpdateInstanceSettingRequest]) (*connect.Response[v1.InstanceSetting], error)
+	UpdateInstanceSetting(context.Context, *v1.UpdateInstanceSettingRequest) (*v1.InstanceSetting, error)
 	// Tests notification email delivery with the provided or stored SMTP settings.
-	TestInstanceEmailSetting(context.Context, *connect.Request[v1.TestInstanceEmailSettingRequest]) (*connect.Response[emptypb.Empty], error)
+	TestInstanceEmailSetting(context.Context, *v1.TestInstanceEmailSettingRequest) (*emptypb.Empty, error)
 	// GetInstanceStats returns resource usage statistics for the instance. Admin only.
-	GetInstanceStats(context.Context, *connect.Request[v1.GetInstanceStatsRequest]) (*connect.Response[v1.InstanceStats], error)
+	GetInstanceStats(context.Context, *v1.GetInstanceStatsRequest) (*v1.InstanceStats, error)
 }
 
-// NewInstanceServiceClient constructs a client for the memos.api.v1.InstanceService service. By
-// default, it uses the Connect protocol with the binary Protobuf Codec, asks for gzipped responses,
-// and sends uncompressed requests. To use the gRPC or gRPC-Web protocols, supply the
-// connect.WithGRPC() or connect.WithGRPCWeb() options.
-//
-// The URL supplied here should be the base URL for the Connect or gRPC server (for example,
-// http://api.acme.com or https://acme.com/grpc).
-func NewInstanceServiceClient(httpClient connect.HTTPClient, baseURL string, opts ...connect.ClientOption) InstanceServiceClient {
-	baseURL = strings.TrimRight(baseURL, "/")
-	instanceServiceMethods := v1.File_api_v1_instance_service_proto.Services().ByName("InstanceService").Methods()
-	return &instanceServiceClient{
-		getInstanceProfile: connect.NewClient[v1.GetInstanceProfileRequest, v1.InstanceProfile](
-			httpClient,
-			baseURL+InstanceServiceGetInstanceProfileProcedure,
-			connect.WithSchema(instanceServiceMethods.ByName("GetInstanceProfile")),
-			connect.WithClientOptions(opts...),
-		),
-		getInstanceSetting: connect.NewClient[v1.GetInstanceSettingRequest, v1.InstanceSetting](
-			httpClient,
-			baseURL+InstanceServiceGetInstanceSettingProcedure,
-			connect.WithSchema(instanceServiceMethods.ByName("GetInstanceSetting")),
-			connect.WithClientOptions(opts...),
-		),
-		batchGetInstanceSettings: connect.NewClient[v1.BatchGetInstanceSettingsRequest, v1.BatchGetInstanceSettingsResponse](
-			httpClient,
-			baseURL+InstanceServiceBatchGetInstanceSettingsProcedure,
-			connect.WithSchema(instanceServiceMethods.ByName("BatchGetInstanceSettings")),
-			connect.WithClientOptions(opts...),
-		),
-		updateInstanceSetting: connect.NewClient[v1.UpdateInstanceSettingRequest, v1.InstanceSetting](
-			httpClient,
-			baseURL+InstanceServiceUpdateInstanceSettingProcedure,
-			connect.WithSchema(instanceServiceMethods.ByName("UpdateInstanceSetting")),
-			connect.WithClientOptions(opts...),
-		),
-		testInstanceEmailSetting: connect.NewClient[v1.TestInstanceEmailSettingRequest, emptypb.Empty](
-			httpClient,
-			baseURL+InstanceServiceTestInstanceEmailSettingProcedure,
-			connect.WithSchema(instanceServiceMethods.ByName("TestInstanceEmailSetting")),
-			connect.WithClientOptions(opts...),
-		),
-		getInstanceStats: connect.NewClient[v1.GetInstanceStatsRequest, v1.InstanceStats](
-			httpClient,
-			baseURL+InstanceServiceGetInstanceStatsProcedure,
-			connect.WithSchema(instanceServiceMethods.ByName("GetInstanceStats")),
-			connect.WithClientOptions(opts...),
-		),
-	}
-}
-
-// instanceServiceClient implements InstanceServiceClient.
-type instanceServiceClient struct {
-	getInstanceProfile       *connect.Client[v1.GetInstanceProfileRequest, v1.InstanceProfile]
-	getInstanceSetting       *connect.Client[v1.GetInstanceSettingRequest, v1.InstanceSetting]
-	batchGetInstanceSettings *connect.Client[v1.BatchGetInstanceSettingsRequest, v1.BatchGetInstanceSettingsResponse]
-	updateInstanceSetting    *connect.Client[v1.UpdateInstanceSettingRequest, v1.InstanceSetting]
-	testInstanceEmailSetting *connect.Client[v1.TestInstanceEmailSettingRequest, emptypb.Empty]
-	getInstanceStats         *connect.Client[v1.GetInstanceStatsRequest, v1.InstanceStats]
-}
-
-// GetInstanceProfile calls memos.api.v1.InstanceService.GetInstanceProfile.
-func (c *instanceServiceClient) GetInstanceProfile(ctx context.Context, req *connect.Request[v1.GetInstanceProfileRequest]) (*connect.Response[v1.InstanceProfile], error) {
-	return c.getInstanceProfile.CallUnary(ctx, req)
-}
-
-// GetInstanceSetting calls memos.api.v1.InstanceService.GetInstanceSetting.
-func (c *instanceServiceClient) GetInstanceSetting(ctx context.Context, req *connect.Request[v1.GetInstanceSettingRequest]) (*connect.Response[v1.InstanceSetting], error) {
-	return c.getInstanceSetting.CallUnary(ctx, req)
-}
-
-// BatchGetInstanceSettings calls memos.api.v1.InstanceService.BatchGetInstanceSettings.
-func (c *instanceServiceClient) BatchGetInstanceSettings(ctx context.Context, req *connect.Request[v1.BatchGetInstanceSettingsRequest]) (*connect.Response[v1.BatchGetInstanceSettingsResponse], error) {
-	return c.batchGetInstanceSettings.CallUnary(ctx, req)
-}
-
-// UpdateInstanceSetting calls memos.api.v1.InstanceService.UpdateInstanceSetting.
-func (c *instanceServiceClient) UpdateInstanceSetting(ctx context.Context, req *connect.Request[v1.UpdateInstanceSettingRequest]) (*connect.Response[v1.InstanceSetting], error) {
-	return c.updateInstanceSetting.CallUnary(ctx, req)
-}
-
-// TestInstanceEmailSetting calls memos.api.v1.InstanceService.TestInstanceEmailSetting.
-func (c *instanceServiceClient) TestInstanceEmailSetting(ctx context.Context, req *connect.Request[v1.TestInstanceEmailSettingRequest]) (*connect.Response[emptypb.Empty], error) {
-	return c.testInstanceEmailSetting.CallUnary(ctx, req)
-}
-
-// GetInstanceStats calls memos.api.v1.InstanceService.GetInstanceStats.
-func (c *instanceServiceClient) GetInstanceStats(ctx context.Context, req *connect.Request[v1.GetInstanceStatsRequest]) (*connect.Response[v1.InstanceStats], error) {
-	return c.getInstanceStats.CallUnary(ctx, req)
+// NewInstanceServiceClient constructs a client for the memos.api.v1.InstanceService service.
+// Multiple service clients may share a single connect.Client.
+func NewInstanceServiceClient(client *connect.Client) InstanceServiceClient {
+	return &instanceServiceClient{client: client}
 }
 
 // InstanceServiceHandler is an implementation of the memos.api.v1.InstanceService service.
 type InstanceServiceHandler interface {
 	// Gets the instance profile.
-	GetInstanceProfile(context.Context, *connect.Request[v1.GetInstanceProfileRequest]) (*connect.Response[v1.InstanceProfile], error)
+	GetInstanceProfile(context.Context, *v1.GetInstanceProfileRequest) (*v1.InstanceProfile, error)
 	// Gets an instance setting.
-	GetInstanceSetting(context.Context, *connect.Request[v1.GetInstanceSettingRequest]) (*connect.Response[v1.InstanceSetting], error)
+	GetInstanceSetting(context.Context, *v1.GetInstanceSettingRequest) (*v1.InstanceSetting, error)
 	// Batch gets instance settings.
-	BatchGetInstanceSettings(context.Context, *connect.Request[v1.BatchGetInstanceSettingsRequest]) (*connect.Response[v1.BatchGetInstanceSettingsResponse], error)
+	BatchGetInstanceSettings(context.Context, *v1.BatchGetInstanceSettingsRequest) (*v1.BatchGetInstanceSettingsResponse, error)
 	// Updates an instance setting.
-	UpdateInstanceSetting(context.Context, *connect.Request[v1.UpdateInstanceSettingRequest]) (*connect.Response[v1.InstanceSetting], error)
+	UpdateInstanceSetting(context.Context, *v1.UpdateInstanceSettingRequest) (*v1.InstanceSetting, error)
 	// Tests notification email delivery with the provided or stored SMTP settings.
-	TestInstanceEmailSetting(context.Context, *connect.Request[v1.TestInstanceEmailSettingRequest]) (*connect.Response[emptypb.Empty], error)
+	TestInstanceEmailSetting(context.Context, *v1.TestInstanceEmailSettingRequest) (*emptypb.Empty, error)
 	// GetInstanceStats returns resource usage statistics for the instance. Admin only.
-	GetInstanceStats(context.Context, *connect.Request[v1.GetInstanceStatsRequest]) (*connect.Response[v1.InstanceStats], error)
+	GetInstanceStats(context.Context, *v1.GetInstanceStatsRequest) (*v1.InstanceStats, error)
 }
 
-// NewInstanceServiceHandler builds an HTTP handler from the service implementation. It returns the
-// path on which to mount the handler and the handler itself.
-//
-// By default, handlers support the Connect, gRPC, and gRPC-Web protocols with the binary Protobuf
-// and JSON codecs. They also support gzip compression.
-func NewInstanceServiceHandler(svc InstanceServiceHandler, opts ...connect.HandlerOption) (string, http.Handler) {
-	instanceServiceMethods := v1.File_api_v1_instance_service_proto.Services().ByName("InstanceService").Methods()
-	instanceServiceGetInstanceProfileHandler := connect.NewUnaryHandler(
-		InstanceServiceGetInstanceProfileProcedure,
-		svc.GetInstanceProfile,
-		connect.WithSchema(instanceServiceMethods.ByName("GetInstanceProfile")),
-		connect.WithHandlerOptions(opts...),
+// RegisterInstanceServiceHandler registers svc as the memos.api.v1.InstanceService implementation
+// on server.
+func RegisterInstanceServiceHandler(server *connect.Server, svc InstanceServiceHandler) {
+	adapter := instanceServiceHandler{svc: svc}
+	server.Register(
+		connect.Method{Spec: instanceServiceGetInstanceProfileSpec(), Handler: adapter.getInstanceProfile},
+		connect.Method{Spec: instanceServiceGetInstanceSettingSpec(), Handler: adapter.getInstanceSetting},
+		connect.Method{Spec: instanceServiceBatchGetInstanceSettingsSpec(), Handler: adapter.batchGetInstanceSettings},
+		connect.Method{Spec: instanceServiceUpdateInstanceSettingSpec(), Handler: adapter.updateInstanceSetting},
+		connect.Method{Spec: instanceServiceTestInstanceEmailSettingSpec(), Handler: adapter.testInstanceEmailSetting},
+		connect.Method{Spec: instanceServiceGetInstanceStatsSpec(), Handler: adapter.getInstanceStats},
 	)
-	instanceServiceGetInstanceSettingHandler := connect.NewUnaryHandler(
-		InstanceServiceGetInstanceSettingProcedure,
-		svc.GetInstanceSetting,
-		connect.WithSchema(instanceServiceMethods.ByName("GetInstanceSetting")),
-		connect.WithHandlerOptions(opts...),
-	)
-	instanceServiceBatchGetInstanceSettingsHandler := connect.NewUnaryHandler(
-		InstanceServiceBatchGetInstanceSettingsProcedure,
-		svc.BatchGetInstanceSettings,
-		connect.WithSchema(instanceServiceMethods.ByName("BatchGetInstanceSettings")),
-		connect.WithHandlerOptions(opts...),
-	)
-	instanceServiceUpdateInstanceSettingHandler := connect.NewUnaryHandler(
-		InstanceServiceUpdateInstanceSettingProcedure,
-		svc.UpdateInstanceSetting,
-		connect.WithSchema(instanceServiceMethods.ByName("UpdateInstanceSetting")),
-		connect.WithHandlerOptions(opts...),
-	)
-	instanceServiceTestInstanceEmailSettingHandler := connect.NewUnaryHandler(
-		InstanceServiceTestInstanceEmailSettingProcedure,
-		svc.TestInstanceEmailSetting,
-		connect.WithSchema(instanceServiceMethods.ByName("TestInstanceEmailSetting")),
-		connect.WithHandlerOptions(opts...),
-	)
-	instanceServiceGetInstanceStatsHandler := connect.NewUnaryHandler(
-		InstanceServiceGetInstanceStatsProcedure,
-		svc.GetInstanceStats,
-		connect.WithSchema(instanceServiceMethods.ByName("GetInstanceStats")),
-		connect.WithHandlerOptions(opts...),
-	)
-	return "/memos.api.v1.InstanceService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case InstanceServiceGetInstanceProfileProcedure:
-			instanceServiceGetInstanceProfileHandler.ServeHTTP(w, r)
-		case InstanceServiceGetInstanceSettingProcedure:
-			instanceServiceGetInstanceSettingHandler.ServeHTTP(w, r)
-		case InstanceServiceBatchGetInstanceSettingsProcedure:
-			instanceServiceBatchGetInstanceSettingsHandler.ServeHTTP(w, r)
-		case InstanceServiceUpdateInstanceSettingProcedure:
-			instanceServiceUpdateInstanceSettingHandler.ServeHTTP(w, r)
-		case InstanceServiceTestInstanceEmailSettingProcedure:
-			instanceServiceTestInstanceEmailSettingHandler.ServeHTTP(w, r)
-		case InstanceServiceGetInstanceStatsProcedure:
-			instanceServiceGetInstanceStatsHandler.ServeHTTP(w, r)
-		default:
-			http.NotFound(w, r)
-		}
-	})
 }
 
 // UnimplementedInstanceServiceHandler returns CodeUnimplemented from all methods.
 type UnimplementedInstanceServiceHandler struct{}
 
-func (UnimplementedInstanceServiceHandler) GetInstanceProfile(context.Context, *connect.Request[v1.GetInstanceProfileRequest]) (*connect.Response[v1.InstanceProfile], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("memos.api.v1.InstanceService.GetInstanceProfile is not implemented"))
+func (UnimplementedInstanceServiceHandler) GetInstanceProfile(context.Context, *v1.GetInstanceProfileRequest) (*v1.InstanceProfile, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "memos.api.v1.InstanceService.GetInstanceProfile is not implemented")
 }
 
-func (UnimplementedInstanceServiceHandler) GetInstanceSetting(context.Context, *connect.Request[v1.GetInstanceSettingRequest]) (*connect.Response[v1.InstanceSetting], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("memos.api.v1.InstanceService.GetInstanceSetting is not implemented"))
+func (UnimplementedInstanceServiceHandler) GetInstanceSetting(context.Context, *v1.GetInstanceSettingRequest) (*v1.InstanceSetting, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "memos.api.v1.InstanceService.GetInstanceSetting is not implemented")
 }
 
-func (UnimplementedInstanceServiceHandler) BatchGetInstanceSettings(context.Context, *connect.Request[v1.BatchGetInstanceSettingsRequest]) (*connect.Response[v1.BatchGetInstanceSettingsResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("memos.api.v1.InstanceService.BatchGetInstanceSettings is not implemented"))
+func (UnimplementedInstanceServiceHandler) BatchGetInstanceSettings(context.Context, *v1.BatchGetInstanceSettingsRequest) (*v1.BatchGetInstanceSettingsResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "memos.api.v1.InstanceService.BatchGetInstanceSettings is not implemented")
 }
 
-func (UnimplementedInstanceServiceHandler) UpdateInstanceSetting(context.Context, *connect.Request[v1.UpdateInstanceSettingRequest]) (*connect.Response[v1.InstanceSetting], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("memos.api.v1.InstanceService.UpdateInstanceSetting is not implemented"))
+func (UnimplementedInstanceServiceHandler) UpdateInstanceSetting(context.Context, *v1.UpdateInstanceSettingRequest) (*v1.InstanceSetting, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "memos.api.v1.InstanceService.UpdateInstanceSetting is not implemented")
 }
 
-func (UnimplementedInstanceServiceHandler) TestInstanceEmailSetting(context.Context, *connect.Request[v1.TestInstanceEmailSettingRequest]) (*connect.Response[emptypb.Empty], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("memos.api.v1.InstanceService.TestInstanceEmailSetting is not implemented"))
+func (UnimplementedInstanceServiceHandler) TestInstanceEmailSetting(context.Context, *v1.TestInstanceEmailSettingRequest) (*emptypb.Empty, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "memos.api.v1.InstanceService.TestInstanceEmailSetting is not implemented")
 }
 
-func (UnimplementedInstanceServiceHandler) GetInstanceStats(context.Context, *connect.Request[v1.GetInstanceStatsRequest]) (*connect.Response[v1.InstanceStats], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("memos.api.v1.InstanceService.GetInstanceStats is not implemented"))
+func (UnimplementedInstanceServiceHandler) GetInstanceStats(context.Context, *v1.GetInstanceStatsRequest) (*v1.InstanceStats, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "memos.api.v1.InstanceService.GetInstanceStats is not implemented")
+}
+
+type instanceServiceClient struct {
+	client *connect.Client
+}
+
+func (c *instanceServiceClient) GetInstanceProfile(ctx context.Context, req *v1.GetInstanceProfileRequest) (*v1.InstanceProfile, error) {
+	var res v1.InstanceProfile
+	if err := c.client.CallUnary(ctx, instanceServiceGetInstanceProfileSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *instanceServiceClient) GetInstanceSetting(ctx context.Context, req *v1.GetInstanceSettingRequest) (*v1.InstanceSetting, error) {
+	var res v1.InstanceSetting
+	if err := c.client.CallUnary(ctx, instanceServiceGetInstanceSettingSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *instanceServiceClient) BatchGetInstanceSettings(ctx context.Context, req *v1.BatchGetInstanceSettingsRequest) (*v1.BatchGetInstanceSettingsResponse, error) {
+	var res v1.BatchGetInstanceSettingsResponse
+	if err := c.client.CallUnary(ctx, instanceServiceBatchGetInstanceSettingsSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *instanceServiceClient) UpdateInstanceSetting(ctx context.Context, req *v1.UpdateInstanceSettingRequest) (*v1.InstanceSetting, error) {
+	var res v1.InstanceSetting
+	if err := c.client.CallUnary(ctx, instanceServiceUpdateInstanceSettingSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *instanceServiceClient) TestInstanceEmailSetting(ctx context.Context, req *v1.TestInstanceEmailSettingRequest) (*emptypb.Empty, error) {
+	var res emptypb.Empty
+	if err := c.client.CallUnary(ctx, instanceServiceTestInstanceEmailSettingSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *instanceServiceClient) GetInstanceStats(ctx context.Context, req *v1.GetInstanceStatsRequest) (*v1.InstanceStats, error) {
+	var res v1.InstanceStats
+	if err := c.client.CallUnary(ctx, instanceServiceGetInstanceStatsSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+type instanceServiceHandler struct{ svc InstanceServiceHandler }
+
+func (h instanceServiceHandler) getInstanceProfile(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.GetInstanceProfileRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.GetInstanceProfile(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h instanceServiceHandler) getInstanceSetting(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.GetInstanceSettingRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.GetInstanceSetting(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h instanceServiceHandler) batchGetInstanceSettings(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.BatchGetInstanceSettingsRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.BatchGetInstanceSettings(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h instanceServiceHandler) updateInstanceSetting(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.UpdateInstanceSettingRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.UpdateInstanceSetting(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h instanceServiceHandler) testInstanceEmailSetting(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.TestInstanceEmailSettingRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.TestInstanceEmailSetting(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h instanceServiceHandler) getInstanceStats(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.GetInstanceStatsRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.GetInstanceStats(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
 }

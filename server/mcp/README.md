@@ -7,23 +7,37 @@ transport using the official `github.com/modelcontextprotocol/go-sdk`.
 
 The core design principle: **tool calls execute in-process against the existing
 REST API.** The package owns no store or service logic of its own. Each tool is
-derived from an operation in the generated OpenAPI document
-(`proto/gen/openapi.yaml`, embedded via `proto.OpenAPIYAML()`), and a tool call
-is translated into the matching `/api/v1/...` HTTP request and run against the
-same Echo server that serves the public API. This keeps OpenAPI as the single
-source of truth and reuses the API's authentication and authorization as-is.
+derived from an operation in the OpenAPI document at the path the caller
+supplies to `mcp.Register` (default `proto/gen/openapi.yaml`, the file `buf
+generate` is expected to produce), and a tool call is translated into the
+matching `/api/v1/...` HTTP request and run against the same `http.Handler`
+that the public API serves. This keeps OpenAPI as the single source of truth
+and reuses the API's authentication and authorization as-is.
 
 ## Integration
 
-`server.NewServer` calls `mcp.NewMCPService` after registering the API, file, and gRPC-gateway routes, passing the same Echo server:
+`main.go` calls `mcp.Register` after registering the API hooks and the Connect/gRPC services, passing the PocketBase app and the path of the OpenAPI spec the service derives its tool catalog from:
 
 ```go
-mcpService, err := mcp.NewMCPService(profile, echoServer)
-if err != nil {
-    return nil, errors.Wrap(err, "failed to create MCP service")
+if err := mcp.Register(app, mcpSpecPath()); err != nil {
+    log.Fatal(err)
 }
-mcpService.RegisterRoutes(echoServer)
 ```
+
+`mcpSpecPath` (defined in `main.go`) resolves the spec path from the
+`MCP_OPENAPI_SPEC` environment variable, defaulting to
+`proto/gen/openapi.yaml`. The default is what `buf generate` is
+expected to produce once the buf.gen.yaml is extended with an
+OpenAPI plugin; until that lands, the spec must be supplied
+explicitly or the binary fails to start with an actionable error.
+
+`mcp.Register` defers service construction and route binding to
+PocketBase's `OnServe` hook so it can capture `e.Router.BuildMux()`
+as the in-process API target the MCP adapter dispatches tool
+calls into. Any failure during the OnServe step (missing spec,
+malformed OpenAPI, missing curated operation) propagates out of
+`app.Start()` and aborts startup — there is no state where the
+binary boots with a half-wired `/mcp`.
 
 The service advertises the **tools** capability only — no prompts, no resources.
 
@@ -32,8 +46,8 @@ The service advertises the **tools** capability only — no prompts, no resource
 `NewMCPService` (`service.go`) wires everything up at construction time and fails
 fast on any inconsistency:
 
-1. `loadMCPServiceOpenAPISpec` parses the embedded `proto.OpenAPIYAML()` bytes
-   into an `openAPISpec`.
+1. `loadMCPServiceOpenAPISpec` parses the OpenAPI document at the path the
+   caller passed to `mcp.Register` into an `openAPISpec`.
 2. `buildOperationRegistry` (`openapi.go`) indexes every operation by
    `operationId`, recording method, path, resolved request-body schema, and
    resolved 200 response schema.
@@ -50,7 +64,8 @@ fast on any inconsistency:
 
 ## Request flow
 
-`RegisterRoutes` binds `echoServer.Any("/mcp", ...)`. Each request:
+`mcp.Register` binds `e.Router.Any("/mcp", ...)` on the PocketBase router the
+framework exposes from inside the OnServe hook. Each request:
 
 1. `isAllowedMCPOrigin` (`origin.go`) rejects disallowed cross-origin browser requests with `403`.
 2. The request body is capped at 256 MiB before the SDK reads it.
@@ -63,7 +78,7 @@ fast on any inconsistency:
 7. `apiAdapter.execute` (`adapter.go`) builds the API request
    (`buildAPIRequest`: path-parameter substitution, query encoding, JSON body),
    forwards the bearer token, presents the caller's resolved client address as
-   the request peer, and runs it against the Echo server through an
+   the request peer, and runs it against the in-process API handler through an
    `httptest.ResponseRecorder`.
 8. The recorder body is decoded; a non-2xx status becomes a tool error
    (`newToolErrorResult`), otherwise the value is wrapped by
@@ -270,9 +285,10 @@ validate an error payload against the tool's success-only output schema:
 
 | File | Responsibility |
 | --- | --- |
-| `service.go` | Constructs the MCP server, registers tools, builds the streamable HTTP handler, and binds the `/mcp` route. |
+| `service.go` | Constructs the MCP server, registers tools, and builds the streamable HTTP handler. |
+| `register.go` | The integration point `main.go` calls: defers service construction and route binding to PocketBase's OnServe hook so the MCP adapter can share the public API's `http.Handler`. |
 | `catalog.go` | The curated operation allowlist, tool naming, input/output schema assembly, and method-derived annotations. |
-| `adapter.go` | Translates a tool call into an `/api/v1/...` request and runs it in-process against the Echo server. |
+| `adapter.go` | Translates a tool call into an `/api/v1/...` request and runs it in-process against the API handler. |
 | `openapi.go` | Parses the OpenAPI spec, builds the operation registry, and resolves `$ref` schemas into self-contained JSON Schema. |
 | `validation.go` | Validates tool-call arguments against the tool's input schema. |
 | `origin.go` | `Origin`-header check for browser DNS-rebinding safety. |
@@ -316,7 +332,8 @@ go test ./server/mcp/...
   structural check (`validateSchemaValue`) and then the `google/jsonschema-go`
   validator. The first yields friendly messages; the second is the
   spec-complete backstop.
-- **Embedded vs. file load.** Production reads the spec from
-  `proto.OpenAPIYAML()` (`loadMCPServiceOpenAPISpec`). The path-based
-  `loadOpenAPISpec` in `openapi.go` exists for tests.
+- **File load.** The OpenAPI spec is read from the path the caller passes to
+  `mcp.Register` (default `proto/gen/openapi.yaml` from
+  `MCP_OPENAPI_SPEC`). The path-based `loadOpenAPISpec` in `openapi.go` is
+  the only loader, and it is shared between production and tests.
 - **Tools only.** The server advertises no prompts or resources in this version.
