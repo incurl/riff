@@ -135,8 +135,19 @@ func (s *AuthServer) GetCurrentUser(ctx context.Context, _ *v1.GetCurrentUserReq
 	return &v1.GetCurrentUserResponse{User: recordToUser(rec)}, nil
 }
 
-// findByIdentity locates a user record by username OR email.
+// findByIdentity locates a user record by username OR email. The
+// `users` collection is searched first; a miss falls through to
+// `_superusers` so the bootstrap admin (the one the SPA's
+// installer creates via CreateUser on a fresh instance) can also
+// sign in through the same form.
+//
+// Both lookups return the bcrypt `password_hash` column the
+// Connect create paths populate, so verifyPassword works against
+// either collection without further branching.
 func (s *AuthServer) findByIdentity(identity string) (*core.Record, error) {
+	if identity == "" {
+		return nil, errors.New("identity is required")
+	}
 	users, err := s.app.FindCollectionByNameOrId("users")
 	if err != nil {
 		return nil, err
@@ -144,6 +155,25 @@ func (s *AuthServer) findByIdentity(identity string) (*core.Record, error) {
 	rows, err := s.app.FindRecordsByFilter(users,
 		"username={:id} || email={:id}", "", 1, 0,
 		map[string]any{"id": identity},
+	)
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) > 0 {
+		return rows[0], nil
+	}
+
+	// Fall through to superusers: the bootstrap admin's identity
+	// lives in the `_superusers` collection, keyed by `email`
+	// (PocketBase does not have a `username` column on
+	// `_superusers`).
+	superusers, err := s.app.FindCollectionByNameOrId(core.CollectionNameSuperusers)
+	if err != nil {
+		return nil, err
+	}
+	rows, err = s.app.FindRecordsByFilter(superusers,
+		"email={:id} && email != {:installer}", "", 1, 0,
+		map[string]any{"id": identity, "installer": core.DefaultInstallerEmail},
 	)
 	if err != nil {
 		return nil, err

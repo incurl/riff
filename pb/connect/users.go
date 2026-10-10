@@ -49,6 +49,13 @@ func recordToUser(rec *core.Record) *v1.User {
 	}
 
 	username := rec.GetString("username")
+	if username == "" {
+		// Superuser records have no `username` column; the
+		// admin's identity lives in `email`. The SPA's resource
+		// name still wants `users/{name}` so the same record
+		// name works for both collections.
+		username = rec.GetString("email")
+	}
 	avatar := rec.GetString("avatar")
 	// PocketBase stores file fields as just the filename;
 	// the client SDK knows how to fetch it. We expose a
@@ -129,6 +136,51 @@ func setPassword(rec *core.Record, password string) error {
 	rec.Set("password", password)
 	rec.Set("password_hash", string(hash))
 	return nil
+}
+
+// createSuperuserRecord provisions a new record in the `_superusers`
+// collection. It is the bootstrap-only path: the caller is responsible
+// for asserting that the instance still needs setup (no real admin
+// exists) and that the request was unauthenticated.
+//
+// The submitted `username` becomes the superuser's `email`, matching
+// how the Memos SPA's sign-up form treats the "username" field as the
+// admin's identity on the bootstrap path (PocketBase's superuser
+// collection has no `username` column, only `email`). A
+// `password_hash` column is written alongside the built-in
+// `password` field for the same reason it is written on `users` rows
+// (see migration 1790000000): the Connect SignIn path bcrypt-verifies
+// directly, and PB's PBKDF2 hash is not directly comparable from Go.
+//
+// `displayName` is optional; an empty string leaves the field unset
+// and PocketBase will store the empty string.
+//
+// A fresh `superusers` record's `IsSuperuser()` is true, so
+// `recordToUser` will surface role=ADMIN to the SPA without further
+// translation.
+func createSuperuserRecord(ctx context.Context, app core.App, username, password, displayName string) (*core.Record, error) {
+	if username == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, "username is required")
+	}
+	if password == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, "password is required")
+	}
+	superusers, err := app.FindCollectionByNameOrId(core.CollectionNameSuperusers)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err.Error())
+	}
+	rec := core.NewRecord(superusers)
+	rec.Set("email", username)
+	if displayName != "" {
+		rec.Set("name", displayName)
+	}
+	if err := setPassword(rec, password); err != nil {
+		return nil, err
+	}
+	if err := createRecordRequest(ctx, app, rec); err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err.Error())
+	}
+	return rec, nil
 }
 
 // userHasContent reports whether anything in the schema still points at the

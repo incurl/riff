@@ -292,3 +292,28 @@ func marshalInstanceSettingPayload(s *v1.InstanceSetting) (string, error) {
 		return "", connect.NewError(connect.CodeInvalidArgument, "setting body is required")
 	}
 }
+
+// instanceGeneralSetting returns the GENERAL instance setting, or a
+// zero-value proto if no row exists yet. The zero value treats every
+// feature-flag as "off" (registration allowed, password auth allowed,
+// etc.) which matches the operator's first-day expectation.
+//
+// Errors that are not "row not found" are swallowed and treated as
+// "no setting" so a corrupted row never blocks the rest of the
+// request path; the SPA can recover by re-submitting the setting
+// through the admin UI.
+func instanceGeneralSetting(app core.App) *v1.InstanceSetting_GeneralSetting {
+	row, err := app.FindFirstRecordByFilter("instance_settings", "key={:k}", map[string]any{"k": "GENERAL"})
+	if err != nil || row == nil {
+		return &v1.InstanceSetting_GeneralSetting{}
+	}
+	payload := []byte(row.GetString("payload"))
+	if len(payload) == 0 {
+		return &v1.InstanceSetting_GeneralSetting{}
+	}
+	body := &v1.InstanceSetting_GeneralSetting{}
+	if err := protojson.Unmarshal(payload, body); err != nil {
+		return &v1.InstanceSetting_GeneralSetting{}
+	}
+	return body
+}

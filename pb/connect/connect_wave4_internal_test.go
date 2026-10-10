@@ -17,6 +17,7 @@ import (
 
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/encoding/protojson"
 
 	"github.com/incurl/riff/pb/hooks"
 	v1 "github.com/incurl/riff/proto/gen/api/v1"
@@ -78,4 +79,34 @@ func memoRecordByID(t *testing.T, app core.App, id string) *core.Record {
 	rec, err := app.FindRecordById("memos", id)
 	require.NoError(t, err)
 	return rec
+}
+
+// setGeneralSetting writes (or replaces) the GENERAL row in
+// `instance_settings` with the supplied proto body. It exists
+// for tests that need to toggle feature flags such as
+// `DisallowUserRegistration` without going through the admin-only
+// `UpdateInstanceSetting` handler.
+//
+// Existing rows are upserted; the row is created on first use.
+// The payload is the proto JSON the handler would produce.
+func setGeneralSetting(t *testing.T, app core.App, body *v1.InstanceSetting_GeneralSetting) {
+	t.Helper()
+	if body == nil {
+		body = &v1.InstanceSetting_GeneralSetting{}
+	}
+	payload, err := protojson.Marshal(body)
+	require.NoError(t, err)
+
+	row, err := app.FindFirstRecordByFilter("instance_settings", "key={:k}", map[string]any{"k": "GENERAL"})
+	if err == nil && row != nil {
+		row.Set("payload", string(payload))
+		require.NoError(t, app.Save(row))
+		return
+	}
+	coll, err := app.FindCollectionByNameOrId("instance_settings")
+	require.NoError(t, err)
+	rec := core.NewRecord(coll)
+	rec.Set("key", "GENERAL")
+	rec.Set("payload", string(payload))
+	require.NoError(t, app.Save(rec))
 }

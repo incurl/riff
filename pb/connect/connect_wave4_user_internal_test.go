@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"connectrpc.com/connect/v2"
+	"github.com/pocketbase/pocketbase/core"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/bcrypt"
@@ -86,19 +87,178 @@ func TestCreateUser_AdminOnlyAndSignIn(t *testing.T) {
 	assert.NotEmpty(t, signIn.GetAccessToken())
 }
 
-// TestCreateUser_RejectsAdminRole asserts the ADMIN role is refused rather than
-// silently dropped, because it lives in the superuser collection.
-func TestCreateUser_RejectsAdminRole(t *testing.T) {
+// TestCreateUser_Bootstrap asserts the SPA's installer path: an
+// unauthenticated CreateUser on a fresh instance provisions a
+// real superuser record regardless of the submitted role (the
+// SPA always sends role=USER, but the server forces role=ADMIN
+// for the bootstrap), and the resulting account can sign in
+// through the Connect SignIn handler.
+func TestCreateUser_Bootstrap(t *testing.T) {
+	app := newHookedApp(t)
+	require.True(t, needsSetup(app), "a fresh app should report needsSetup")
+	users := NewUserServer(app)
+
+	// The SPA's SignUp form always sends role=USER, even on the
+	// bootstrap path. The server is responsible for forcing
+	// role=ADMIN when needsSetup is true.
+	created, err := users.CreateUser(context.Background(), &v1.CreateUserRequest{
+		User: &v1.User{
+			Username:    "admin@example.com",
+			Password:    "passw0rd!",
+			DisplayName: "First Admin",
+			Role:        v1.User_USER,
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, v1.User_ADMIN, created.GetRole(),
+		"the first user is always an admin, even if the request asked for USER")
+	assert.Equal(t, "users/admin@example.com", created.GetName(),
+		"recordToUser keeps the resource-name stable across renames")
+
+	// The superuser record exists and carries a bcrypt hash
+	// (otherwise the SignIn path cannot verify a password from Go).
+	rows, err := app.FindRecordsByFilter(core.CollectionNameSuperusers,
+		"email={:e}", "", 1, 0, map[string]any{"e": "admin@example.com"})
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	hash := rows[0].GetString("password_hash")
+	require.NotEmpty(t, hash, "createSuperuserRecord must populate password_hash")
+	assert.NoError(t, bcrypt.CompareHashAndPassword([]byte(hash), []byte("passw0rd!")))
+
+	// Bootstrap is now complete.
+	assert.False(t, needsSetup(app))
+
+	// The bootstrap admin can sign in through the same form the
+	// SPA's SignIn page submits.
+	auth := NewAuthServer(app, nil)
+	signIn, err := auth.SignIn(context.Background(), &v1.SignInRequest{
+		Credentials: &v1.SignInRequest_PasswordCredentials_{
+			PasswordCredentials: &v1.SignInRequest_PasswordCredentials{
+				Username: "admin@example.com",
+				Password: "passw0rd!",
+			},
+		},
+	})
+	require.NoError(t, err, "the bootstrap admin must be able to sign in")
+	assert.Equal(t, v1.User_ADMIN, signIn.GetUser().GetRole())
+	assert.NotEmpty(t, signIn.GetAccessToken())
+}
+
+// TestCreateUser_SelfService asserts the open-registration path
+// the SPA's SignUp form uses when an instance is already set up.
+func TestCreateUser_SelfService(t *testing.T) {
+	app := newHookedApp(t)
+	newSuperuser(t, app, "admin@example.com")
+	users := NewUserServer(app)
+
+	created, err := users.CreateUser(context.Background(), &v1.CreateUserRequest{
+		User: &v1.User{
+			Username:    "dave",
+			Password:    "passw0rd!",
+			Email:       "dave@example.com",
+			DisplayName: "Dave",
+			Role:        v1.User_USER,
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, v1.User_USER, created.GetRole())
+	assert.Equal(t, "users/dave", created.GetName())
+	assert.Equal(t, "Dave", created.GetDisplayName())
+
+	rec, err := lookupUserByName(app, "dave")
+	require.NoError(t, err)
+	assert.NoError(t, bcrypt.CompareHashAndPassword([]byte(rec.GetString("password_hash")), []byte("passw0rd!")))
+}
+
+// TestCreateUser_RejectsSelfServiceWhenClosed asserts the
+// `disallowUserRegistration` flag gates the self-service path.
+// An admin can still create a user; an unauthenticated caller
+// cannot.
+func TestCreateUser_RejectsSelfServiceWhenClosed(t *testing.T) {
+	app := newHookedApp(t)
+	admin := newSuperuser(t, app, "admin@example.com")
+	setGeneralSetting(t, app, &v1.InstanceSetting_GeneralSetting{
+		DisallowUserRegistration: true,
+	})
+	users := NewUserServer(app)
+
+	// Unauthenticated: refused.
+	_, err := users.CreateUser(context.Background(), &v1.CreateUserRequest{
+		User: &v1.User{Username: "dave", Password: "passw0rd!", Role: v1.User_USER},
+	})
+	require.Error(t, err)
+	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
+
+	// An admin may still create a user (the "invite" flow).
+	created, err := users.CreateUser(withViewer(context.Background(), admin), &v1.CreateUserRequest{
+		User: &v1.User{Username: "dave", Email: "dave@example.com", Password: "passw0rd!", Role: v1.User_USER},
+	})
+	require.NoError(t, err, "an admin's invite path must still work when registration is closed")
+	assert.Equal(t, "users/dave", created.GetName())
+}
+
+// TestCreateUser_NonAdminCannotCreateUser asserts the gate the
+// old handler enforced: a regular (non-admin) user is not allowed
+// to create accounts.
+func TestCreateUser_NonAdminCannotCreateUser(t *testing.T) {
+	app := newHookedApp(t)
+	newSuperuser(t, app, "admin@example.com")
+	alice := newUser(t, app, "alice")
+	users := NewUserServer(app)
+
+	_, err := users.CreateUser(withViewer(context.Background(), alice), &v1.CreateUserRequest{
+		User: &v1.User{Username: "mallory", Password: "passw0rd!", Role: v1.User_USER},
+	})
+	require.Error(t, err)
+	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
+}
+
+// TestCreateUser_AdminPromotesToSuperuser asserts the third flow:
+// an existing admin uses CreateUser with role=ADMIN to provision
+// another admin. The new record lands in `_superusers`, not
+// `users`.
+func TestCreateUser_AdminPromotesToSuperuser(t *testing.T) {
 	app := newHookedApp(t)
 	admin := newSuperuser(t, app, "admin@example.com")
 	users := NewUserServer(app)
 
-	_, err := users.CreateUser(withViewer(context.Background(), admin), &v1.CreateUserRequest{
+	created, err := users.CreateUser(withViewer(context.Background(), admin), &v1.CreateUserRequest{
+		User: &v1.User{
+			Username: "second@example.com",
+			Password: "passw0rd!",
+			Role:     v1.User_ADMIN,
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, v1.User_ADMIN, created.GetRole())
+
+	rows, err := app.FindRecordsByFilter(core.CollectionNameSuperusers,
+		"email={:e}", "", 1, 0, map[string]any{"e": "second@example.com"})
+	require.NoError(t, err)
+	require.Len(t, rows, 1, "ADMIN role must land in _superusers")
+}
+
+// TestCreateUser_RejectsAdminRoleAfterSetup asserts the bootstrap
+// path is closed once a real admin exists: an unauthenticated
+// caller can no longer claim the ADMIN role, and the `users`
+// collection is never the destination of an ADMIN-role request.
+func TestCreateUser_RejectsAdminRoleAfterSetup(t *testing.T) {
+	app := newHookedApp(t)
+	newSuperuser(t, app, "admin@example.com")
+	users := NewUserServer(app)
+
+	// Unauthenticated: the bootstrap window has closed.
+	_, err := users.CreateUser(context.Background(), &v1.CreateUserRequest{
 		User: &v1.User{Username: "boss", Password: "passw0rd!", Role: v1.User_ADMIN},
 	})
 	require.Error(t, err)
-	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err),
+		"unauthenticated ADMIN after setup must hit the bootstrap-closed branch")
 
+	// Confirm nothing landed in either collection.
+	rows, err := app.FindRecordsByFilter("users", "username='boss' || email='boss'", "", 1, 0)
+	require.NoError(t, err)
+	assert.Empty(t, rows, "ADMIN role must never land in the users collection")
 }
 
 // TestUpdateUser_SelfOnly asserts a user may edit their own profile but not
