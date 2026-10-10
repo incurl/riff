@@ -81,12 +81,13 @@ func Register(app core.App, limiter ratelimit.Limiter) error {
 	connecthttp.Mount(mux, srv)
 
 	app.OnServe().BindFunc(func(e *core.ServeEvent) error {
-		// Start the upload-session sweeper so staged
-		// files older than 30 minutes are reaped.
-		// The sweeper honours app.OnTerminate so
-		// a test app's teardown does not leak a
-		// goroutine.
-		installUploadManager(app)
+		// Start the import-session sweeper so staged
+		// import archives older than 30 minutes are
+		// reaped. The sweeper honours app.OnTerminate
+		// so a test app's teardown does not leak a
+		// goroutine. The upload-session sweeper was
+		// installed in slice 2 (commit c5ca6a7c).
+		installImportManager(app)
 		registerConnectRoutes(srv, mux, e.Router, limiter)
 		return e.Next()
 	})
