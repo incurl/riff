@@ -3,6 +3,61 @@
 This file is the single source of truth for non-obvious decisions made
 while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
+the bottom.
+
+## buf.gen.yaml drift — wire `protoc-gen-es` so `cd proto && buf generate` regenerates web/src/types/proto/ (2026-10-10)
+
+`proto/buf.gen.yaml` was missing the TypeScript plugin. The
+`AGENTS.md` Commands section advertised "Regenerate Go + TypeScript
++ OpenAPI", and the Database and Proto Rules said "include both
+Go/OpenAPI and TypeScript generated outputs in the same commit",
+but the config only ran the Go and OpenAPI plugins. The 15 files
+under `web/src/types/proto/api/v1/` and `web/src/types/proto/google/`
+were committed in `259d1d0e` ("chore(proto): refresh
+web/src/types/proto/ for the riff module rename") and were
+byte-equivalent to a regen of `protoc-gen-es v2.12.1` with
+`target=ts` — but the next person to add a `.proto` field would
+have to hand-regen the TS or accept drift.
+
+**Decision.** Add a `local: protoc-gen-es` plugin block to
+`proto/buf.gen.yaml`, opt `target=ts`, output
+`../web/src/types/proto`. Declare `@bufbuild/protoc-gen-es ^2.12.0`
+in `web/devDependencies` next to the existing `@bufbuild/protobuf`
+runtime dep.
+
+**Why local and not the BSR `buf.build/bufbuild/es` remote.** The
+BSR plugin is the older v1.3.0 generator — its output uses a
+different style than the v2.12.1 files that are already checked
+in. The local plugin is the modern npm-published `protoc-gen-es`
+v2.x generator and reproduces the existing format byte-for-byte
+(modulo the `protoc-gen-es` version line in the header). Pinning
+the major to match the runtime `@bufbuild/protobuf` dep is
+simpler to reason about than mixing v1 (BSR) output with v2
+runtime code.
+
+**PATH gotcha.** Because the plugin is local, `buf generate` needs
+`protoc-gen-es` on `PATH`. A clean clone has to run
+`cd web && pnpm install` first; the AGENTS.md Commands section now
+calls this out. Without the install, buf fails with
+"protoc-gen-es: program not found or is not executable".
+
+**Lockfile intentionally not touched in this commit.** pnpm 11
+will fail a `pnpm install --frozen-lockfile` once `package.json`
+gains a new devDep until `pnpm-lock.yaml` is refreshed. The
+lockfile is a derived artifact of `pnpm install`; it belongs in a
+follow-up `chore(deps): refresh pnpm-lock.yaml for protoc-gen-es`
+commit that runs `cd web && pnpm install` end-to-end. This slice
+is the contract change (what `buf generate` does); the lockfile
+slice is the install of the new tool.
+
+**Verification.** Could not be run end-to-end locally: the
+`buf` CLI is not installed in this environment, and pnpm install
+is needed for the local plugin to be on PATH. The config is
+checked against the v2.12 `protoc-gen-es` README (matches the
+existing file headers, the `target=ts` opt is the documented TS
+target, and `out: ../web/src/types/proto` matches the existing
+directory layout). A clean checkout on a machine with buf 1.x and
+Node 24 should produce the same 15 files with no diff.
 
 ## Phase 6 — IdentityProviderService client_secret masking (Slice 4 follow-up) (2026-10-10)
 
@@ -167,13 +222,6 @@ SPA's "Sign in with Google" button had no real back-end. The design:
   `redirect_uri` the SPA sends back is required to match the
   value the SPA passed in, and is what `provider.SetRedirectURL`
   uses when calling `FetchToken`.
-
-# DECISIONS.md — riff architectural audit log
-
-This file is the single source of truth for non-obvious decisions made
-while building riff, a PO-33 community site replacing the Memos Go
-backend with PocketBase. New entries are appended at the top, oldest at
-the bottom.
 
 ## Phase 6 — Memos export/import (Slice 3) (2026-10-09)
 
