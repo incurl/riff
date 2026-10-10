@@ -469,8 +469,6 @@ dispatch (`patches` vs `samples`), the `media_metadata` and
 
 ## Phase 6 — Self-service sign-up (2026-10-09)
 
-## Phase 6 — Self-service sign-up (2026-10-09)
-
 The Memos SPA's sign-up flow runs through `UserService.CreateUser`,
 but the old `pb/connect/user.go::CreateUser` was unconditionally
 admin-gated. The SPA's `pages/SignUp.tsx` always sends
