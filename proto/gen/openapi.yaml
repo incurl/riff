@@ -494,6 +494,40 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/Status'
+    /api/v1/identity-providers/{identity-provider}/clientSecret:
+        get:
+            tags:
+                - IdentityProviderService
+            description: |-
+                GetIdentityProviderClientSecret returns the current
+                 client_secret for an OAuth2 identity provider. The
+                 secret is masked on every other read path (List,
+                 Get) — this RPC is the only way an admin can recover
+                 a stored secret after it has been written. Admin-only;
+                 the response is plain-text and SHOULD be treated as
+                 sensitive by the caller (the SPA renders it into a
+                 copyable one-shot field and immediately discards).
+            operationId: IdentityProviderService_GetIdentityProviderClientSecret
+            parameters:
+                - name: identity-provider
+                  in: path
+                  description: The identity-provider id.
+                  required: true
+                  schema:
+                    type: string
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/GetIdentityProviderClientSecretResponse'
+                default:
+                    description: Default error response
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Status'
     /api/v1/instance/profile:
         get:
             tags:
@@ -3385,6 +3419,16 @@ components:
                     allOf:
                         - $ref: '#/components/schemas/User'
                     description: The authenticated user's information.
+        GetIdentityProviderClientSecretResponse:
+            type: object
+            properties:
+                clientSecret:
+                    type: string
+                    description: |-
+                        The plain-text OAuth2 client_secret currently
+                         stored for the named identity provider. Empty when
+                         the row exists but has no OAuth2 config attached
+                         (e.g. a TYPE_UNSPECIFIED stub row).
         GetUserWebhookSigningSecretResponse:
             type: object
             properties:
@@ -4506,7 +4550,14 @@ components:
                 clientId:
                     type: string
                 clientSecret:
+                    writeOnly: true
                     type: string
+                    description: |-
+                        The OAuth2 client secret. INPUT_ONLY: only accepted
+                         on CreateIdentityProvider and UpdateIdentityProvider
+                         requests; never echoed on List/Get. Admins recover
+                         the stored value via
+                         IdentityProviderService.GetIdentityProviderClientSecret.
                 authUrl:
                     type: string
                 tokenUrl:

@@ -40,6 +40,9 @@ const (
 	// IdentityProviderServiceDeleteIdentityProviderProcedure is the procedure name of the
 	// IdentityProviderService's DeleteIdentityProvider RPC.
 	IdentityProviderServiceDeleteIdentityProviderProcedure = "/memos.api.v1.IdentityProviderService/DeleteIdentityProvider"
+	// IdentityProviderServiceGetIdentityProviderClientSecretProcedure is the procedure name of the
+	// IdentityProviderService's GetIdentityProviderClientSecret RPC.
+	IdentityProviderServiceGetIdentityProviderClientSecretProcedure = "/memos.api.v1.IdentityProviderService/GetIdentityProviderClientSecret"
 )
 
 var (
@@ -78,6 +81,13 @@ var (
 			Procedure:  IdentityProviderServiceDeleteIdentityProviderProcedure,
 		}
 	})
+	identityProviderServiceGetIdentityProviderClientSecretSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_api_v1_idp_service_proto.Services().ByName("IdentityProviderService").Methods().ByName("GetIdentityProviderClientSecret"),
+			Procedure:  IdentityProviderServiceGetIdentityProviderClientSecretProcedure,
+		}
+	})
 )
 
 // IdentityProviderServiceClient is a client for the memos.api.v1.IdentityProviderService service.
@@ -92,6 +102,15 @@ type IdentityProviderServiceClient interface {
 	UpdateIdentityProvider(context.Context, *v1.UpdateIdentityProviderRequest) (*v1.IdentityProvider, error)
 	// DeleteIdentityProvider deletes an identity provider.
 	DeleteIdentityProvider(context.Context, *v1.DeleteIdentityProviderRequest) (*emptypb.Empty, error)
+	// GetIdentityProviderClientSecret returns the current
+	// client_secret for an OAuth2 identity provider. The
+	// secret is masked on every other read path (List,
+	// Get) — this RPC is the only way an admin can recover
+	// a stored secret after it has been written. Admin-only;
+	// the response is plain-text and SHOULD be treated as
+	// sensitive by the caller (the SPA renders it into a
+	// copyable one-shot field and immediately discards).
+	GetIdentityProviderClientSecret(context.Context, *v1.GetIdentityProviderClientSecretRequest) (*v1.GetIdentityProviderClientSecretResponse, error)
 }
 
 // NewIdentityProviderServiceClient constructs a client for the memos.api.v1.IdentityProviderService
@@ -113,6 +132,15 @@ type IdentityProviderServiceHandler interface {
 	UpdateIdentityProvider(context.Context, *v1.UpdateIdentityProviderRequest) (*v1.IdentityProvider, error)
 	// DeleteIdentityProvider deletes an identity provider.
 	DeleteIdentityProvider(context.Context, *v1.DeleteIdentityProviderRequest) (*emptypb.Empty, error)
+	// GetIdentityProviderClientSecret returns the current
+	// client_secret for an OAuth2 identity provider. The
+	// secret is masked on every other read path (List,
+	// Get) — this RPC is the only way an admin can recover
+	// a stored secret after it has been written. Admin-only;
+	// the response is plain-text and SHOULD be treated as
+	// sensitive by the caller (the SPA renders it into a
+	// copyable one-shot field and immediately discards).
+	GetIdentityProviderClientSecret(context.Context, *v1.GetIdentityProviderClientSecretRequest) (*v1.GetIdentityProviderClientSecretResponse, error)
 }
 
 // RegisterIdentityProviderServiceHandler registers svc as the memos.api.v1.IdentityProviderService
@@ -125,6 +153,7 @@ func RegisterIdentityProviderServiceHandler(server *connect.Server, svc Identity
 		connect.Method{Spec: identityProviderServiceCreateIdentityProviderSpec(), Handler: adapter.createIdentityProvider},
 		connect.Method{Spec: identityProviderServiceUpdateIdentityProviderSpec(), Handler: adapter.updateIdentityProvider},
 		connect.Method{Spec: identityProviderServiceDeleteIdentityProviderSpec(), Handler: adapter.deleteIdentityProvider},
+		connect.Method{Spec: identityProviderServiceGetIdentityProviderClientSecretSpec(), Handler: adapter.getIdentityProviderClientSecret},
 	)
 }
 
@@ -149,6 +178,10 @@ func (UnimplementedIdentityProviderServiceHandler) UpdateIdentityProvider(contex
 
 func (UnimplementedIdentityProviderServiceHandler) DeleteIdentityProvider(context.Context, *v1.DeleteIdentityProviderRequest) (*emptypb.Empty, error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, "memos.api.v1.IdentityProviderService.DeleteIdentityProvider is not implemented")
+}
+
+func (UnimplementedIdentityProviderServiceHandler) GetIdentityProviderClientSecret(context.Context, *v1.GetIdentityProviderClientSecretRequest) (*v1.GetIdentityProviderClientSecretResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "memos.api.v1.IdentityProviderService.GetIdentityProviderClientSecret is not implemented")
 }
 
 type identityProviderServiceClient struct {
@@ -190,6 +223,14 @@ func (c *identityProviderServiceClient) UpdateIdentityProvider(ctx context.Conte
 func (c *identityProviderServiceClient) DeleteIdentityProvider(ctx context.Context, req *v1.DeleteIdentityProviderRequest) (*emptypb.Empty, error) {
 	var res emptypb.Empty
 	if err := c.client.CallUnary(ctx, identityProviderServiceDeleteIdentityProviderSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *identityProviderServiceClient) GetIdentityProviderClientSecret(ctx context.Context, req *v1.GetIdentityProviderClientSecretRequest) (*v1.GetIdentityProviderClientSecretResponse, error) {
+	var res v1.GetIdentityProviderClientSecretResponse
+	if err := c.client.CallUnary(ctx, identityProviderServiceGetIdentityProviderClientSecretSpec(), req, &res); err != nil {
 		return nil, err
 	}
 	return &res, nil
@@ -253,6 +294,18 @@ func (h identityProviderServiceHandler) deleteIdentityProvider(ctx context.Conte
 		return err
 	}
 	res, err := h.svc.DeleteIdentityProvider(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h identityProviderServiceHandler) getIdentityProviderClientSecret(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.GetIdentityProviderClientSecretRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.GetIdentityProviderClientSecret(ctx, &req)
 	if err != nil {
 		return err
 	}

@@ -288,14 +288,19 @@ func (x *FieldMapping) GetAvatarUrl() string {
 }
 
 type OAuth2Config struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ClientId      string                 `protobuf:"bytes,1,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
-	ClientSecret  string                 `protobuf:"bytes,2,opt,name=client_secret,json=clientSecret,proto3" json:"client_secret,omitempty"`
-	AuthUrl       string                 `protobuf:"bytes,3,opt,name=auth_url,json=authUrl,proto3" json:"auth_url,omitempty"`
-	TokenUrl      string                 `protobuf:"bytes,4,opt,name=token_url,json=tokenUrl,proto3" json:"token_url,omitempty"`
-	UserInfoUrl   string                 `protobuf:"bytes,5,opt,name=user_info_url,json=userInfoUrl,proto3" json:"user_info_url,omitempty"`
-	Scopes        []string               `protobuf:"bytes,6,rep,name=scopes,proto3" json:"scopes,omitempty"`
-	FieldMapping  *FieldMapping          `protobuf:"bytes,7,opt,name=field_mapping,json=fieldMapping,proto3" json:"field_mapping,omitempty"`
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	ClientId string                 `protobuf:"bytes,1,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
+	// The OAuth2 client secret. INPUT_ONLY: only accepted
+	// on CreateIdentityProvider and UpdateIdentityProvider
+	// requests; never echoed on List/Get. Admins recover
+	// the stored value via
+	// IdentityProviderService.GetIdentityProviderClientSecret.
+	ClientSecret  string        `protobuf:"bytes,2,opt,name=client_secret,json=clientSecret,proto3" json:"client_secret,omitempty"`
+	AuthUrl       string        `protobuf:"bytes,3,opt,name=auth_url,json=authUrl,proto3" json:"auth_url,omitempty"`
+	TokenUrl      string        `protobuf:"bytes,4,opt,name=token_url,json=tokenUrl,proto3" json:"token_url,omitempty"`
+	UserInfoUrl   string        `protobuf:"bytes,5,opt,name=user_info_url,json=userInfoUrl,proto3" json:"user_info_url,omitempty"`
+	Scopes        []string      `protobuf:"bytes,6,rep,name=scopes,proto3" json:"scopes,omitempty"`
+	FieldMapping  *FieldMapping `protobuf:"bytes,7,opt,name=field_mapping,json=fieldMapping,proto3" json:"field_mapping,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -663,6 +668,101 @@ func (x *DeleteIdentityProviderRequest) GetName() string {
 	return ""
 }
 
+type GetIdentityProviderClientSecretRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Required. The resource name of the identity provider
+	// whose client_secret to reveal.
+	// Format: identity-providers/{idp}
+	Name          string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetIdentityProviderClientSecretRequest) Reset() {
+	*x = GetIdentityProviderClientSecretRequest{}
+	mi := &file_api_v1_idp_service_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetIdentityProviderClientSecretRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetIdentityProviderClientSecretRequest) ProtoMessage() {}
+
+func (x *GetIdentityProviderClientSecretRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_api_v1_idp_service_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetIdentityProviderClientSecretRequest.ProtoReflect.Descriptor instead.
+func (*GetIdentityProviderClientSecretRequest) Descriptor() ([]byte, []int) {
+	return file_api_v1_idp_service_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *GetIdentityProviderClientSecretRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+type GetIdentityProviderClientSecretResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The plain-text OAuth2 client_secret currently
+	// stored for the named identity provider. Empty when
+	// the row exists but has no OAuth2 config attached
+	// (e.g. a TYPE_UNSPECIFIED stub row).
+	ClientSecret  string `protobuf:"bytes,1,opt,name=client_secret,json=clientSecret,proto3" json:"client_secret,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetIdentityProviderClientSecretResponse) Reset() {
+	*x = GetIdentityProviderClientSecretResponse{}
+	mi := &file_api_v1_idp_service_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetIdentityProviderClientSecretResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetIdentityProviderClientSecretResponse) ProtoMessage() {}
+
+func (x *GetIdentityProviderClientSecretResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_api_v1_idp_service_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetIdentityProviderClientSecretResponse.ProtoReflect.Descriptor instead.
+func (*GetIdentityProviderClientSecretResponse) Descriptor() ([]byte, []int) {
+	return file_api_v1_idp_service_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *GetIdentityProviderClientSecretResponse) GetClientSecret() string {
+	if x != nil {
+		return x.ClientSecret
+	}
+	return ""
+}
+
 var File_api_v1_idp_service_proto protoreflect.FileDescriptor
 
 const file_api_v1_idp_service_proto_rawDesc = "" +
@@ -689,10 +789,10 @@ const file_api_v1_idp_service_proto_rawDesc = "" +
 	"\fdisplay_name\x18\x02 \x01(\tR\vdisplayName\x12\x14\n" +
 	"\x05email\x18\x03 \x01(\tR\x05email\x12\x1d\n" +
 	"\n" +
-	"avatar_url\x18\x04 \x01(\tR\tavatarUrl\"\x85\x02\n" +
+	"avatar_url\x18\x04 \x01(\tR\tavatarUrl\"\x8a\x02\n" +
 	"\fOAuth2Config\x12\x1b\n" +
-	"\tclient_id\x18\x01 \x01(\tR\bclientId\x12#\n" +
-	"\rclient_secret\x18\x02 \x01(\tR\fclientSecret\x12\x19\n" +
+	"\tclient_id\x18\x01 \x01(\tR\bclientId\x12(\n" +
+	"\rclient_secret\x18\x02 \x01(\tB\x03\xe0A\x04R\fclientSecret\x12\x19\n" +
 	"\bauth_url\x18\x03 \x01(\tR\aauthUrl\x12\x1b\n" +
 	"\ttoken_url\x18\x04 \x01(\tR\btokenUrl\x12\"\n" +
 	"\ruser_info_url\x18\x05 \x01(\tR\vuserInfoUrl\x12\x16\n" +
@@ -713,13 +813,19 @@ const file_api_v1_idp_service_proto_rawDesc = "" +
 	"updateMask\"Z\n" +
 	"\x1dDeleteIdentityProviderRequest\x129\n" +
 	"\x04name\x18\x01 \x01(\tB%\xe0A\x02\xfaA\x1f\n" +
-	"\x1dmemos.api.v1/IdentityProviderR\x04name2\xe7\x06\n" +
+	"\x1dmemos.api.v1/IdentityProviderR\x04name\"c\n" +
+	"&GetIdentityProviderClientSecretRequest\x129\n" +
+	"\x04name\x18\x01 \x01(\tB%\xe0A\x02\xfaA\x1f\n" +
+	"\x1dmemos.api.v1/IdentityProviderR\x04name\"N\n" +
+	"'GetIdentityProviderClientSecretResponse\x12#\n" +
+	"\rclient_secret\x18\x01 \x01(\tR\fclientSecret2\xb9\b\n" +
 	"\x17IdentityProviderService\x12\x94\x01\n" +
 	"\x15ListIdentityProviders\x12*.memos.api.v1.ListIdentityProvidersRequest\x1a+.memos.api.v1.ListIdentityProvidersResponse\"\"\x82\xd3\xe4\x93\x02\x1c\x12\x1a/api/v1/identity-providers\x12\x93\x01\n" +
 	"\x13GetIdentityProvider\x12(.memos.api.v1.GetIdentityProviderRequest\x1a\x1e.memos.api.v1.IdentityProvider\"2\xdaA\x04name\x82\xd3\xe4\x93\x02%\x12#/api/v1/{name=identity-providers/*}\x12\xb0\x01\n" +
 	"\x16CreateIdentityProvider\x12+.memos.api.v1.CreateIdentityProviderRequest\x1a\x1e.memos.api.v1.IdentityProvider\"I\xdaA\x11identity_provider\x82\xd3\xe4\x93\x02/:\x11identity_provider\"\x1a/api/v1/identity-providers\x12\xd7\x01\n" +
 	"\x16UpdateIdentityProvider\x12+.memos.api.v1.UpdateIdentityProviderRequest\x1a\x1e.memos.api.v1.IdentityProvider\"p\xdaA\x1didentity_provider,update_mask\x82\xd3\xe4\x93\x02J:\x11identity_provider25/api/v1/{identity_provider.name=identity-providers/*}\x12\x91\x01\n" +
-	"\x16DeleteIdentityProvider\x12+.memos.api.v1.DeleteIdentityProviderRequest\x1a\x16.google.protobuf.Empty\"2\xdaA\x04name\x82\xd3\xe4\x93\x02%*#/api/v1/{name=identity-providers/*}B\xa4\x01\n" +
+	"\x16DeleteIdentityProvider\x12+.memos.api.v1.DeleteIdentityProviderRequest\x1a\x16.google.protobuf.Empty\"2\xdaA\x04name\x82\xd3\xe4\x93\x02%*#/api/v1/{name=identity-providers/*}\x12\xcf\x01\n" +
+	"\x1fGetIdentityProviderClientSecret\x124.memos.api.v1.GetIdentityProviderClientSecretRequest\x1a5.memos.api.v1.GetIdentityProviderClientSecretResponse\"?\xdaA\x04name\x82\xd3\xe4\x93\x022\x120/api/v1/{name=identity-providers/*}/clientSecretB\xa4\x01\n" +
 	"\x10com.memos.api.v1B\x0fIdpServiceProtoP\x01Z-github.com/incurl/riff/proto/gen/api/v1;apiv1\xa2\x02\x03MAX\xaa\x02\fMemos.Api.V1\xca\x02\fMemos\\Api\\V1\xe2\x02\x18Memos\\Api\\V1\\GPBMetadata\xea\x02\x0eMemos::Api::V1b\x06proto3"
 
 var (
@@ -735,21 +841,23 @@ func file_api_v1_idp_service_proto_rawDescGZIP() []byte {
 }
 
 var file_api_v1_idp_service_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_api_v1_idp_service_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
+var file_api_v1_idp_service_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
 var file_api_v1_idp_service_proto_goTypes = []any{
-	(IdentityProvider_Type)(0),            // 0: memos.api.v1.IdentityProvider.Type
-	(*IdentityProvider)(nil),              // 1: memos.api.v1.IdentityProvider
-	(*IdentityProviderConfig)(nil),        // 2: memos.api.v1.IdentityProviderConfig
-	(*FieldMapping)(nil),                  // 3: memos.api.v1.FieldMapping
-	(*OAuth2Config)(nil),                  // 4: memos.api.v1.OAuth2Config
-	(*ListIdentityProvidersRequest)(nil),  // 5: memos.api.v1.ListIdentityProvidersRequest
-	(*ListIdentityProvidersResponse)(nil), // 6: memos.api.v1.ListIdentityProvidersResponse
-	(*GetIdentityProviderRequest)(nil),    // 7: memos.api.v1.GetIdentityProviderRequest
-	(*CreateIdentityProviderRequest)(nil), // 8: memos.api.v1.CreateIdentityProviderRequest
-	(*UpdateIdentityProviderRequest)(nil), // 9: memos.api.v1.UpdateIdentityProviderRequest
-	(*DeleteIdentityProviderRequest)(nil), // 10: memos.api.v1.DeleteIdentityProviderRequest
-	(*fieldmaskpb.FieldMask)(nil),         // 11: google.protobuf.FieldMask
-	(*emptypb.Empty)(nil),                 // 12: google.protobuf.Empty
+	(IdentityProvider_Type)(0),                      // 0: memos.api.v1.IdentityProvider.Type
+	(*IdentityProvider)(nil),                        // 1: memos.api.v1.IdentityProvider
+	(*IdentityProviderConfig)(nil),                  // 2: memos.api.v1.IdentityProviderConfig
+	(*FieldMapping)(nil),                            // 3: memos.api.v1.FieldMapping
+	(*OAuth2Config)(nil),                            // 4: memos.api.v1.OAuth2Config
+	(*ListIdentityProvidersRequest)(nil),            // 5: memos.api.v1.ListIdentityProvidersRequest
+	(*ListIdentityProvidersResponse)(nil),           // 6: memos.api.v1.ListIdentityProvidersResponse
+	(*GetIdentityProviderRequest)(nil),              // 7: memos.api.v1.GetIdentityProviderRequest
+	(*CreateIdentityProviderRequest)(nil),           // 8: memos.api.v1.CreateIdentityProviderRequest
+	(*UpdateIdentityProviderRequest)(nil),           // 9: memos.api.v1.UpdateIdentityProviderRequest
+	(*DeleteIdentityProviderRequest)(nil),           // 10: memos.api.v1.DeleteIdentityProviderRequest
+	(*GetIdentityProviderClientSecretRequest)(nil),  // 11: memos.api.v1.GetIdentityProviderClientSecretRequest
+	(*GetIdentityProviderClientSecretResponse)(nil), // 12: memos.api.v1.GetIdentityProviderClientSecretResponse
+	(*fieldmaskpb.FieldMask)(nil),                   // 13: google.protobuf.FieldMask
+	(*emptypb.Empty)(nil),                           // 14: google.protobuf.Empty
 }
 var file_api_v1_idp_service_proto_depIdxs = []int32{
 	0,  // 0: memos.api.v1.IdentityProvider.type:type_name -> memos.api.v1.IdentityProvider.Type
@@ -759,19 +867,21 @@ var file_api_v1_idp_service_proto_depIdxs = []int32{
 	1,  // 4: memos.api.v1.ListIdentityProvidersResponse.identity_providers:type_name -> memos.api.v1.IdentityProvider
 	1,  // 5: memos.api.v1.CreateIdentityProviderRequest.identity_provider:type_name -> memos.api.v1.IdentityProvider
 	1,  // 6: memos.api.v1.UpdateIdentityProviderRequest.identity_provider:type_name -> memos.api.v1.IdentityProvider
-	11, // 7: memos.api.v1.UpdateIdentityProviderRequest.update_mask:type_name -> google.protobuf.FieldMask
+	13, // 7: memos.api.v1.UpdateIdentityProviderRequest.update_mask:type_name -> google.protobuf.FieldMask
 	5,  // 8: memos.api.v1.IdentityProviderService.ListIdentityProviders:input_type -> memos.api.v1.ListIdentityProvidersRequest
 	7,  // 9: memos.api.v1.IdentityProviderService.GetIdentityProvider:input_type -> memos.api.v1.GetIdentityProviderRequest
 	8,  // 10: memos.api.v1.IdentityProviderService.CreateIdentityProvider:input_type -> memos.api.v1.CreateIdentityProviderRequest
 	9,  // 11: memos.api.v1.IdentityProviderService.UpdateIdentityProvider:input_type -> memos.api.v1.UpdateIdentityProviderRequest
 	10, // 12: memos.api.v1.IdentityProviderService.DeleteIdentityProvider:input_type -> memos.api.v1.DeleteIdentityProviderRequest
-	6,  // 13: memos.api.v1.IdentityProviderService.ListIdentityProviders:output_type -> memos.api.v1.ListIdentityProvidersResponse
-	1,  // 14: memos.api.v1.IdentityProviderService.GetIdentityProvider:output_type -> memos.api.v1.IdentityProvider
-	1,  // 15: memos.api.v1.IdentityProviderService.CreateIdentityProvider:output_type -> memos.api.v1.IdentityProvider
-	1,  // 16: memos.api.v1.IdentityProviderService.UpdateIdentityProvider:output_type -> memos.api.v1.IdentityProvider
-	12, // 17: memos.api.v1.IdentityProviderService.DeleteIdentityProvider:output_type -> google.protobuf.Empty
-	13, // [13:18] is the sub-list for method output_type
-	8,  // [8:13] is the sub-list for method input_type
+	11, // 13: memos.api.v1.IdentityProviderService.GetIdentityProviderClientSecret:input_type -> memos.api.v1.GetIdentityProviderClientSecretRequest
+	6,  // 14: memos.api.v1.IdentityProviderService.ListIdentityProviders:output_type -> memos.api.v1.ListIdentityProvidersResponse
+	1,  // 15: memos.api.v1.IdentityProviderService.GetIdentityProvider:output_type -> memos.api.v1.IdentityProvider
+	1,  // 16: memos.api.v1.IdentityProviderService.CreateIdentityProvider:output_type -> memos.api.v1.IdentityProvider
+	1,  // 17: memos.api.v1.IdentityProviderService.UpdateIdentityProvider:output_type -> memos.api.v1.IdentityProvider
+	14, // 18: memos.api.v1.IdentityProviderService.DeleteIdentityProvider:output_type -> google.protobuf.Empty
+	12, // 19: memos.api.v1.IdentityProviderService.GetIdentityProviderClientSecret:output_type -> memos.api.v1.GetIdentityProviderClientSecretResponse
+	14, // [14:20] is the sub-list for method output_type
+	8,  // [8:14] is the sub-list for method input_type
 	8,  // [8:8] is the sub-list for extension type_name
 	8,  // [8:8] is the sub-list for extension extendee
 	0,  // [0:8] is the sub-list for field type_name
@@ -791,7 +901,7 @@ func file_api_v1_idp_service_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_api_v1_idp_service_proto_rawDesc), len(file_api_v1_idp_service_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   10,
+			NumMessages:   12,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

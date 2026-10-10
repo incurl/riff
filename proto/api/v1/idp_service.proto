@@ -46,6 +46,19 @@ service IdentityProviderService {
     option (google.api.http) = {delete: "/api/v1/{name=identity-providers/*}"};
     option (google.api.method_signature) = "name";
   }
+
+  // GetIdentityProviderClientSecret returns the current
+  // client_secret for an OAuth2 identity provider. The
+  // secret is masked on every other read path (List,
+  // Get) — this RPC is the only way an admin can recover
+  // a stored secret after it has been written. Admin-only;
+  // the response is plain-text and SHOULD be treated as
+  // sensitive by the caller (the SPA renders it into a
+  // copyable one-shot field and immediately discards).
+  rpc GetIdentityProviderClientSecret(GetIdentityProviderClientSecretRequest) returns (GetIdentityProviderClientSecretResponse) {
+    option (google.api.http) = {get: "/api/v1/{name=identity-providers/*}/clientSecret"};
+    option (google.api.method_signature) = "name";
+  }
 }
 
 message IdentityProvider {
@@ -95,7 +108,12 @@ message FieldMapping {
 
 message OAuth2Config {
   string client_id = 1;
-  string client_secret = 2;
+  // The OAuth2 client secret. INPUT_ONLY: only accepted
+  // on CreateIdentityProvider and UpdateIdentityProvider
+  // requests; never echoed on List/Get. Admins recover
+  // the stored value via
+  // IdentityProviderService.GetIdentityProviderClientSecret.
+  string client_secret = 2 [(google.api.field_behavior) = INPUT_ONLY];
   string auth_url = 3;
   string token_url = 4;
   string user_info_url = 5;
@@ -145,4 +163,22 @@ message DeleteIdentityProviderRequest {
     (google.api.field_behavior) = REQUIRED,
     (google.api.resource_reference) = {type: "memos.api.v1/IdentityProvider"}
   ];
+}
+
+message GetIdentityProviderClientSecretRequest {
+  // Required. The resource name of the identity provider
+  // whose client_secret to reveal.
+  // Format: identity-providers/{idp}
+  string name = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.resource_reference) = {type: "memos.api.v1/IdentityProvider"}
+  ];
+}
+
+message GetIdentityProviderClientSecretResponse {
+  // The plain-text OAuth2 client_secret currently
+  // stored for the named identity provider. Empty when
+  // the row exists but has no OAuth2 config attached
+  // (e.g. a TYPE_UNSPECIFIED stub row).
+  string client_secret = 1;
 }
