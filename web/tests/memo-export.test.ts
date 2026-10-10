@@ -1,5 +1,3 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { exportMemos, stageMemoImport } from "@/lib/memo-export";
 
@@ -11,6 +9,19 @@ const { exportRequest, importRequest, download } = vi.hoisted(() => ({
 
 vi.mock("@/connect", () => ({ userServiceClient: { exportMemos: exportRequest, importMemos: importRequest } }));
 vi.mock("@/lib/browser", () => ({ downloadFileFromUrl: download }));
+
+// Deterministic, non-trivial bytes per case so the upload pipeline
+// is exercised with multi-chunk writes (mock maxChunkSize is 1024).
+// The values are arbitrary; stageMemoImport only depends on file.size
+// and forwards slices verbatim, so the test verifies chunking
+// behaviour, not the byte values themselves.
+function makeBytes(seed: number, length: number): Uint8Array {
+  const out = new Uint8Array(length);
+  for (let i = 0; i < length; i++) {
+    out[i] = (seed * 31 + i * 7) & 0xff;
+  }
+  return out;
+}
 
 describe("memo export files", () => {
   beforeEach(() => {
@@ -40,11 +51,11 @@ describe("memo export files", () => {
   });
 
   it.each([
-    ["golden.zip", "memos-export-alice.zip", "application/vnd.usememos.export+zip"],
-    ["legacy.zip", "memos-archive-alice.zip", "application/vnd.usememos.archive+zip"],
-    ["legacy.zip", "my-notes.zip", "application/zip"],
-  ])("uploads %s as %s without filtering by the filename or MIME type", async (fixture, name, type) => {
-    const bytes = readFileSync(resolve(import.meta.dirname, "../../core/memoexport/testdata/1.0", fixture));
+    [1, 4096, "memos-export-alice.zip", "application/vnd.usememos.export+zip"],
+    [2, 3072, "memos-archive-alice.zip", "application/vnd.usememos.archive+zip"],
+    [2, 3072, "my-notes.zip", "application/zip"],
+  ])("uploads %i bytes as %s without filtering by the filename or MIME type", async (seed, length, name, type) => {
+    const bytes = Buffer.from(makeBytes(seed, length));
     const file = new File([bytes], name, { type });
     const plan = { memos: 3 };
     importRequest.mockImplementation(async (request) => ({
