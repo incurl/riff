@@ -66,7 +66,15 @@ func Register(app core.App, limiter ratelimit.Limiter) error {
 
 	// Stub services: every method returns Unimplemented.
 	apiv1connect.RegisterAIServiceHandler(srv, apiv1connect.UnimplementedAIServiceHandler{})
-	apiv1connect.RegisterIdentityProviderServiceHandler(srv, apiv1connect.UnimplementedIdentityProviderServiceHandler{})
+
+	// IdentityProviderService — admin-gated CRUD for the
+	// `identity_providers` table. The Connect handler is
+	// the sole authority (the collection's *Rule fields
+	// are nil). See `identity_providers.go` for the
+	// List/Get/Create/Update/Delete implementations and
+	// `auth_sso.go` for the SignIn sso_credentials branch
+	// that consumes the `config` blob.
+	apiv1connect.RegisterIdentityProviderServiceHandler(srv, NewIdentityProviderServer(app))
 
 	// Mount the connect-go HTTP handlers on a stdlib mux.
 	mux := http.NewServeMux()

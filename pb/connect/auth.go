@@ -54,7 +54,7 @@ func NewAuthServer(app core.App, rateLimiter ratelimit.Limiter) *AuthServer {
 func (s *AuthServer) SignIn(ctx context.Context, req *v1.SignInRequest) (*v1.SignInResponse, error) {
 	pw := req.GetPasswordCredentials()
 	if pw == nil {
-		return nil, connect.NewError(connect.CodeUnimplemented, "SSO sign-in is not implemented")
+		return s.signInWithSSO(ctx, req.GetSsoCredentials())
 	}
 
 	// Per-account budget: Consume on the submitted username, Refund
