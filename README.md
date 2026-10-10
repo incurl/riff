@@ -63,7 +63,7 @@ candidates such as `26.09-rc.1`. Calendar release tags have no `v` prefix.
 ```
             ┌──────────────────────────────┐
             │  web/ (React SPA)             │  ← Vite + React Query, Memos UI
-            │  served from pb/frontend/     │
+            │  built into server/frontend/  │
             └──────────────┬───────────────┘
                            │ Connect/gRPC
             ┌──────────────▼───────────────┐

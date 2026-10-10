@@ -17,8 +17,11 @@ kill_timeout = "10s"
 
 [build]
   # Use the production Dockerfile under scripts/. Frontend assets
-  # must already be present at pb/frontend/dist (run
-  # `cd web && pnpm release` before `fly deploy`).
+  # must already be present at server/frontend/dist (run
+  # `cd web && pnpm release` before `fly deploy`). The
+  # //go:embed in server/frontend/embed.go bakes the tree into
+  # the riff binary during the Docker build, so no additional
+  # COPY is needed for the SPA.
   dockerfile = "scripts/Dockerfile"
 
 [env]

@@ -13,10 +13,13 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 COPY . .
 
 # Build the riff binary. The frontend must be pre-built into
-# pb/frontend/dist before invoking `docker build`; see
+# server/frontend/dist before invoking `docker build`; see
 # `cd web && pnpm release` in AGENTS.md. The `.dockerignore`
 # already excludes `web/`, so a `pnpm install` inside the
-# container is not possible.
+# container is not possible. The `//go:embed all:dist`
+# directive in server/frontend/embed.go bakes the dist tree
+# into the riff binary at this `go build` step, so the final
+# runtime image does not need a separate `COPY` for the SPA.
 #
 # VERSION comes from `scripts/release_version.sh
 # development-version` for development builds, or from the

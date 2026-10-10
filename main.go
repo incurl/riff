@@ -26,6 +26,7 @@ import (
 	// the migratecmd plugin and to RunAllMigrations() on Bootstrap.
 	_ "github.com/incurl/riff/pb/migrations"
 
+	"github.com/incurl/riff/server/frontend"
 	"github.com/incurl/riff/server/mcp"
 )
 
@@ -132,6 +133,17 @@ func main() {
 	if err := connect.Register(app, rateLimiter); err != nil {
 		log.Fatal(err)
 	}
+
+	// --- SPA static handler --------------------------------------------
+	// Serve the Vite build of the Memos React app from the root of
+	// the HTTP listener. The package embeds server/frontend/dist
+	// at compile time (the `pnpm release` step must run before
+	// `go build` for that to compile; CI does this in the
+	// build-frontend job, see .github/workflows/release.yml).
+	// PocketBase's more specific routes (/_/*, /api/*, /mcp) take
+	// precedence over the package's {path...} catch-all, so this
+	// only serves what the framework does not.
+	frontend.Register(app)
 
 	// --- MCP endpoint ---------------------------------------------------
 	// /mcp (Streamable HTTP). The service builds its tool catalog
