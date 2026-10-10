@@ -52,7 +52,7 @@ golangci-lint run --fix                          # Auto-fix lint, including goim
 cd web && pnpm install             # Install dependencies
 cd web && pnpm dev                 # Dev server on :3001
 cd web && pnpm lint                # Type check + Biome lint
-cd web && pnpm test                # Vitest unit tests
+cd web && pnpm test                # Vitest unit tests (requires Node 24+; see web/.nvmrc and the Frontend Conventions)
 cd web && pnpm build               # Production build
 cd web && pnpm release             # Build SPA into pb/frontend/dist
 
@@ -146,6 +146,7 @@ Tests live next to the code (`*_test.go`) or in the same package's `*_test.go` b
 - Use Tailwind CSS v4 utilities, `cn()` for class merging, and CVA for variants.
 - Reuse Base UI primitives and existing components before adding new UI primitives.
 - Keep generated proto TypeScript under `web/src/types/proto/` out of manual edits and Biome rewrites.
+- The test runner requires Node 24+ (matches `web/package.json` `engines.node` and `web/.nvmrc`). `pnpm test` runs a `pretest` guard that aborts with a clear message on older Node — `nvm use` (or `fnm use` / `volta run pnpm test`) is the supported path to the right version.
 
 ## Database And Proto Rules
 

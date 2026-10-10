@@ -13,6 +13,7 @@
     "lint:fix": "biome check --write src tests",
     "format": "biome format --write src tests",
     "test": "vitest run",
+    "pretest": "node -e \"const m=parseInt(process.versions.node.split('.')[0],10);if(m<24){console.error('pnpm test requires Node >=24 (engines.node in web/package.json); found '+process.versions.node+'. Run \\'nvm use\\' (web/.nvmrc pins 24) or put a Node 24 binary on PATH.');process.exit(1)}\"",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage"
   },
