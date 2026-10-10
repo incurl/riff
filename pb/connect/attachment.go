@@ -13,12 +13,12 @@ import (
 )
 
 // AttachmentServer implements the Memos AttachmentService.
-// Phase 4 wired the read path (ListAttachments). Wave 5 adds
-// the metadata-only write path (Create/Get/Update/Delete and
-// BatchDelete). File uploads go through PocketBase's standard
-// /api/collections/{patches,samples}/records endpoints; the
-// chunked UploadAttachment RPC remains unimplemented because
-// riff doesn't ship an upload-session manager.
+// Phase 4 wired the read path (ListAttachments). Wave 5
+// added the metadata-only write path (Create/Get/Update/
+// Delete and BatchDelete). Slice 2 of the SPA-unblock
+// roadmap implemented the chunked UploadAttachment RPC
+// in attachment_upload.go; sessions are owned by the
+// package-level uploadManager (upload_session.go).
 //
 // In our schema, "attachments" is a federated concept: a
 // PO-33 patch is stored in the `patches` collection and a
@@ -118,6 +118,9 @@ func patchToAttachment(rec *core.Record) *v1.Attachment {
 	if mm := readMotionMedia(rec); mm != nil {
 		a.MotionMedia = mm
 	}
+	if md := mediaMetadataFromRecord(rec); md != nil {
+		a.MediaMetadata = md
+	}
 	return a
 }
 
@@ -143,6 +146,9 @@ func sampleToAttachment(rec *core.Record) *v1.Attachment {
 	a.CreateTime = timestampToProto(rec.GetDateTime("created"))
 	if mm := readMotionMedia(rec); mm != nil {
 		a.MotionMedia = mm
+	}
+	if md := mediaMetadataFromRecord(rec); md != nil {
+		a.MediaMetadata = md
 	}
 	return a
 }
