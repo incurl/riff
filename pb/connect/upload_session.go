@@ -209,6 +209,7 @@ func (m *uploadManager) reapExpired() {
 		s.closeAndCleanup()
 	}
 }
+
 // closeAndCleanup closes the open file handle and removes
 // the staged file from disk. It is a no-op for sessions
 // that never opened a file (shouldn't happen — the spec

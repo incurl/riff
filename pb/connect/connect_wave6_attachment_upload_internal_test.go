@@ -113,15 +113,15 @@ func TestUploadAttachment_SpecRejectsMissingFields(t *testing.T) {
 	}{
 		{
 			name: "no filename",
-			req: uploadSpecRequest(memoName, "", "application/octet-stream", 0),
+			req:  uploadSpecRequest(memoName, "", "application/octet-stream", 0),
 		},
 		{
 			name: "no type",
-			req: uploadSpecRequest(memoName, "kick.po33", "", 0),
+			req:  uploadSpecRequest(memoName, "kick.po33", "", 0),
 		},
 		{
 			name: "no memo",
-			req: uploadSpecRequest("", "kick.po33", "application/octet-stream", 0),
+			req:  uploadSpecRequest("", "kick.po33", "application/octet-stream", 0),
 		},
 		{
 			name: "content in spec",
@@ -140,7 +140,7 @@ func TestUploadAttachment_SpecRejectsMissingFields(t *testing.T) {
 		},
 		{
 			name: "malformed memo",
-			req: uploadSpecRequest("not-a-memo", "kick.po33", "application/octet-stream", 0),
+			req:  uploadSpecRequest("not-a-memo", "kick.po33", "application/octet-stream", 0),
 		},
 	}
 	for _, tc := range cases {
