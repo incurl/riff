@@ -6,6 +6,7 @@ import { TimelineViewProvider } from "./contexts/ViewContext";
 import useNavigateTo from "./hooks/useNavigateTo";
 import { useUserLocale } from "./hooks/useUserLocale";
 import { useUserTheme } from "./hooks/useUserTheme";
+import { toBasenameAwareUrl } from "./utils/base-path";
 import { cleanupExpiredOAuthState } from "./utils/oauth";
 
 const App = () => {
@@ -56,7 +57,12 @@ const App = () => {
 
     document.title = instanceGeneralSetting.customProfile.title;
     const link = document.querySelector("link[rel~='icon']") as HTMLLinkElement;
-    link.href = instanceGeneralSetting.customProfile.logoUrl || "/logo.webp";
+    // The favicon override runs against the document origin, not the SPA's
+    // router basename; on a sub-path mount the bare `/logo.webp` would
+    // resolve to the static site's root and 404. `toBasenameAwareUrl`
+    // prepends the basename for relative paths and passes absolute URLs
+    // (https:, data:, //host/...) through unchanged.
+    link.href = toBasenameAwareUrl(instanceGeneralSetting.customProfile.logoUrl || "/logo.webp");
   }, [instanceGeneralSetting.customProfile]);
 
   return (

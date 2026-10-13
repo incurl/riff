@@ -67,6 +67,18 @@ primary_region = "nrt"
 kill_signal = "SIGTERM"
 kill_timeout = "30s"
 
+# 512MB of swap, so a transient memory spike under load doesn't OOM-kill
+# the 256MB cgroup. See DECISIONS.md "Swap on 256MB Fly machine" for the
+# why-not-container-side rationale.
+#
+# NOTE: this is a top-level key, NOT a field on `[[vm]]`. flyctl's
+# `internal/appconfig/config.go` defines `SwapSizeMB *int` only on the
+# top-level `Config` struct; the `Compute` struct that `[[vm]]` decodes
+# to has no `swap_size_mb` tag. `fly deploy` does not run strict TOML
+# validation by default, so a misplaced line is silently dropped during
+# decoding and the machine boots with no swap. Keep it at this scope.
+swap_size_mb = 512
+
 [build]
   # The image, as pushed to Fly's registry by the commands above. `fly deploy`
   # resolves this reference on the Fly side (it does not read the local docker
@@ -169,12 +181,6 @@ kill_timeout = "30s"
 # 1 shared CPU / 1 GB is the sizing the old manifest asked for and matches a
 # single-machine PocketBase + SQLite instance. Bump `size` (not `memory`
 # alone) if thumbnailing or transcription starts swapping.
-# `swap_size_mb = 512` adds a real swap-backed device on the machine's
-# local disk, providing headroom when riff + caddy + PocketBase push the
-# 256MB cgroup past its limit under load (large memos, in-flight
-# transcription buffers, webhook delivery backlog). See DECISIONS.md
-# "Swap on 256MB Fly machine" for the why-not-container-side rationale.
 [[vm]]
   size = "shared-cpu-1x"
   memory = "256mb"
-  swap_size_mb = 512

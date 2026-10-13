@@ -5,6 +5,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import useCurrentUser from "@/hooks/useCurrentUser";
 import MainLayout from "@/layouts/MainLayout";
 import RootLayout from "@/layouts/RootLayout";
+import { BASE_PATH } from "@/utils/base-path";
 import { lazyWithReload } from "@/utils/lazy";
 import { RequireAuthRoute, RequireFullInitializationRoute, RequireGuestRoute, RequireInstanceInitializationRoute } from "./guards";
 import { LegacyProfileRedirect } from "./LegacyProfileRedirect";
@@ -161,6 +162,14 @@ export const routeConfig: RouteObject[] = [
   },
 ];
 
-const router = createBrowserRouter(routeConfig);
+// `basename` is the prefix caddy (or whatever reverse proxy fronts the SPA)
+// strips before handing the request to riff. Vite's `base` rewrites the asset
+// URLs in `index.html` and exposes the same value at `import.meta.env.BASE_URL`;
+// the Connect transport in `web/src/connect.ts` also reads it. Setting React
+// Router's `basename` here keeps `<Link to>`, `<Navigate to>`, and
+// `useNavigate()` calls aligned with that prefix, so a build of the SPA under
+// `/community/` (Caddyfile.fly.community layout) does not silently navigate
+// back to the document root when the user clicks anything.
+const router = createBrowserRouter(routeConfig, { basename: BASE_PATH });
 
 export default router;

@@ -28,6 +28,28 @@ vi.mock("@/utils/i18n", () => ({
     )[key] ?? key,
 }));
 
+// Pin BASE_PATH=/community so the basename-aware branch of
+// `toBasenameAwareUrl` is exercised. The default Vitest environment ships
+// BASE_PATH="/" (Vite's default `base: "/"`), which would make every
+// assertion vacuously identity and miss the very regression this test
+// suite is here to prevent. See the same fixture pattern in
+// auth-redirect.test.ts.
+//
+// `vi.mock` is hoisted by Vitest to the top of the file before any test
+// runs, so it applies to every `describe` block in this module. The
+// tests in the first `<About>` block do not exercise the logo URL and
+// are unaffected; the logo-URL assertion has been moved into the new
+// `<About> logo URL under a sub-path mount` block below.
+vi.mock("@/utils/base-path", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/utils/base-path")>();
+  return {
+    ...actual,
+    BASE_PATH: "/community",
+    withBasePath: (path: string) => actual.withBasePathWith(path, "/community"),
+    toBasenameAwareUrl: (url: string | undefined | null) => actual.toBasenameAwareUrlWith(url, "/community"),
+  };
+});
+
 const renderAbout = () => render(<About />);
 
 describe("<About>", () => {
@@ -123,20 +145,6 @@ describe("<About>", () => {
     expect(screen.getByText("about.demo")).toBeInTheDocument();
   });
 
-  it("uses custom branding for the identity hero and credits Memos", () => {
-    mockInstance.generalSetting = {
-      customProfile: { title: "Team Notes", description: "Our shared scratchpad.", logoUrl: "/custom-logo.png" },
-    };
-
-    renderAbout();
-
-    expect(screen.getByRole("heading", { name: "Team Notes" })).toBeInTheDocument();
-    expect(screen.getByText("Our shared scratchpad.")).toBeInTheDocument();
-    expect(screen.queryByText(/Your thoughts, your data/i)).not.toBeInTheDocument();
-    expect(document.querySelector("img")).toHaveAttribute("src", "/custom-logo.png");
-    expect(screen.getByText("Powered by Memos")).toBeInTheDocument();
-  });
-
   it("renders as a page without nested mobile padding", () => {
     const { container } = renderAbout();
 
@@ -144,5 +152,75 @@ describe("<About>", () => {
     const contentWrapper = container.querySelector("section > div");
     expect(contentWrapper).toHaveClass("w-full");
     expect(contentWrapper).not.toHaveClass("px-4");
+  });
+});
+
+// The default-LOGO constant in About.tsx is `/logo.webp`, and the
+// `customProfile.logoUrl` slot is documented as accepting a path relative
+// to the SPA root. Both flow into an <img src>, which resolves against the
+// document origin — not the router basename. On a sub-path mount, a
+// root-relative URL 404s against the static site that owns the document
+// root. These tests pin both branches under a sub-path mount so a future
+// regression to a root-relative string can't slip through.
+describe("<About> logo URL under a sub-path mount", () => {
+  beforeEach(() => {
+    mockInstance.profile = {
+      version: "0.25.0",
+      commit: "0123456789abcdef0123456789abcdef01234567",
+      instanceUrl: "https://notes.example.com",
+      demo: false,
+      admin: { username: "steven", displayName: "Steven" },
+    };
+    mockInstance.generalSetting = {};
+  });
+
+  it("uses custom branding for the identity hero and credits Memos", () => {
+    // The "Team Notes" customisation also exercises the logo-URL path,
+    // so it lives in this describe block: the top-of-file `vi.mock`
+    // pins BASE_PATH=/community, and `toBasenameAwareUrl` is expected
+    // to prefix the relative logoUrl. The pre-existing assertion
+    // (originally written under the root-mount default) is updated
+    // here to match the prefixed URL.
+    mockInstance.generalSetting = {
+      customProfile: { title: "Team Notes", description: "Our shared scratchpad.", logoUrl: "/custom-logo.png" },
+    };
+
+    const { container } = renderAbout();
+
+    expect(screen.getByRole("heading", { name: "Team Notes" })).toBeInTheDocument();
+    expect(screen.getByText("Our shared scratchpad.")).toBeInTheDocument();
+    expect(screen.queryByText(/Your thoughts, your data/i)).not.toBeInTheDocument();
+    expect(container.querySelector("img")).toHaveAttribute("src", "/community/custom-logo.png");
+    expect(screen.getByText("Powered by Memos")).toBeInTheDocument();
+  });
+
+  it("prefixes the default fallback `/logo.webp` with the SPA mount path", () => {
+    const { container } = renderAbout();
+
+    expect(container.querySelector("img")).toHaveAttribute("src", "/community/logo.webp");
+  });
+
+  it("prefixes a customisation-supplied relative logoUrl with the SPA mount path", () => {
+    mockInstance.generalSetting = {
+      customProfile: { title: "Team Notes", description: "Our shared scratchpad.", logoUrl: "/custom-logo.png" },
+    };
+
+    const { container } = renderAbout();
+
+    expect(container.querySelector("img")).toHaveAttribute("src", "/community/custom-logo.png");
+  });
+
+  it("passes an absolute URL through unchanged", () => {
+    mockInstance.generalSetting = {
+      customProfile: {
+        title: "Team Notes",
+        description: "Our shared scratchpad.",
+        logoUrl: "https://cdn.example.com/team-logo.png",
+      },
+    };
+
+    const { container } = renderAbout();
+
+    expect(container.querySelector("img")).toHaveAttribute("src", "https://cdn.example.com/team-logo.png");
   });
 });

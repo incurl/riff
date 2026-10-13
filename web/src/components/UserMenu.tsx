@@ -30,6 +30,7 @@ import { locales } from "@/i18n";
 import { cn } from "@/lib/utils";
 import { Routes } from "@/router";
 import { UserNotification_Status } from "@/types/proto/api/v1/user_service_pb";
+import { withBasePath } from "@/utils/base-path";
 import { getLocaleDisplayName, getLocaleWithFallback, loadLocale, useTranslate } from "@/utils/i18n";
 import { getThemeWithFallback, loadTheme, THEME_OPTIONS } from "@/utils/theme";
 
@@ -166,7 +167,7 @@ const UserMenu = ({ onClose }: { onClose: () => void }) => {
     } catch {
       // Ignore errors from localStorage operations.
     }
-    window.location.replace(Routes.AUTH);
+    window.location.replace(withBasePath(Routes.AUTH));
   };
 
   return (

@@ -1,5 +1,6 @@
 import { useInstance } from "@/contexts/InstanceContext";
 import { cn } from "@/lib/utils";
+import { toBasenameAwareUrl } from "@/utils/base-path";
 import UserAvatar from "./UserAvatar";
 
 interface Props {
@@ -23,7 +24,15 @@ function MemosLogo(props: Props) {
   const scale = COMPACT_SCALE[size];
   const { generalSetting: instanceGeneralSetting } = useInstance();
   const title = instanceGeneralSetting.customProfile?.title || "Memos";
-  const avatarUrl = instanceGeneralSetting.customProfile?.logoUrl || "/full-logo.webp";
+  // The fallback `/full-logo.webp` is a baked SPA asset that lives under the
+  // basename; on a sub-path mount (Caddyfile.fly.community layout with
+  // VITE_BASE_PATH=/community/) the browser resolves a root-relative path
+  // against the document origin, which on that layout is the static site
+  // (404). `toBasenameAwareUrl` prepends the SPA mount prefix for relative
+  // paths and passes absolute URLs (https:, data:, //host/...) through
+  // unchanged, so a customisation that already supplies a full URL is
+  // preserved exactly.
+  const avatarUrl = toBasenameAwareUrl(instanceGeneralSetting.customProfile?.logoUrl || "/full-logo.webp");
 
   return (
     <div className={cn("relative min-w-0 h-auto", props.className)}>

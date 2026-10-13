@@ -4,6 +4,7 @@ import { absolutifyLink } from "@/lib/browser";
 import { handleError } from "@/lib/error";
 import { ROUTES } from "@/router/routes";
 import { IdentityProvider, IdentityProvider_Type } from "@/types/proto/api/v1/idp_service_pb";
+import { withBasePath } from "@/utils/base-path";
 import { useTranslate } from "@/utils/i18n";
 import { storeOAuthState } from "@/utils/oauth";
 
@@ -17,7 +18,12 @@ const IdentityProviderButtons = ({ identityProviderList, redirectTarget }: Props
 
   const handleSignInWithIdentityProvider = async (identityProvider: IdentityProvider) => {
     if (identityProvider.type === IdentityProvider_Type.OAUTH2) {
-      const redirectUri = absolutifyLink(ROUTES.AUTH_CALLBACK);
+      // The OAuth provider round-trips `redirect_uri` to the browser, so the
+      // path-absolute `ROUTES.AUTH_CALLBACK` must include the reverse-proxy
+      // mount prefix (e.g. "/community/auth/callback") — path-absolute URLs
+      // resolve against the origin, not against the Vite `<base href>`, so
+      // `absolutifyLink` alone would drop the prefix under a sub-path build.
+      const redirectUri = absolutifyLink(withBasePath(ROUTES.AUTH_CALLBACK));
       const oauth2Config = identityProvider.config?.config?.case === "oauth2Config" ? identityProvider.config.config.value : undefined;
       if (!oauth2Config) {
         toast.error("Identity provider configuration is invalid.");

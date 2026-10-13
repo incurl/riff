@@ -5,6 +5,316 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## Logo URLs were hardcoded as root-relative paths, breaking the SPA on a sub-path mount (2026-10-14)
+
+A follow-up audit of the `redirectOnAuthFailure` fix surfaced a second
+instance of the same bug pattern in the SPA's brand assets. On the
+`Caddyfile.fly.community` layout (`VITE_BASE_PATH=/community/`), the
+sidebar logo rendered `<img src="/full-logo.webp">`; the browser
+resolved that against the document origin, which on that layout is
+the static site — 404. Same root cause as the auth-redirect bug
+(router-level path handed to a browser-level API), same fix shape
+(wrap with `withBasePath` / a new `toBasenameAwareUrl` helper), but
+five different call sites, one of which carries a user-supplied URL.
+
+**The bug.** Five sites render an `<img src>` (or `<link href>` for
+the favicon) whose value is either a hardcoded `/logo.webp` /
+`/full-logo.webp` default, or a `customProfile.logoUrl` string the
+operator entered in the **Customize server** settings dialog:
+
+* `web/src/components/MemosLogo.tsx:26` — sidebar brand lockup
+  (`/full-logo.webp`).
+* `web/src/components/AuthPageLayout.tsx:66` — auth-page header
+  (`/logo.webp`).
+* `web/src/App.tsx:59` — favicon runtime override
+  (`/logo.webp`).
+* `web/src/pages/About.tsx:18,49` — About page hero
+  (`DEFAULT_LOGO = "/logo.webp"`).
+* `web/src/components/UpdateCustomizedProfileDialog.tsx:63` — the
+  restore-defaults button writes `"/logo.webp"` to the form's
+  `logoUrl` state, which then round-trips through the instance
+  setting.
+
+`MemosLogo.tsx`, `AuthPageLayout.tsx`, `App.tsx`, and `About.tsx`
+are render-time sites and need a basename-aware wrap.
+`UpdateCustomizedProfileDialog.tsx` is **not** touched here — it
+stores a form value, and the persisted `customProfile.logoUrl` must
+stay environment-agnostic (`/logo.webp`, not `/community/logo.webp`)
+so the same value reads correctly under any future redeploy. The
+render sites are the only place conversion happens.
+
+**The fix.** Add a `toBasenameAwareUrl(url)` helper to
+`web/src/utils/base-path.ts` that returns the input unchanged when
+it is an absolute URL (matched against the WHATWG scheme regex, plus
+the protocol-relative `//host/...` form) and otherwise calls
+`withBasePathWith(url, BASE_PATH)`. The pure function
+`toBasenameAwareUrlWith(url, prefix)` is also exported for the
+`base-path.test.ts` pure-function tests, matching the existing
+`withBasePath` / `withBasePathWith` split. The four render sites wrap
+their value through `toBasenameAwareUrl(...)`; the form's
+restore-defaults button is unchanged. Empty / nullish input returns
+`""` so a single-expression call site
+(`src={toBasenameAwareUrl(profile.logoUrl || "/logo.webp")}`) does
+not need a separate nullish guard.
+
+**Why a new helper, not just `withBasePath` everywhere.** A user
+customisation can enter an absolute URL (`https://cdn.example.com/
+team-logo.png`) and the form's existing data-URL handling already
+relies on passing those strings through untouched. Re-prefixing them
+with `withBasePath` would produce
+`https://example.com/community/logo.png`, which is broken. The
+`isAbsoluteUrl` predicate is the same WHATWG scheme check the
+browser uses to decide whether `new URL(input, base)` resolves to
+the same origin, so the helper matches the browser's own definition
+of "this is a different host / a baked asset."
+
+**Files.**
+* `web/src/utils/base-path.ts` — add `isAbsoluteUrl` and
+  `toBasenameAwareUrlWith` (pure) and `toBasenameAwareUrl`
+  (BASE_PATH-driven), with full doc comments.
+* `web/src/components/MemosLogo.tsx` — import the helper and wrap
+  the `customProfile.logoUrl || "/full-logo.webp"` default; add a
+  9-line comment that documents the basename contract.
+* `web/src/components/AuthPageLayout.tsx` — same wrap on the
+  auth-page header `<img>`.
+* `web/src/App.tsx` — same wrap on the favicon `useEffect` write.
+* `web/src/pages/About.tsx` — same wrap on the `instanceLogo`
+  computation, with a 7-line comment that points at the other three
+  render sites.
+* `web/src/components/UpdateCustomizedProfileDialog.tsx` —
+  **unchanged** (form-state value, must stay environment-agnostic).
+* `web/tests/base-path.test.ts` — 16 new assertions.
+* `web/tests/memos-logo.test.tsx` — **new** (4 tests).
+* `web/tests/auth-page-layout.test.tsx` — 3 new tests, plus a
+  `BASE_PATH=/community` mock at the top of the file (matches the
+  `auth-redirect.test.ts` pattern).
+* `web/tests/about-page.test.tsx` — 3 new tests + 1 relocated
+  (the "uses custom branding" assertion now lives in the new
+  describe block and expects the prefixed URL).
+* `web/tests/app-favicon.test.tsx` — **new** (4 tests).
+
+**Test coverage.** Three test files pin the basename-aware branches:
+
+* `web/tests/base-path.test.ts` — 16 new assertions for
+  `isAbsoluteUrl` and `toBasenameAwareUrlWith`, including the
+  http(s) / data: / blob: / file: / `//host` shapes and the
+  empty-input contract.
+* `web/tests/memos-logo.test.tsx` (new file, 4 tests) — renders
+  `MemosLogo` under a `BASE_PATH=/community` mock and asserts the
+  `<img>` `src` is `/community/full-logo.webp` for the default
+  fallback, `/community/uploads/team-logo.png` for a user-supplied
+  relative path, and is unchanged for an absolute URL or a
+  `data:` URL.
+* `web/tests/auth-page-layout.test.tsx` — 3 new tests in a
+  `logo URL under a sub-path mount` describe block, same three
+  branches as the MemosLogo suite.
+* `web/tests/about-page.test.tsx` — 3 new tests in a similar
+  sub-path describe block; the pre-existing "uses custom branding"
+  assertion is moved into the new block with its `src` expectation
+  updated to `/community/custom-logo.png` (it was
+  `/custom-logo.png`, written under the root-mount default).
+* `web/tests/app-favicon.test.tsx` (new file, 4 tests) — renders
+  the full `App` with a memory router, plants a `<link rel="icon">`
+  in `<head>`, and asserts the favicon `useEffect` writes
+  `/community/logo.webp` for the default fallback,
+  `/community/uploads/team-favicon.ico` for a relative user
+  value, and unchanged for an absolute URL. A fourth test pins the
+  early-return guard so the static HTML's `<link>` is left alone
+  on a fresh install with no `customProfile`.
+
+The full vitest suite passes 1815/1818 (the 3 failures are the
+pre-existing `Promise.withResolvers` Node-22+ issues in
+`memo-editor-transcription` and `use-attachment-transcription`; env
+is Node 20.19.2, CI is Node 24). Biome is clean on all 10 touched
+files. tsc has no new errors in any of the touched files
+(the 2 errors that remain — leaflet `@react-leaflet/core` and the
+`FunctionType` reference in `src/types/view.d.ts` — are pre-existing
+and unrelated).
+
+**Out of scope (separate fix).** The same audit found that
+`web/src/utils/attachment.ts::getAttachmentUrl` and friends build
+URLs as `${window.location.origin}/file/...`, which on a sub-path
+mount is the document origin (the static site) and 404s. The
+underlying API for `/file/...` is served by PocketBase at the host
+root under caddy, so the correct shape for a sub-path mount is to
+build `${window.location.origin}${BASE_PATH}/file/...`. That is a
+bigger refactor (every consumer of `attachment.externalLink` and
+`getAttachmentThumbnailUrl` would need to flow through the helper)
+and a separate decision entry; this entry intentionally limits
+itself to the brand-asset case the user surfaced.
+
+## `redirectOnAuthFailure` was producing a router-level URL for a browser-level API (2026-10-14)
+
+A 401 returned by the Connect/gRPC interceptor on a sub-path mount
+(`Caddyfile.fly.community` layout with `VITE_BASE_PATH=/community/`)
+caused the SPA to land on `https://ravine.fly.dev/auth?redirect=…`
+instead of `…/community/auth?redirect=…`. The browser then 404'd
+against the static site's `file_server`, because the SPA was hitting
+caddy at the root of the host. The Caddyfile 308 (`/<spa-path> → /
+/community/<spa-path>`) is a defense-in-depth fix for the symptom; the
+real bug is in `web/src/utils/auth-redirect.ts` and is fixed by this
+entry.
+
+**The bug.** `web/src/utils/auth-redirect.ts::redirectOnAuthFailure`
+is the imperative fallback for the connect-rpc 401 path that runs
+outside React Router. It called `window.location.replace(buildAuthRoute
+({...}))`, where `buildAuthRoute` returns a **router-level** path like
+`/auth?redirect=%2Fhome%3Ftab%3Dpins`. React Router's own
+`<Navigate to={buildAuthRoute(...)} />` adds the basename to such
+paths, so the same value works in the `web/src/router/guards.tsx` and
+`web/src/layouts/RootLayout.tsx` call sites. `window.location.replace`
+is not a React Router API — it is a raw browser navigation that does
+not consult `basename` — so a sub-path build needs the destination
+URL to already be a full browser URL. Every other
+`window.location.replace` / `window.location.href` call site that
+needs a riff SPA path already wraps with `withBasePath`
+(`web/src/components/UserMenu.tsx` for sign-out,
+`web/src/pages/AuthCallback.tsx` for the OAuth `redirect_uri`); this
+one did not.
+
+**The fix.** Import `withBasePath` from `web/src/utils/base-path.ts`
+and wrap the `buildAuthRoute` result so the destination handed to
+`window.location.replace` is `withBasePath(buildAuthRoute({...}))`. The
+embedded `?redirect=` value stays basename-stripped (router-level)
+because post-auth navigation flows through React Router's
+`navigate()`, which adds the basename automatically. `withBasePath` is
+the identity for root-mounted builds, so the change is a no-op on
+local dev and on the `Caddyfile.fly` (SPA-at-root) layout. The leading
+doc comment on the function and the test file's leading comment both
+record the prefix contract explicitly so a future edit cannot regress
+without breaking an assertion.
+
+**Why two layers, not just one.** The Caddyfile 308 already in place
+catches the user who types `/auth?…` directly into the address bar,
+clicks a stale social/bookmark link, or follows a redirect chain that
+loses the prefix. The SPA fix makes the SPA's own navigation
+self-correcting: every `redirectOnAuthFailure` produces a URL that
+goes straight to the right place on its own, with no proxy help. The
+Caddyfile change is preserved so a misbehaving client (an extension,
+an old service worker, a custom OAuth callback that hardcodes
+`/auth/callback`) still gets a useful redirect instead of a 404.
+
+**Test coverage.** `web/tests/auth-redirect.test.ts` now exercises the
+sub-path mount (`BASE_PATH=/community/`) for every code path. The two
+existing assertions that previously pinned the bug (the
+"redirects to /auth" and "strips the mount prefix" cases) now expect
+`/community/auth?redirect=…`. A new defence-in-depth case asserts the
+**opposite** sides of the basename boundary: the destination starts
+with `/community/auth?` while the embedded `redirect` parameter is the
+basename-stripped `/setting/profile?tab=2#bio`. If either side
+regresses (a future edit that prefixes the embedded value, or one
+that drops the prefix from the destination), this case fails first.
+
+**Files.**
+* `web/src/utils/auth-redirect.ts` — wrap `buildAuthRoute` with
+  `withBasePath`; add a 9-line comment documenting the prefix
+  contract on the destination vs. the embedded `?redirect=`.
+* `web/tests/auth-redirect.test.ts` — re-style the file so the same
+  `BASE_PATH=/community` mock covers the whole describe; add the
+  boundary-defence test case described above.
+* `scripts/Caddyfile.fly.community` — unchanged by this entry; the
+  existing `@spa` 308 handle block is the defence-in-depth layer
+  described in the rationale above.
+
+**Verification.** `cd web && pnpm test` runs all 10 auth-redirect
+cases plus the 15 base-path and 14 redirect-safety cases (39 / 39
+in those three files; 1789 / 1792 across the full suite, the three
+unrelated failures are `Promise.withResolvers` calls in
+`memo-editor-transcription` and `use-attachment-transcription`
+tests that require Node ≥22, see `engines.node` in `web/package.json`).
+Biome is clean on both changed files. The Go service is not touched.
+
+## Fly deploy wrappers (`dev_image_*.sh`) are POSIX sh, not bash (2026-10-14)
+
+`scripts/dev_image_build.sh` and `scripts/dev_image_push.sh` were
+originally tagged `#!/usr/bin/env bash` and used bash-only constructs
+(`[[ … ]]`, `set -o pipefail`). The GoLand "Shell Script" run
+configurations in `.run/Docker__build_riff_dev.run.xml`,
+`.run/Docker__push_riff_dev_to_fly.run.xml`, and
+`.run/Fly__deploy_ravine.run.xml` hardcoded `/bin/bash` as the
+interpreter, so the bug only surfaced when the script was invoked
+through any other path — `sh scripts/dev_image_*.sh` from the zsh
+terminal on the dev host, the GitHub Actions runner that uses
+`bash:` by default but no longer has the shebang honoured when the
+runner matrix is sh, or any future cron / CI lane that calls the
+script through `/bin/sh`. On Debian / Ubuntu / Alpine (where
+`/bin/sh` is dash), the first `[[ -z "${repo_root}" ]]` produced
+`[[: not found` and the script aborted before any precondition
+check ran, so the deploy failed with no context. The CI workflow
+files (`.github/workflows/release.yml`,
+`.github/workflows/build-canary-image.yml`) all use `bash
+scripts/release_version.sh` explicitly, which is why this didn't
+show up there; the failure path is the developer-side local push.
+
+A follow-up also extracted the third wrapper — the `fly deploy -a
+ravine --image …` + caddy-routed `curl /community/api/health`
+smoke test that previously lived inside
+`.run/Fly__deploy_ravine.run.xml` as an inline `SCRIPT_TEXT` — into
+`scripts/fly_deploy.sh`. The GoLand config's `SCRIPT_TEXT` is now
+empty, `SCRIPT_PATH` points at the file, and
+`EXECUTE_SCRIPT_FILE=true`; the smoke test and the
+`~/.fly/bin/flyctl` PATH fallback live in version-controlled sh
+where they get syntax highlighting, shellcheck, and the same
+`dash -n` guard as the other two. The failure that prompted this
+was `command not found: flyctl` (exit 127) when the deploy config
+ran through the GoLand "Execute in terminal" path: a non-interactive
+subshell that does not source `~/.zshrc` and therefore does not
+have the official Fly installer's `~/.fly/bin` directory on PATH.
+The same `for _fly_bin in "$HOME/.fly/bin" …` lookup that
+`dev_image_push.sh` already does is now in `fly_deploy.sh`, so the
+config works regardless of how it's invoked.
+
+**What we did.** Rewrote all three wrappers (`dev_image_build.sh`,
+`dev_image_push.sh`, `fly_deploy.sh`) as POSIX sh, changed the
+shebangs to `#!/bin/sh`, replaced every `[[ … ]]` with
+`[ … ]`, replaced `set -euo pipefail` with `set -eu` (the
+scripts have no pipelines, so `-o pipefail` was never load-bearing),
+and updated the three GoLand run configs to use `/bin/sh` as the
+interpreter. The GoLand configs now point `SCRIPT_PATH` at the real
+`scripts/*.sh` files with `EXECUTE_SCRIPT_FILE=true` (the file is
+the source of truth, not an XML `SCRIPT_TEXT` literal). The single
+bash call inside `dev_image_build.sh`
+(`bash scripts/release_version.sh development-version`) is left
+explicit, so `release_version.sh` is still the only bash entry
+point. Added a header comment to each script explaining the choice
+and a "Local dev image build / Fly registry push" row in the
+AGENTS.md Change Routing table documenting the parse-time check.
+
+**Why POSIX.** The deploy pipeline already has several
+load-bearing footguns (the `swap_size_mb` table-array gotcha in
+`fly.toml`, the `--build-context ravine=...` buildkit context that
+Fly's remote builder cannot satisfy, the `Caddyfile` base-name
+caddy adapter autodetect). Adding a "you must invoke this with
+bash" precondition to the dev script would be the fourth
+one-operator-mistake failure mode, and it is the only one with no
+upstream signal — the script just dies silently because `sh`
+prints `[[: not found` once and the build never starts. POSIX sh
+removes the entire class: `dash`, `bash`, `ksh`, and zsh's `sh`
+emulation all behave identically, and the same script works under
+`sh scripts/dev_image_build.sh`, `./scripts/dev_image_build.sh`
+(where the kernel honours the shebang and picks sh on systems
+where sh is dash), and the GoLand config (where the IDE now
+matches what the script asks for).
+
+**Verification.** `dash -n` on each of the three scripts parses
+without error; `dash scripts/dev_image_build.sh` from a non-git
+working tree prints `Not inside a git working tree.` and exits 1,
+the same precondition path bash exercised before. A full
+`dash scripts/dev_image_build.sh` inside the repo builds `riff:dev`
+end-to-end (the `exec docker buildx build …` line at the bottom
+runs unchanged). `bash -n` is no longer the load-bearing parse
+check; if a future change reintroduces a bashism, the parse-time
+guard `dash -n scripts/dev_image_*.sh scripts/fly_deploy.sh` in CI
+will fail before the deploy runs. The GoLand `Fly: deploy ravine`
+config now resolves `flyctl` via the same `~/.fly/bin` lookup that
+`dev_image_push.sh` uses, so the `command not found: flyctl`
+exit-127 path is closed.
+
+**AGENTS.md update.** The new Change Routing row notes the
+deliberate POSIX-only constraint, the third script, and points the
+"Verify" column at `dash -n` plus the manual `dash` precondition
+test.
+
 ## Fly `http_service.checks` must match the Caddyfile layout (2026-10-13)
 
 `ravine.fly.dev` returned `HTTP ERROR 503` (Fly's generic page) for
@@ -76,9 +386,9 @@ PocketBase, the SQLite writer). A 512MB swap is a cheap safety
 net that converts transient spikes into a slowdown instead of a
 restart.
 
-**What we did.** `fly.toml` sets `swap_size_mb = 512` on the
-`[[vm]]` block. Fly provisions a real swap-backed disk device on
-the machine at boot; the kernel sees it as a normal swap entry
+**What we did.** `fly.toml` sets `swap_size_mb = 512` at the top
+level of the file. Fly provisions a real swap-backed disk device
+on the machine at boot; the kernel sees it as a normal swap entry
 in `/proc/swaps` and uses it transparently. No container-side
 work, no capability changes, no image bloat.
 
@@ -124,6 +434,24 @@ persistent volume would also bill the swap against the 1GB
 volume size. (Now moot under `swap_size_mb` — the machine's
 swap disk is its own thing, separate from both the rootfs and
 the persistent volume.)
+
+**Correction (2026-10-14).** The original entry said the field
+lives on the `[[vm]]` block. It does not. flyctl's
+`internal/appconfig/config.go` defines `SwapSizeMB *int` only on
+the top-level `Config` struct (with TOML tag
+`toml:"swap_size_mb,omitempty"`), and the `Compute` struct that
+`[[vm]]` deserializes to has no such tag — its fields are
+`size`, `memory`, the inlined `fly.MachineGuest`
+(`cpus`/`cpu_kind`/`kernel_args`/`host_dedication_id`/
+`persist_rootfs`/`processes`/`gpu_kind`), and `processes`. The
+deploy-time conversion in `internal/appconfig/machines.go` reads
+`c.SwapSizeMB` from the top-level `Config` and writes it to
+`mConfig.Init.SwapSizeMB`. Because `fly deploy` does not run
+strict TOML validation by default, the original
+`[[vm]] swap_size_mb = 512` was silently dropped during decoding
+and the 256MB machine booted with no swap. The fix is to lift
+the line out of `[[vm]]` and place it at the top level of
+`fly.toml` next to `app`, `kill_signal`, etc.
 
 ## Static site at root, riff under `/community/` (2026-10-13)
 

@@ -9,6 +9,7 @@ import {
   WEB_CLIPPER_URL,
 } from "@/lib/constants";
 import { getReleaseTag } from "@/lib/release-version";
+import { toBasenameAwareUrl } from "@/utils/base-path";
 import { useTranslate } from "@/utils/i18n";
 
 const GITHUB_COMMIT_URL_PREFIX = "https://github.com/usememos/memos/commit/";
@@ -46,7 +47,14 @@ const About = () => {
 
   const customProfile = generalSetting.customProfile;
   const instanceTitle = customProfile?.title || DEFAULT_TITLE;
-  const instanceLogo = customProfile?.logoUrl || DEFAULT_LOGO;
+  // `instanceLogo` is rendered in an <img src> (a browser-level API), so
+  // it must be a URL that resolves against the document origin — not the
+  // router's basename. The `toBasenameAwareUrl` wrap prepends the SPA
+  // mount prefix for the relative default (`/logo.webp`) and for any
+  // user-supplied relative path, while passing absolute URLs (https:,
+  // data:, //host/...) through unchanged. See the same pattern in
+  // MemosLogo.tsx and AuthPageLayout.tsx.
+  const instanceLogo = toBasenameAwareUrl(customProfile?.logoUrl || DEFAULT_LOGO);
   const isCustomBranded = instanceTitle !== DEFAULT_TITLE;
 
   const releaseTag = getReleaseTag(profile.version);

@@ -20,6 +20,7 @@ import {
   OAuth2Config,
   OAuth2ConfigSchema,
 } from "@/types/proto/api/v1/idp_service_pb";
+import { withBasePath } from "@/utils/base-path";
 import { useTranslate } from "@/utils/i18n";
 
 const DEFAULT_TEMPLATE = "GitHub";
@@ -504,7 +505,9 @@ function CreateIdentityProviderDialog({ open, onOpenChange, identityProvider, on
               <FormSection title={t("setting.sso.oauth-configuration")} description={t("setting.sso.oauth-configuration-description")}>
                 <div className="rounded-md border bg-background px-3 py-3">
                   <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{t("setting.sso.redirect-url")}</p>
-                  <p className="mt-2 break-all font-mono text-xs text-foreground sm:text-sm">{absolutifyLink("/auth/callback")}</p>
+                  <p className="mt-2 break-all font-mono text-xs text-foreground sm:text-sm">
+                    {absolutifyLink(withBasePath("/auth/callback"))}
+                  </p>
                   <p className="mt-2 text-xs text-muted-foreground">{t("setting.sso.redirect-url-description")}</p>
                 </div>
 

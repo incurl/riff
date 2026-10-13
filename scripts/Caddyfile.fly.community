@@ -28,6 +28,31 @@
 #   https://<host>/community (no slash)     ->  308 redirect to /community/
 #                                                so the SPA never boots
 #                                                against a parent-only URL
+#   https://<host>/<spa-path>               ->  308 to /community/<spa-path>
+#                                                so a root-prefixed SPA URL
+#                                                (e.g. /auth, /u/peter)
+#                                                doesn't 404 against the
+#                                                static site's file_server.
+#                                                The query string is
+#                                                preserved by the {uri}
+#                                                placeholder, so a URL
+#                                                like /auth?redirect=%2F
+#                                                lands as
+#                                                /community/auth?redirect=%2F
+#                                                and the SPA picks up the
+#                                                intent. {path} would lose
+#                                                the query string, which is
+#                                                why {uri} is the right
+#                                                choice here.
+#                                                Excluded are the static
+#                                                site's own paths (so a
+#                                                future /blog under the
+#                                                static site still serves
+#                                                as itself, not as a
+#                                                SPA redirect) and the
+#                                                /community/* tree
+#                                                (covered by handle_path
+#                                                below, not by this block).
 #   anything else (e.g. a typo)             ->  404 (file_server misses)
 #
 # The riff SPA is built with VITE_BASE_PATH=/community/ pnpm release so
@@ -52,7 +77,7 @@
 	encode zstd gzip
 
 	# Caddy evaluates handle blocks in declaration order; the first
-	# matcher that matches wins. We declare three, in this order:
+	# matcher that matches wins. We declare four, in this order:
 	#   1. exact /community      -> 308 to /community/, so the SPA's
 	#                               relative URL resolution finds
 	#                               /community/assets/... instead of
@@ -60,10 +85,18 @@
 	#                               static site).
 	#   2. /community/*          -> reverse_proxy to riff (prefix
 	#                               stripped by handle_path).
-	#   3. anything else         -> file_server for the static site.
+	#   3. SPA-only paths        -> 308 to /community/<path>, so a
+	#                               root-prefixed SPA URL doesn't 404
+	#                               against the static site's
+	#                               file_server. Excluded are paths
+	#                               the static site already serves
+	#                               (so a new /blog under the static
+	#                               site still answers as itself, not
+	#                               as a SPA redirect).
+	#   4. anything else         -> file_server for the static site.
 	#
 	# The bare-`handle` at the end is a catch-all and is evaluated
-	# only when the previous two blocks do not match. Putting
+	# only when the previous three blocks do not match. Putting
 	# `redir` outside any `handle` block would be evaluated AFTER
 	# the catch-all and never see the request, because file_server
 	# would already have served a 404 for /community (no trailing
@@ -83,7 +116,31 @@
 		import proxy
 	}
 
-	# 3. Everything else: the static site. file_server handles
+	# 3. SPA-only paths: redirect to /community/<path>. The named
+	# matcher @spa excludes anything that already has a more specific
+	# handler above (/community, /community/*) and the static site's
+	# top-level paths (so a future /blog under the static site still
+	# serves as itself).
+	#
+	# The static-site exclusion list is the set of top-level
+	# directories in /var/www/site/ as of the last build of the
+	# ravine Jekyll tree; if the static site adds a new top-level
+	# page (e.g. /blog, /changelog), add it here or it will be
+	# silently redirected to /community/blog and the SPA will 404
+	# on it. /assets is also excluded (favicon, CSS, JS for the
+	# static site). / and /index.html are excluded so the homepage
+	# of the static site still resolves.
+	#
+	# Caddy's redir {uri} placeholder preserves the query string,
+	# so /auth?redirect=%2F becomes /community/auth?redirect=%2F.
+	@spa {
+		not path /community /community/* /assets /assets/* /docs /docs/* /download /download/* /firmware /firmware/* /hardware /hardware/* /reader /reader/* /workflow /workflow/* /favicon.svg /CNAME /index.html
+	}
+	handle @spa {
+		redir * /community{uri} 308
+	}
+
+	# 4. Everything else: the static site. file_server handles
 	# index.html fallbacks (so /about/ resolves to /about/index.html)
 	# and Content-Type detection. 404s are intentional: a path that
 	# doesn't match a file in the site tree is a real miss.

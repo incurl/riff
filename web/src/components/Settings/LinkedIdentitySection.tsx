@@ -10,6 +10,7 @@ import { absolutifyLink } from "@/lib/browser";
 import { handleError } from "@/lib/error";
 import { IdentityProvider, IdentityProvider_Type } from "@/types/proto/api/v1/idp_service_pb";
 import { LinkedIdentity } from "@/types/proto/api/v1/user_service_pb";
+import { stripBasePath, withBasePath } from "@/utils/base-path";
 import { useTranslate } from "@/utils/i18n";
 import { storeOAuthState } from "@/utils/oauth";
 import SettingGroup from "./SettingGroup";
@@ -92,7 +93,10 @@ const LinkedIdentitySection = () => {
     if (!currentUser?.name) {
       return;
     }
-    const redirectUri = absolutifyLink("/auth/callback");
+    // See `IdentityProviderButtons` — `redirect_uri` round-trips through the
+    // OAuth provider, so it must include the reverse-proxy mount prefix that
+    // `absolutifyLink` (an anchor-resolution helper) does not add on its own.
+    const redirectUri = absolutifyLink(withBasePath("/auth/callback"));
     const oauth2Config = identityProvider.config?.config?.case === "oauth2Config" ? identityProvider.config.config.value : undefined;
     if (!oauth2Config) {
       toast.error("Identity provider configuration is invalid.");
@@ -100,7 +104,11 @@ const LinkedIdentitySection = () => {
     }
 
     try {
-      const returnUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+      // `window.location.pathname` carries the reverse-proxy mount prefix; the
+      // stored `returnUrl` is fed back into `navigate()` after the OAuth dance,
+      // so it must be in the React Router-level form (basename-stripped) to
+      // avoid double-prefixing the destination.
+      const returnUrl = `${stripBasePath(window.location.pathname)}${window.location.search}${window.location.hash}`;
       const { state, codeChallenge } = await storeOAuthState(identityProvider.name, "link", returnUrl, currentUser.name);
 
       let authUrl = `${oauth2Config.authUrl}?client_id=${

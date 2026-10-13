@@ -9,6 +9,7 @@ import { absolutifyLink } from "@/lib/browser";
 import { handleError } from "@/lib/error";
 import { ROUTES } from "@/router/routes";
 import { getSafeRedirectPath } from "@/utils/auth-redirect";
+import { withBasePath } from "@/utils/base-path";
 import { validateOAuthState } from "@/utils/oauth";
 
 interface State {
@@ -77,7 +78,7 @@ const AuthCallback = () => {
     }
 
     const { flowMode, identityProviderName, returnUrl, linkingUserName, codeVerifier } = validatedState;
-    const redirectUri = absolutifyLink("/auth/callback");
+    const redirectUri = absolutifyLink(withBasePath("/auth/callback"));
     handledRef.current = true;
 
     (async () => {
