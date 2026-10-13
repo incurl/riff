@@ -188,6 +188,18 @@ func memoLinksFanOut(app core.App, mdSvc markdown.Service, rec *core.Record) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			// A panic in any single worker must not take
+			// the whole test binary down. We log and exit
+			// the worker; the parent goroutine sees the
+			// dropped wg.Done via Wait() and moves on.
+			// Same idea as the recover() in
+			// pruneStaleMemoLinks.
+			defer func() {
+				if r := recover(); r != nil {
+					memoLinkLog.Warn("memo_links: worker panicked; app likely shutting down",
+						"memo", memoID, "panic", r)
+				}
+			}()
 			for u := range jobs {
 				if isMemoLinksShutdown() {
 					continue
@@ -285,8 +297,17 @@ func pruneStaleMemoLinks(app core.App, memoID string, keep []string) {
 // failed fetch stores the error string in `error` and leaves
 // title/description/image empty so the React client can render
 // a "preview unavailable" hint and the next save retries.
+//
+// When the memo_links collection is missing (e.g. on a test
+// app that did not run the migration), upsertMemoLinkRow
+// returns ok=false and this function bails before doing any
+// network or DB work. That keeps a single broken app from
+// triggering a nil-deref panic in the worker pool.
 func upsertOneMemoLink(app core.App, ctx context.Context, memoID, rawURL string) {
-	row := upsertMemoLinkRow(app, memoID, rawURL)
+	row, ok := upsertMemoLinkRow(app, memoID, rawURL)
+	if !ok {
+		return
+	}
 
 	fetcher := linkmeta.NewHTMLMetaFetcher()
 	meta, err := fetcher.Get(ctx, rawURL)
@@ -319,28 +340,38 @@ func upsertOneMemoLink(app core.App, ctx context.Context, memoID, rawURL string)
 // creates a fresh one. The unique index on (memo, url) makes
 // the SELECT cheap; a second save with the same URL reuses the
 // row instead of inserting a duplicate.
-func upsertMemoLinkRow(app core.App, memoID, rawURL string) *core.Record {
+//
+// The second return value is false when the collection is
+// missing (the migration has not run on this app). The caller
+// must short-circuit and skip the save; the prior nil-return
+// with a synthetic record panicked the worker pool whenever
+// PocketBase handed back a nil collection with a non-nil
+// error.
+func upsertMemoLinkRow(app core.App, memoID, rawURL string) (*core.Record, bool) {
 	rows, err := app.FindRecordsByFilter("memo_links",
 		"memo={:memo} && url={:url}", "", 1, 0,
 		map[string]any{"memo": memoID, "url": rawURL})
 	if err == nil && len(rows) == 1 {
-		return rows[0]
+		return rows[0], true
 	}
 	col, err := app.FindCollectionByNameOrId("memo_links")
-	if err != nil {
-		// The migration has not run. We do not want to
-		// crash the after-hook over this; fall back to
-		// returning a transient record the caller can
-		// detect via the absence of a real ID. The Save
-		// will then fail and we log it.
-		memoLinkLog.Warn("memo_links: collection not found; aborting upsert",
-			"memo", memoID, "url", rawURL)
-		return core.NewRecord(col)
+	if err != nil || col == nil {
+		// The migration has not run (or the app is in
+		// the middle of a teardown where the collection
+		// is gone). We do not want to crash the after-
+		// hook over this; signal the caller to skip the
+		// upsert and move on. Returning a nil record
+		// here was a latent nil-deref: the previous code
+		// called core.NewRecord(col) with col == nil,
+		// which the worker pool then dereferenced.
+		memoLinkLog.Warn("memo_links: collection not found; skipping upsert",
+			"memo", memoID, "url", rawURL, "err", err)
+		return nil, false
 	}
 	row := core.NewRecord(col)
 	row.Set("memo", memoID)
 	row.Set("url", rawURL)
-	return row
+	return row, true
 }
 
 // memoLinksInflight is a fast path: returns true if a recent

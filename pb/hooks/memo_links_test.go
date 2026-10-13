@@ -1,10 +1,13 @@
 package hooks
 
 import (
+	"context"
 	"strings"
 	"testing"
 
+	"github.com/pocketbase/pocketbase/core"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestNormaliseLinkURL pins the URL filter. The hook uses this to
@@ -84,3 +87,55 @@ func TestTruncateErr(t *testing.T) {
 type errBoom string
 
 func (e errBoom) Error() string { return string(e) }
+
+// TestUpsertMemoLinkRow_MissingCollection pins the regression
+// for the latent nil-deref in the worker pool. When the
+// memo_links collection is absent (the migration has not run,
+// or the app is mid-teardown), the function must return
+// (nil, false) rather than constructing a record with a nil
+// collection — the previous code did the latter and the
+// worker goroutine then crashed the test process.
+func TestUpsertMemoLinkRow_MissingCollection(t *testing.T) {
+	app := newUnmigratedApp(t)
+
+	row, ok := upsertMemoLinkRow(app, "memo-1", "https://example.com")
+	assert.Nil(t, row)
+	assert.False(t, ok, "missing collection should yield ok=false")
+}
+
+// TestUpsertOneMemoLink_MissingCollection asserts the per-URL
+// worker bails before touching the DB or the network when the
+// collection is missing. Before the (nil, false) return was
+// added the helper panicked on core.NewRecord(nil); the
+// worker pool did not have a recover() and the test binary
+// died with SIGSEGV.
+func TestUpsertOneMemoLink_MissingCollection(t *testing.T) {
+	app := newUnmigratedApp(t)
+
+	// The collection is missing, so the helper returns
+	// before touching the context. We pass context.Background
+	// to make that explicit: there is no fetch, no save,
+	// no network.
+	assert.NotPanics(t, func() {
+		upsertOneMemoLink(app, context.Background(), "memo-2", "https://example.com")
+	})
+}
+
+// newUnmigratedApp builds a PocketBase app in a temp dir and
+// bootstraps it but does NOT run riff's migrations. The
+// memo_links collection is therefore guaranteed absent, which
+// is the precondition for the regression tests above. The
+// fingerprint matches the rest of the test suite so the
+// per-test temp dir is cleaned up automatically.
+func newUnmigratedApp(t *testing.T) core.App {
+	t.Helper()
+	app := core.NewBaseApp(core.BaseAppConfig{
+		DataDir:       t.TempDir(),
+		EncryptionEnv: "pb_hooks_memo_links_test",
+	})
+	t.Cleanup(func() {
+		_ = app.ClearBootstrap()
+	})
+	require.NoError(t, app.Bootstrap())
+	return app
+}

@@ -39,12 +39,3 @@ build always overwrites it on `pnpm release` and committing
 the artifact creates churn for every asset hash change). A
 fresh clone therefore needs the `pnpm release` step; the
 error message on a missing embed is the signal to run it.
-
-## Why not `pb/frontend/`
-
-The early design notes (see `pb/frontend/README.md`) described
-the SPA landing in `pb/frontend/dist`. The script, the CI
-workflow, and the smoke test all consistently put it in
-`server/frontend/dist/` instead, so this package follows what
-actually runs. `pb/frontend/` is left as a relic; the script
-and CI are the source of truth.
