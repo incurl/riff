@@ -1,134 +1,172 @@
-# Fly.io application manifest for riff.
+# Fly.io manifest for the riff deployment (`ravine`).
 #
-# This file is a *template*. Before deploying, set:
+# The image is built LOCALLY and pushed to the Fly registry, because two of
+# the build inputs cannot come from Fly's remote builder:
 #
-#   1. `app` to your chosen Fly app name (must be globally unique).
-#   2. `primary_region` to the region closest to most users; riff
-#      will boot from a fresh image in the region and read the
-#      shared persistent volume. The default `iad` is US-East.
-#   3. Secrets via `fly secrets set RIFF_INSTANCE_URL=...`.
+#   * the Vite SPA bundle in server/frontend/dist (`cd web && pnpm release`),
+#     which scripts/Dockerfile bakes into the binary through `//go:embed`; and
+#   * the Jekyll site imported as the buildkit named context `ravine`, whose
+#     source tree lives outside this repository.
 #
-# Reference: https://fly.io/docs/reference/configuration/
+# Build and deploy (verified with flyctl v0.4.116):
+#
+#   cd web && pnpm release && cd ..
+#   docker buildx build --platform linux/amd64 \
+#     -f scripts/Dockerfile \
+#     --build-context ravine="$(readlink -f scripts/ravine)" \
+#     --build-arg VERSION="$(bash scripts/release_version.sh development-version)" \
+#     --build-arg COMMIT="$(git rev-parse HEAD)" \
+#     -t riff:dev --load .
+#   flyctl auth docker                                    # log docker into registry.fly.io
+#   docker tag riff:dev registry.fly.io/ravine:dev
+#   docker push registry.fly.io/ravine:dev
+#   flyctl deploy -a ravine
+#
+# `fly deploy` does NOT upload a local-only tag: --image is resolved in the
+# Fly registry, so the image must be pushed there first (the `[build] image`
+# below is that pushed reference). `--local-only` is not an option here
+# because flyctl cannot pass a buildkit named context, and the Dockerfile
+# needs `--build-context ravine=...`.
+#
+# The `dev` tag is mutable on purpose: every deploy overwrites it. The
+# immutable identity of a running machine is the image digest plus the
+# VERSION/COMMIT build args baked into the binary (`fly image show`, or
+# `fly ssh console -C /usr/local/riff/riff version`).
+#
+# `readlink -f scripts/ravine` resolves the committed symlink to
+# /home/peter/CLionProjects/ravine.1une.cc/website/_site on this machine; pass
+# that absolute path directly if the symlink is missing locally.
+#
+# Container layout: supervisord is PID 1 and runs caddy (public, :80) and the
+# riff PocketBase server (:8090, same container) as child programs. Caddy loads
+# one of two edge-proxy variants (selected through the CADDYFILE env var below):
+#
+#   * /etc/caddy/Caddyfile.fly             — plain-HTTP, host-agnostic
+#                                            reverse proxy that serves
+#                                            the riff SPA at the ROOT of
+#                                            the hostname (Vite emits
+#                                            root-relative asset URLs and
+#                                            the Connect client posts to
+#                                            window.location.origin).
+#   * /etc/caddy/Caddyfile.fly.community   — same plain-HTTP shape, but
+#                                            the baked-in static site
+#                                            serves at the root and
+#                                            riff is mounted under
+#                                            /community/. The SPA is
+#                                            built with
+#                                            VITE_BASE_PATH=/community/
+#                                            so the prefix lines up.
+#
+# Neither variant terminates TLS; Fly's edge does, hence force_https below.
 
-app = "riff"
-primary_region = "iad"
-kill_signal = "SIGINT"
-kill_timeout = "10s"
+app = "ravine"
+primary_region = "nrt"
+
+# SIGTERM reaches supervisord, which forwards it to caddy and riff so both can
+# drain in-flight requests. (Fly's default is SIGINT.)
+kill_signal = "SIGTERM"
+kill_timeout = "30s"
 
 [build]
-  # Use the production Dockerfile under scripts/. Frontend assets
-  # must already be present at server/frontend/dist (run
-  # `cd web && pnpm release` before `fly deploy`). The
-  # //go:embed in server/frontend/embed.go bakes the tree into
-  # the riff binary during the Docker build, so no additional
-  # COPY is needed for the SPA.
-  dockerfile = "scripts/Dockerfile"
+  # The image, as pushed to Fly's registry by the commands above. `fly deploy`
+  # resolves this reference on the Fly side (it does not read the local docker
+  # daemon), so `docker push registry.fly.io/ravine:dev` must run first.
+  image = "registry.fly.io/ravine:dev"
+
+[deploy]
+  # No release_command: Fly runs it on a throwaway machine that cannot see the
+  # `riff_data` volume, and PocketBase already applies the migrations
+  # registered from pb/migrations (migratecmd.Automigrate=true) during
+  # bootstrap on every boot. A volume means one machine, so rolling is the
+  # only deploy strategy available.
+  strategy = "rolling"
 
 [env]
-  # The image's PID 1 is supervisord; caddy and riff are its child
-  # programs. Caddy binds 80/443 inside the container and
-  # reverse-proxies /community/* to riff on the loopback 8090. The
-  # Fly proxy's internal_port therefore points at 80 (caddy), not at
-  # 8090 (riff). PocketBase's PB_PORT stays at the canonical
-  # riff-internal 8090; the Fly proxy no longer needs to know it.
-  # Note: riff reads PB_PORT, not Fly's bare PORT convention, so the
-  # env-var name below is intentional.
+  # riff binds 0.0.0.0:8090 when PB_PORT is set (main.go's OnServe hook).
+  # Without it PocketBase listens on 127.0.0.1:8090, which caddy could still
+  # reach, but the explicit value keeps `fly ssh console` debugging obvious.
   PB_PORT = "8090"
-  # Enable the Connect request rate limiter; off in dev by default.
-  RIFF_RATE_LIMIT = "1"
-  # The default data dir. PocketBase will create the SQLite
-  # database at /var/opt/riff/pb_data/data.db inside the
-  # persistent volume.
-  RIFF_DATA_DIR = "/var/opt/riff/pb_data"
-  # Required for outbound webhooks, link previews, and email
-  # notifications. The /community suffix matches caddy's path-based
-  # routing and is the public path users will see in email links.
-  # Set via `fly secrets set RIFF_INSTANCE_URL=...` for the real
-  # hostname; the placeholder below is only for the local Fly proxy
-  # until secrets are populated.
-  RIFF_INSTANCE_URL = "http://localhost/community"
-  # The site domain caddy issues a Let's Encrypt cert for. Must
-  # match the DNS A/AAAA records pointing at this app. Set as a
-  # `fly secrets set` in prod so the placeholder doesn't leak into
-  # the issued cert.
-  SITE_DOMAIN = "example.com"
-  # Email caddy registers with Let's Encrypt when issuing the cert.
-  # Same rationale as SITE_DOMAIN: real value via `fly secrets set`.
-  ACME_EMAIL = "ops@example.com"
+  # Which Caddyfile the caddy child loads. scripts/entrypoint-supervisord.sh
+  # exports it before exec'ing supervisord. Two edge-proxy variants ship:
+  #
+  #   * Caddyfile.fly             riff SPA at the root, /community/* alias
+  #                               (the previous layout)
+  #   * Caddyfile.fly.community   static site at the root, riff at
+  #                               /community/ (the layout this env var
+  #                               selects)
+  #
+  # The caddy child is started with an explicit `--adapter caddyfile`
+  # (scripts/supervisord.conf), which is what makes a non-`Caddyfile` file
+  # name usable at all: caddy infers the adapter from the base name and
+  # otherwise exits with "ambiguous config file format". The riff SPA
+  # under /community/ is built with VITE_BASE_PATH=/community/ pnpm
+  # release (see web/vite.config.mts) so its asset URLs and the
+  # connect-web baseUrl line up with the prefix the caddy layer strips.
+  CADDYFILE = "Caddyfile.fly.community"
+  # Canonical public URL. It drives the MCP Origin allow-list and the links in
+  # notification emails, and an empty value disables both features, so it must
+  # match the hostname users actually see. Update it (and redeploy) after
+  # attaching a custom domain with `fly certs add`.
+  RIFF_INSTANCE_URL = "https://ravine.fly.dev"
+  # RIFF_RATE_LIMIT is deliberately unset. The in-memory limiter keys on
+  # PocketBase's RequestEvent.RealIP(), which falls back to the socket peer
+  # when Settings.TrustedProxy is empty — behind caddy that is a single
+  # address for every visitor, so the per-IP budgets would silently become
+  # instance-wide budgets. To enable it safely:
+  #   1. set RIFF_RATE_LIMIT = "1" here,
+  #   2. open /_/ → Settings → Trusted proxy and list the X-Forwarded-For
+  #      header (leftmost = true), since the Caddyfile forwards the real
+  #      client in that header,
+  #   3. redeploy.
+  # RIFF_RATE_LIMIT = "1"
 
-[experimental]
-  # Required for [mounts] below; private volumes are not part of
-  # the public Fly API yet.
-  private_networking = true
-
-[mounts]
-  # Single shared persistent volume for PocketBase data and any
-  # local-disk attachment cache. Mounted at the path the entrypoint
-  # and the Dockerfile VOLUME agree on. Create the volume with
-  # `fly volumes create riff_data --size 1` before first deploy.
+# Persistent riff data. Everything PocketBase writes resolves inside this
+# mount: main.go pins the data dir to the relative "./pb_data", supervisord
+# runs the riff child with directory=/var/opt/riff, and scripts/entrypoint.sh
+# chowns the tree to UID 10001 before dropping privileges. Without the volume
+# (or with the wrong cwd) pb_data and every uploaded patch/sample land on the
+# machine's ephemeral filesystem and disappear on the next deploy.
+[[mounts]]
   source = "riff_data"
   destination = "/var/opt/riff"
 
-[[services]]
-  # The image's PID 1 is supervisord; caddy binds 80/443 and proxies
-  # /community/* to riff on the loopback 8090. The Fly proxy's
-  # internal_port therefore points at 80 (caddy). caddy terminates
-  # TLS itself, so the Fly proxy uses plain HTTP between proxy and
-  # container (`handlers = ["http"]`, no force_https). The MCP
-  # service, if enabled, is served at /community/mcp on the same
-  # internal port (see main.go).
+# caddy listens on :80 inside the machine and reverse-proxies to riff on
+# 127.0.0.1:8090. Only that port is published: Fly's edge terminates TLS for
+# the app's hostname and forwards here, and `force_https` redirects
+# plain-HTTP visitors, so 443/Let's Encrypt belong to the edge, not to the
+# container.
+[http_service]
   internal_port = 80
-  protocol = "tcp"
-  auto_stop_machines = false
+  force_https = true
+  auto_stop_machines = "off"
   auto_start_machines = true
   min_machines_running = 1
   processes = ["app"]
 
-  # Fly already does TLS termination on the public side, and caddy
-  # also does TLS on the inside. We disable force_https on the
-  # proxy so the proxy does NOT 301 HTTP->HTTPS (which would loop
-  # with caddy serving both); caddy itself can still issue a 301
-  # if you want, via its redir directive in Caddyfile.
-  [[services.ports]]
-    handlers = ["http"]
-    port = 80
+  # One small SQLite-backed machine. Cap concurrent requests instead of
+  # letting Fly queue an unbounded number of them behind a single writer.
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 250
+    hard_limit = 300
 
-  [[services.ports]]
-    handlers = ["http"]
-    port = 443
-
-  [[services.tcp_checks]]
-    grace_period = "10s"
-    interval = "30s"
-    timeout = "5s"
-
-  [[services.http_checks]]
-    # PocketBase exposes a simple /community/api/health that
-    # returns 200 once the database is open and migrations have
-    # applied. We use it for liveness; readiness uses the same
-    # path because riff has no separate warm-up phase. caddy
-    # transparently proxies the /community prefix, so the health
-    # check URL is just the public path.
+  # PocketBase's own health endpoint, reached through caddy.
+  [[http_service.checks]]
     interval = "15s"
     timeout = "5s"
     grace_period = "30s"
-    method = "get"
-    path = "/community/api/health"
+    method = "GET"
+    path = "/api/health"
 
-[deploy]
-  # The release_command runs once per deploy before the new
-  # machine starts. We use it to print the resolved CalVer and
-  # verify migrations would apply. The actual `version` and
-  # `commit` are baked into the image at build time by
-  # scripts/Dockerfile.
-  release_command = "scripts/release_version.sh version \"$(git rev-parse --abbrev-ref HEAD)\" || true"
-
-[metrics]
-  # The metrics scraper hits the container directly, so it must
-  # use caddy's public listener (port 80) and the /community
-  # public path. Pointing it at 8090 would fail because 8090 is
-  # loopback-only now that caddy is the public listener; using
-  # /api/health would also fail because caddy only forwards the
-  # /community/* prefix to riff.
-  port = 80
-  path = "/community/api/health"
+# 1 shared CPU / 1 GB is the sizing the old manifest asked for and matches a
+# single-machine PocketBase + SQLite instance. Bump `size` (not `memory`
+# alone) if thumbnailing or transcription starts swapping.
+# `swap_size_mb = 512` adds a real swap-backed device on the machine's
+# local disk, providing headroom when riff + caddy + PocketBase push the
+# 256MB cgroup past its limit under load (large memos, in-flight
+# transcription buffers, webhook delivery backlog). See DECISIONS.md
+# "Swap on 256MB Fly machine" for the why-not-container-side rationale.
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
+  swap_size_mb = 512

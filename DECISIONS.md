@@ -5,6 +5,198 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## Swap on 256MB Fly machine (2026-10-13)
+
+The `ravine` Fly machine is sized at `shared-cpu-1x` with
+`memory = "256mb"` (fly.toml). Under load — large memos, in-flight
+transcription buffers, webhook delivery backlog — riff + caddy +
+PocketBase can push resident memory past 256MB, and the Fly proxy's
+256MB cgroup will OOM-kill the most active process (usually
+PocketBase, the SQLite writer). A 512MB swap is a cheap safety
+net that converts transient spikes into a slowdown instead of a
+restart.
+
+**What we did.** `fly.toml` sets `swap_size_mb = 512` on the
+`[[vm]]` block. Fly provisions a real swap-backed disk device on
+the machine at boot; the kernel sees it as a normal swap entry
+in `/proc/swaps` and uses it transparently. No container-side
+work, no capability changes, no image bloat.
+
+**Why machine-level, not container-side.** A container-managed
+`/swapfile` was the first design, and it was rejected after a
+direct test on a built image: the kernel returns `EINVAL` from
+`swapon` when the swap file lives on an `overlay` filesystem,
+which is what every container runtime (Docker, Fly, containerd)
+uses for the rootfs. The workarounds were all bad:
+
+* Install `util-linux` (GNU `mkswap` with `-f`) — solves a
+  non-problem; the kernel still blocks `swapon` on overlayfs.
+  Also adds ~3-4MB to the image and a maintenance tax.
+* Loop-device indirection (`losetup -f /swapfile; swapon /dev/loopN`)
+  — works, but requires `CAP_SYS_ADMIN` and `/dev/loop-control`
+  inside the container. `scripts/compose.yaml` drops ALL caps and
+  only adds `NET_BIND_SERVICE`, so the loop path silently no-ops
+  in local dev. Different behaviour per environment is the worst
+  kind of surprise.
+* Bind-mount a host directory — couples the container to the
+  host's filesystem layout and adds an operator setup step
+  (`docker run -v /tmp:/tmp` or equivalent on Fly).
+* tmpfs — RAM-backed, defeats the purpose.
+
+`swap_size_mb` skips all of this. The trade-off is that the
+swap is Fly-only: local docker, `scripts/compose.yaml`, and CI
+runners don't get one. That's acceptable because the swap is a
+production safety net, not a feature — local dev runs riff once
+and stops it, and CI tears the test app down before it can OOM.
+
+**Why not at image build time.** Recording a 512MB swapfile in
+a Dockerfile `RUN dd ...` would bake 512MB of zeros into the
+image layer and bill it to every machine that pulls the
+multi-arch image (amd64 + arm64 + arm/v7). The file is trivially
+regenerated from `/dev/zero` in ~1s, so the build-time cost is
+paid for nothing.
+
+**Why not the persistent `/var/opt/riff` volume.** The persistent
+volume is backed by Fly's network-attached disk and is snapshotted
+on every machine for restores; swap pages are ephemeral by nature
+and have no business being replicated, and putting them on the
+persistent volume would also bill the swap against the 1GB
+volume size. (Now moot under `swap_size_mb` — the machine's
+swap disk is its own thing, separate from both the rootfs and
+the persistent volume.)
+
+## Static site at root, riff under `/community/` (2026-10-13)
+
+The previous Fly layout put the riff SPA at the hostname root
+(`Caddyfile.fly`, `CADDYFILE=Caddyfile.fly`), with a `/community/*`
+`handle_path` alias for old bookmarks. The new requirement is the
+inverse: the baked-in static site (the out-of-repo Jekyll build at
+`/home/peter/CLionProjects/ravine.1une.cc/website/_site/`) is the
+public-facing content of `https://ravine.fly.dev/`, and the riff SPA
++ Connect/gRPC surface lives under `https://ravine.fly.dev/community/`.
+
+**Why a third Caddyfile instead of inverting `Caddyfile.fly`.** Three
+places document the existing file as "SPA at the root"
+(`scripts/Caddyfile.fly`'s header, `AGENTS.md`, the build-section
+comment in `fly.toml`). Changing its meaning in place would silently
+break that contract and confuse anyone reading the file in
+isolation. A new `scripts/Caddyfile.fly.community` variant keeps the
+deploy intent explicit (`CADDYFILE=Caddyfile.fly.community` in
+`fly.toml`) and gives a one-env-var rollback to the previous layout.
+
+**The SPA had to be rebuilt with a base path.** The Vite build was
+configured to emit root-relative asset URLs (`/assets/index-*.js`) and
+the connect-web transport was hard-coded to
+`baseUrl: window.location.origin`. Both are wrong under a `/community/`
+mount: the browser would resolve `/assets/foo.js` against the
+`/community/` page URL and request it from the static site (which
+404s), and the connect-web client would post to
+`${origin}/<svc>/<method>` instead of
+`${origin}/community/<svc>/<method>`. A Caddy response-rewrite of the
+SPA HTML was considered and rejected: Vite emits hashed asset paths
+inside the JS bundles too, not just `index.html`, and a regex rewrite
+of the response body would either miss the JS-emitted URLs or break on
+the next rebuild. The cleaner fix is the Vite-native one:
+
+  * `web/vite.config.mts` reads `process.env.VITE_BASE_PATH` (default
+    `"/"`, so local dev and root-mounted deployments are unchanged) and
+    sets the Vite `base` to that value, which rewrites the asset
+    references in `index.html` and exposes the same string at
+    `import.meta.env.BASE_URL` inside the bundle.
+  * `web/src/connect.ts` now builds the connect-web `baseUrl` as
+    `${origin}${import.meta.env.BASE_URL}`, with a trailing-slash
+    normalisation so `/` (local dev) still produces
+    `${origin}/<svc>/<method>` and `/community/` produces
+    `${origin}/community/<svc>/<method>`. The `${origin}/<svc>/<method>`
+    string is identical to the previous `window.location.origin`
+    construction in the default case, so the refactor is a no-op for
+    root-mounted deploys.
+  * The build invocation for a `/community/` deploy is
+    `VITE_BASE_PATH=/community/ cd web && pnpm release`. Local dev
+    (`pnpm dev`) and the default `pnpm release` keep `VITE_BASE_PATH`
+    unset, so the SPA serves root-relative.
+
+**Caddy routing.** The new file uses Caddy's `handle_path /community/*`
+to strip the prefix before the reverse-proxy hop, so the requests
+riff's PocketBase listener sees are its normal `/`, `/_/`, `/api/*`,
+`/mcp`, `/memos.api.v1.*` paths — no PocketBase-side rewrite needed.
+A `@community_root` matcher redirects `GET /community` (no trailing
+slash) to `/community/`, so the SPA's relative URL resolution never
+sees a parent-only URL. The `(proxy)` snippet carries the same
+X-Forwarded-For / X-Forwarded-Proto contract as `Caddyfile.fly`:
+`For` is replaced-and-appended (not blindly forwarded, which would let
+the Fly edge overwrite it and collapse every visitor into one
+rate-limit bucket), `Proto` is pinned to `https` so PocketBase's
+absolute URL builder and the Secure cookie flag see the public origin.
+
+**Build impact.** `scripts/Dockerfile` adds one `COPY` for the new
+file (so the image at `/etc/caddy/Caddyfile.fly.community` matches the
+runtime env var). `fly.toml` switches `CADDYFILE` to
+`Caddyfile.fly.community`. No Go-side changes, no proto changes, no
+collection migrations.
+
+## Fly deploy verified end-to-end: caddy `--adapter`, registry-pushed image (2026-10-13)
+
+The caddy+supervisord image was deployed for the first time to Fly as
+app `ravine` (machine `185175db9633e8`, region `nrt`, volume
+`vol_vwnzyg98mwllgg8v` attached to `/var/opt/riff`). Two problems
+only showed up on a real boot and are recorded here because both are
+non-obvious from reading the config.
+
+**caddy needs an explicit `--adapter caddyfile` for `Caddyfile.fly`.**
+caddy picks the config adapter from the file name, and only a file
+whose base name is exactly `Caddyfile` is auto-detected. With
+`CADDYFILE=Caddyfile.fly` (what `fly.toml` sets) `caddy run` aborts at
+startup with `Error: ambiguous config file format; please specify
+adapter (use --adapter)`. Confirmed by copying the same content to
+four names inside the image: `Caddyfile` → "Valid configuration";
+`Caddyfile.fly`, `Caddyfile.conf`, `Caddyfile.fly.conf` → the
+ambiguous-format error. The failure mode is unusually misleading:
+`supervisord`'s `autorestart=unexpected` turns it into a BACKOFF loop
+on the caddy child only, so the container is "Up" in `docker ps`, the
+riff child is RUNNING and listening on 8090, and nothing is listening
+on :80 — from the outside it looks like a caddy routing problem, not
+a config-load failure. `scripts/supervisord.conf` now runs
+`caddy run --environ --config /etc/caddy/%(ENV_CADDYFILE)s --adapter
+caddyfile`; the flag is harmless for the default `Caddyfile` and
+makes the chosen adapter explicit in the log (`"adapter":"caddyfile"`).
+This is why the local smoke test in the previous session passed while
+the container did not: that test ran the `riff` binary directly and
+never started caddy.
+
+**`fly deploy --image` does not upload a locally built tag.**
+`fly.toml` used to point `[build] image = "riff:dev"` on the
+assumption that flyctl falls back to the local docker daemon.
+flyctl v0.4.116 instead resolves `--image` in the Fly registry and
+fails with `Could not find image "docker.io/library/riff:dev"`.
+`--local-only` is not a workaround: it builds with the local daemon
+but flyctl has no flag for buildkit named contexts (`--build-arg`,
+`--build-secret`, `--build-target` only), and the Dockerfile needs
+`--build-context ravine=…` for the out-of-repo Jekyll tree. The
+supported path is therefore to push the image ourselves:
+`flyctl auth docker` (writes a `registry.fly.io` credential into
+`~/.docker/config.json`), `docker tag riff:dev
+registry.fly.io/ravine:dev`, `docker push`, then `flyctl deploy -a
+ravine`. `[build].image` is now that pushed reference. The `dev` tag
+is deliberately mutable — every deploy overwrites it — and the
+immutable identity of a running machine is the image digest plus the
+`VERSION`/`COMMIT` build args baked into the binary.
+
+**Verified**: `fly checks list` reports `servicecheck-00-http-80`
+passing with `{"message":"API is healthy.","code":200,"data":{}}`;
+public curls return 200 for `/api/health`, `/`, the deep link
+`/m/abc-123`, `/_/`, `/community/api/health` and the hashed
+`/assets/*.js` bundle; `POST /mcp` `initialize` replies with
+`serverInfo {"name":"memos","version":"dev"}`. The same image boots
+correctly in plain Docker for both variants: `CADDYFILE=Caddyfile.fly`
+serves the SPA at the host root, and the default ACME `Caddyfile`
+still starts with the new flag (Host `localhost` → 308 to HTTPS,
+non-matching host → the Caddyfile's own `:80 { respond 404 }`).
+Measured TTFB from this workstation is 5–9 s, but that is a local
+TLS/proxy artifact (TCP connect 1.4 ms, TLS handshake 4–9 s) while
+Fly's in-network check passes well inside its 5 s timeout, so the app
+itself is not the slow part.
+
 ## Caddy + supervisord reverse-proxy in the deploy image (2026-10-13)
 
 The previous deploy image ran riff directly: PocketBase on port 8090,

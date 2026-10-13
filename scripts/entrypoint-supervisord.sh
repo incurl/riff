@@ -5,7 +5,17 @@
 #   1. Apply ${SITE_DOMAIN} default if the operator did not set it.
 #      Caddy reads the env var at `caddy run --environ` startup, so
 #      it must be exported before exec.
-#   2. exec supervisord as PID 1. supervisord is configured to run
+#   2. Apply ${CADDYFILE} default (`Caddyfile`, the ACME variant that
+#      scripts/compose.yaml uses; `Caddyfile.fly` selects the
+#      plain-HTTP, host-agnostic variant for a platform that
+#      terminates TLS at its own edge with the riff SPA at the root;
+#      `Caddyfile.fly.community` is the same edge-proxy shape but
+#      with the static site at the root and riff under /community/
+#      — see fly.toml). supervisord expands the value into the
+#      caddy program's command line, and it refuses to start when a
+#      %(ENV_X)s token references an unset variable, so the default
+#      must be exported before exec.
+#   3. exec supervisord as PID 1. supervisord is configured to run
 #      in the foreground (`nodaemon=true`), so it stays PID 1 and
 #      Docker's signal handling (SIGTERM -> caddy/riff) works.
 #
@@ -29,6 +39,17 @@ export SITE_DOMAIN
 # rationale as SITE_DOMAIN.
 : "${ACME_EMAIL:=ops@example.com}"
 export ACME_EMAIL
+
+# CADDYFILE: which Caddyfile the caddy program loads. All three files
+# are baked into the image at /etc/caddy/, and supervisord
+# interpolates this value into the caddy command line. Defaults to
+# the ACME variant so a bare `docker run` matches scripts/compose.yaml;
+# deployments behind a TLS-terminating edge (Fly.io) set
+# CADDYFILE=Caddyfile.fly (riff SPA at the root) or
+# CADDYFILE=Caddyfile.fly.community (static site at the root, riff
+# at /community/).
+: "${CADDYFILE:=Caddyfile}"
+export CADDYFILE
 
 # exec so supervisord becomes PID 1 and gets the container's
 # signals. `nodaemon=true` keeps it in the foreground, which is
