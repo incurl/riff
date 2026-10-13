@@ -1,0 +1,8 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="Fly: build + push + deploy ravine" type="CompoundRunConfigurationType">
+    <toRun name="Docker: build riff:dev" type="ShConfigurationType" />
+    <toRun name="Docker: push riff:dev to fly" type="ShConfigurationType" />
+    <toRun name="Fly: deploy ravine" type="ShConfigurationType" />
+    <method v="2" />
+  </configuration>
+</component>

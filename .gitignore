@@ -26,3 +26,10 @@ dist/
 # when --config.store-dir is set without an existing store; it contains a
 # symlink back to the workspace.
 .pnpm-store/
+# Out-of-repo developer convenience pointer used by `docker buildx build
+# --build-context ravine=$(readlink -f scripts/ravine) ...` in the local
+# Fly deploy scripts. The Dockerfile does not read this path directly; it
+# only sees the resolved build context. The symlink target lives in
+# /home/peter/CLionProjects/ravine.1une.cc/website/_site/ and is not part
+# of this repository, so the symlink must not be tracked.
+scripts/ravine
