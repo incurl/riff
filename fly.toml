@@ -25,9 +25,15 @@ kill_timeout = "10s"
   dockerfile = "scripts/Dockerfile"
 
 [env]
-  # Listen on the canonical riff port (PocketBase default; see
-  # AGENTS.md CI Reference). The Fly proxy maps 80/443 to 8090.
-  PORT = "8090"
+  # The image's PID 1 is supervisord; caddy and riff are its child
+  # programs. Caddy binds 80/443 inside the container and
+  # reverse-proxies /community/* to riff on the loopback 8090. The
+  # Fly proxy's internal_port therefore points at 80 (caddy), not at
+  # 8090 (riff). PocketBase's PB_PORT stays at the canonical
+  # riff-internal 8090; the Fly proxy no longer needs to know it.
+  # Note: riff reads PB_PORT, not Fly's bare PORT convention, so the
+  # env-var name below is intentional.
+  PB_PORT = "8090"
   # Enable the Connect request rate limiter; off in dev by default.
   RIFF_RATE_LIMIT = "1"
   # The default data dir. PocketBase will create the SQLite
@@ -35,10 +41,20 @@ kill_timeout = "10s"
   # persistent volume.
   RIFF_DATA_DIR = "/var/opt/riff/pb_data"
   # Required for outbound webhooks, link previews, and email
-  # notifications. Set via `fly secrets set RIFF_INSTANCE_URL=...`
-  # for the real hostname; the placeholder below is only for the
-  # local Fly proxy until secrets are populated.
-  RIFF_INSTANCE_URL = "http://localhost"
+  # notifications. The /community suffix matches caddy's path-based
+  # routing and is the public path users will see in email links.
+  # Set via `fly secrets set RIFF_INSTANCE_URL=...` for the real
+  # hostname; the placeholder below is only for the local Fly proxy
+  # until secrets are populated.
+  RIFF_INSTANCE_URL = "http://localhost/community"
+  # The site domain caddy issues a Let's Encrypt cert for. Must
+  # match the DNS A/AAAA records pointing at this app. Set as a
+  # `fly secrets set` in prod so the placeholder doesn't leak into
+  # the issued cert.
+  SITE_DOMAIN = "example.com"
+  # Email caddy registers with Let's Encrypt when issuing the cert.
+  # Same rationale as SITE_DOMAIN: real value via `fly secrets set`.
+  ACME_EMAIL = "ops@example.com"
 
 [experimental]
   # Required for [mounts] below; private volumes are not part of
@@ -54,23 +70,31 @@ kill_timeout = "10s"
   destination = "/var/opt/riff"
 
 [[services]]
-  # Single-service HTTP/HTTPS. riff is a single binary; we don't
-  # need sidecar processes here. The MCP service, if enabled, is
-  # served at /mcp on the same internal port (see main.go).
-  internal_port = 8090
+  # The image's PID 1 is supervisord; caddy binds 80/443 and proxies
+  # /community/* to riff on the loopback 8090. The Fly proxy's
+  # internal_port therefore points at 80 (caddy). caddy terminates
+  # TLS itself, so the Fly proxy uses plain HTTP between proxy and
+  # container (`handlers = ["http"]`, no force_https). The MCP
+  # service, if enabled, is served at /community/mcp on the same
+  # internal port (see main.go).
+  internal_port = 80
   protocol = "tcp"
   auto_stop_machines = false
   auto_start_machines = true
   min_machines_running = 1
   processes = ["app"]
 
+  # Fly already does TLS termination on the public side, and caddy
+  # also does TLS on the inside. We disable force_https on the
+  # proxy so the proxy does NOT 301 HTTP->HTTPS (which would loop
+  # with caddy serving both); caddy itself can still issue a 301
+  # if you want, via its redir directive in Caddyfile.
   [[services.ports]]
     handlers = ["http"]
     port = 80
-    force_https = true
 
   [[services.ports]]
-    handlers = ["tls", "http"]
+    handlers = ["http"]
     port = 443
 
   [[services.tcp_checks]]
@@ -79,15 +103,17 @@ kill_timeout = "10s"
     timeout = "5s"
 
   [[services.http_checks]]
-    # PocketBase exposes a simple /api/health that returns 200 once
-    # the database is open and migrations have applied. We use it
-    # for liveness; readiness uses the same path because riff has
-    # no separate warm-up phase.
+    # PocketBase exposes a simple /community/api/health that
+    # returns 200 once the database is open and migrations have
+    # applied. We use it for liveness; readiness uses the same
+    # path because riff has no separate warm-up phase. caddy
+    # transparently proxies the /community prefix, so the health
+    # check URL is just the public path.
     interval = "15s"
     timeout = "5s"
     grace_period = "30s"
     method = "get"
-    path = "/api/health"
+    path = "/community/api/health"
 
 [deploy]
   # The release_command runs once per deploy before the new
@@ -98,5 +124,11 @@ kill_timeout = "10s"
   release_command = "scripts/release_version.sh version \"$(git rev-parse --abbrev-ref HEAD)\" || true"
 
 [metrics]
-  port = 8090
-  path = "/api/health"
+  # The metrics scraper hits the container directly, so it must
+  # use caddy's public listener (port 80) and the /community
+  # public path. Pointing it at 8090 would fail because 8090 is
+  # loopback-only now that caddy is the public listener; using
+  # /api/health would also fail because caddy only forwards the
+  # /community/* prefix to riff.
+  port = 80
+  path = "/community/api/health"

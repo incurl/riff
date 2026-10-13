@@ -5,6 +5,178 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## Caddy + supervisord reverse-proxy in the deploy image (2026-10-13)
+
+The previous deploy image ran riff directly: PocketBase on port 8090,
+exposed to the world via the Fly proxy or compose. That worked, but
+the project also owns a static Jekyll site (the `ravine.1une.cc`
+documentation) that lives in a separate repo at
+`/home/peter/CLionProjects/ravine.1une.cc/website/_site/`. To host
+both on a single public hostname without standing up a second Fly app
+or a second compose service, the deploy image now bakes in a
+reverse-proxy layer.
+
+**Layout chosen**: caddy for TLS + reverse-proxy + static file serving,
+supervisord for process supervision, riff untouched. supervisord is
+PID 1; caddy and riff are its two child programs. Caddy binds 80/443,
+reverse-proxies `/community/*` to riff on the loopback 8090, and
+serves the baked-in static site from `/var/www/site/` for everything
+else.
+
+**Why caddy over nginx/traefik/envoy**: caddy is a single static
+binary on Alpine (no Lua module juggling), auto-issues Let's Encrypt
+certs without an external CA client, and its Caddyfile is the
+shortest expressive form for "path-prefix reverse-proxy + file server
+on the same listener" we could find. The default `caddy` Alpine
+package already includes the `file_server` and `reverse_proxy`
+handlers we need, so no custom build is required.
+
+**Why supervisord over s6-overlay or dumb-init**: riff already had an
+entrypoint.sh that drops from UID 0 to a nonroot user via `su-exec`
+and loads `RIFF_*_FILE` env-var files. Reusing that as a supervisord
+program preserves the privilege-drop semantics without rewriting it.
+supervisord is also a single `apk add` and the `nodaemon=true`
+config makes it the canonical "init" for the container.
+
+**Static-site source**: `scripts/ravine` is a checked-in symlink to
+`/home/peter/CLionProjects/ravine.1une.cc/website/_site/`. The
+Dockerfile imports the site as a buildkit named build context via
+`COPY --from=ravine . /var/www/site/`. The build invocation must
+pass `--build-context ravine="$(readlink -f scripts/ravine)"` (or
+the resolved absolute path). The committed symlink is just a
+convenience pointer so the developer does not have to remember the
+Jekyll repo's location; the Dockerfile does not read the symlink
+directly.
+
+**Why not follow the symlink through the build context tar**: when
+the build context is tarred up by buildkit, symlinks pointing
+**outside** the context are preserved as symlinks (not dereferenced
+into directory contents). Inside the build context, `COPY . .` in
+the backend stage does pull in the symlink, but reading its target
+in a later stage (`COPY --from=backend scripts/ravine/. /var/www/site/`)
+fails with `"/backend-build/scripts/ravine": not found` because the
+target only existed on the host, not in the backend stage's
+filesystem. The buildkit named context is the supported way to
+inject an out-of-repo path into a build; it requires the user (or
+CI) to opt in by passing `--build-context`.
+
+**CI handling**: the `release.yml` and `build-canary-image.yml`
+workflows create an empty `ravine` context (`build-contexts:
+ravine=${{ github.workspace }}/.empty-ravine`, populated by a
+preceding `mkdir -p .empty-ravine` step). The published image
+ships without the static site baked in; caddy serves an empty
+`/var/www/site/` as a 404, and the `/community/*` proxy is
+unaffected. When the ravine repo becomes fetchable from CI (today
+it is not), the empty-dir trick is replaced with a checkout step
+that populates a real ravine build context.
+
+**Port and capability surface**: the public-facing ports are 80 and
+443 (caddy). Riff's PocketBase 8090 stays on the loopback only; it
+is no longer published in `scripts/compose.yaml` and Fly's
+`internal_port` now points at 80 (caddy), not 8090 (riff). The
+container adds `CAP_NET_BIND_SERVICE` and drops everything else; caddy
+binds the privileged ports as root in its supervisord program and
+drops to its own user internally. The riff program still uses the
+existing entrypoint.sh's UID 0 → nonroot drop.
+
+**TLS termination**: caddy does TLS termination itself with the cert
+issued for `SITE_DOMAIN` (env-driven, defaults to `example.com` in
+the image, real value via `fly secrets set` / `docker run -e`). The
+Fly proxy's `force_https = true` is removed because caddy also
+serves HTTP on 80 and the two would loop on a 301. Local dev with
+`SITE_DOMAIN=localhost` skips ACME and serves plain HTTP on 80
+because Let's Encrypt cannot challenge 127.0.0.1.
+
+**RIFF_INSTANCE_URL**: now includes the public `/community` prefix
+(`http://localhost/community` in fly.toml's placeholder,
+`https://example.com/community` in compose.yaml's default). This
+is the URL that ends up in email-notification links and the MCP
+origin allow-list, so it must match the public path users will see.
+
+**Deferred**: a separate "Boulder-style" cert staging for pre-prod
+environments (so a `staging` Fly app does not pollute prod ACME
+rate limits). Caddy supports the `acme_ca` global option for this
+but we did not add it because there's no staging app yet.
+
+## Alpine 3.21 runtime: caddy lives in `community`, pin every package (2026-10-13)
+
+The first attempt at the runtime stage failed at
+`apk add caddy supervisord tzdata ca-certificates su-exec` with
+`exit code: 1` (buildx error: `failed to solve: process "/bin/sh -c
+apk add ..." did not complete successfully`). Root cause: the
+`alpine:3.21` base image only enables the `main` repository in
+`/etc/apk/repositories`, so `caddy` (which is a `community`-only
+package) is invisible to the solver. `supervisord` is the binary
+provided by the `supervisor` package (also in `main`, so that part
+resolved), but the failure on `caddy` aborted the whole `apk add`
+invocation before any of the later packages were considered.
+
+The fix is two-fold and was applied to `scripts/Dockerfile` in the
+same commit (now `1b49a81d` plus the `apk add` amendment that lives
+in the working tree):
+
+1. **Pass `--repository=https://dl-cdn.alpinelinux.org/alpine/v3.21/main`
+   and `--repository=.../v3.21/community` to every `apk add`.** These
+   URLs are the same entries that already live in
+   `/etc/apk/repositories` on a stock `alpine:3.21` image, so
+   listing them explicitly is a no-op for `main`-only packages and
+   makes `community` packages reachable. We do not use the
+   `dl-cdn...` CDN-over-TLS default because pinned version strings
+   already make the build deterministic; the explicit URL form is
+   just so the next reader does not have to wonder why the line
+   works.
+2. **Pin every package to an exact `<name>=<version>` string.** The
+   versions on Alpine 3.21 today (verified against
+   `pkgs.alpinelinux.org` and the v3.21 `APKINDEX.tar.gz`):
+   - `caddy=2.8.4-r7` (community)
+   - `supervisor=4.2.5-r5` (main; the `supervisor` package
+     provides the `supervisord` binary)
+   - `tzdata=2026e-r0` (main)
+   - `btop=1.4.0-r0` (community; debugging nicety)
+   - `ncdu=1.21-r0` (main; debugging nicety)
+   - `ca-certificates=20260909-r0` (main; pulled in transitively
+     by `caddy`'s explicit dependency, but listed explicitly so
+     the runtime image is self-documenting)
+   - `su-exec=0.2-r3` (main; used by `scripts/entrypoint.sh`)
+
+   Pinning is the same pattern as the Go module `go.mod`: bit-
+   identical rebuilds three months from now, no surprise from an
+   Alpine security rebuild that bumps a transitive dependency.
+
+**Why not just `apk add --no-cache caddy supervisor ...` with no
+repository flag?** Because that is the original form, and it
+failed for `caddy` specifically (the only `community`-repo
+package in the list). `btop` is also in `community` and would
+fail the same way. The other five packages are in `main` and
+would resolve fine, but `apk` aborts on the first unresolvable
+name, so we would never get to install them.
+
+**Why not `apk add --no-cache --repository=http://.../edge/...`
+to grab a newer caddy?** Alpine 3.21's `apk-tools` will refuse to
+mix repositories from different release branches in a single
+install (the `--repository` flag is for adding extra repos, not
+for cross-branch fetching). Edge caddy would be available, but
+pulling it in would also drag edge-only dependencies that do not
+exist on v3.21, and the whole point of pinning to v3.21 is the
+two-year support window.
+
+**Caveat: `supervisor` pulls in `python3`, `py3-setuptools`, and
+a `python3~3.12` version pin.** The runtime image now carries
+~10 MiB of Python that we never invoke directly; supervisord's
+core is Python (a long-standing design choice from the
+supervisor project). This is documented in the Dockerfile's
+`apk add` block comment so a future reader does not try to
+"minify" the image by removing `python3` and break supervisord.
+
+**Deferred**: a follow-up to also pin
+`golang:1.27.0-alpine` in the build stage, and to extract the
+pinned package list into an `ARG` so a `--build-arg
+ALPINE_PACKAGE_SUFFIX=...` can override it in a local experiment
+without forking the Dockerfile. The `Dockerfile` already has
+`ARG` blocks for VERSION and COMMIT; adding one for the
+package-version table is the obvious next step but not on the
+critical path.
+
 ## buf.gen.yaml drift — follow-up: lockfile + end-to-end regen (2026-10-10)
 
 Follow-up to the previous slice. After `cd web && pnpm install`

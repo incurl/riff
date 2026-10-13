@@ -7,12 +7,31 @@ services:
     # any S3-cached files under here, so it must be persistent.
     volumes:
       - ~/.riff/:/var/opt/riff
-    # 8090 is the canonical riff port (PocketBase default; see
-    # AGENTS.md CI Reference). The Dockerfile EXPOSEs 8090.
+    # caddy binds 80 and 443 inside the container and reverse-proxies
+    # /community/* to riff on the loopback 8090. 8090 is NOT
+    # published; only caddy's two ports are reachable from the host.
     ports:
-      - 8090:8090
+      - "80:80"
+      - "443:443"
+    # caddy needs CAP_NET_BIND_SERVICE to bind 80/443. Everything else
+    # is dropped so a compromised caddy or riff child cannot escalate.
+    # (The supervisord entrypoint still runs as root to fork caddy;
+    # caddy drops to its own user internally, and the riff program
+    # uses the existing entrypoint.sh UID 0 -> nonroot drop.)
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    # SITE_DOMAIN tells caddy which host to issue a Let's Encrypt cert
+    # for. ACME_EMAIL is the contact for the registration. For local
+    # dev with SITE_DOMAIN=localhost, caddy skips ACME and serves plain
+    # HTTP on 80.
+    environment:
+      - SITE_DOMAIN=${SITE_DOMAIN:-example.com}
+      - ACME_EMAIL=${ACME_EMAIL:-ops@example.com}
+      - RIFF_INSTANCE_URL=${RIFF_INSTANCE_URL:-https://example.com/community}
     # Optional: pass the canonical instance URL for email
     # notification links, MCP origin allow-list, and webhook
     # callbacks. If unset, links fall back to relative paths.
     # environment:
-    #   - RIFF_INSTANCE_URL=https://riff.example.com
+    #   - RIFF_INSTANCE_URL=https://riff.example.com/community

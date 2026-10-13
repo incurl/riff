@@ -1,0 +1,64 @@
+# Caddy configuration for the riff deploy image.
+#
+# Routing:
+#   https://${SITE_DOMAIN}/community/...  ->  riff on localhost:8090
+#   https://${SITE_DOMAIN}/...            ->  static site at /var/www/site/
+#
+# Caddy auto-issues a Let's Encrypt cert when the request host matches
+# ${SITE_DOMAIN} and the request comes in over the public HTTPS port.
+# For local dev with SITE_DOMAIN=localhost, Caddy serves plain HTTP on :80
+# and the ACME issuer is skipped (no cert challenges against 127.0.0.1).
+#
+# The {$VAR:default} interpolation lets the operator override SITE_DOMAIN
+# and ACME_EMAIL at runtime (compose env, fly secrets, `docker run -e`).
+# Keep the defaults aligned with the host's public DNS so `fly deploy` and
+# `docker compose up` work out of the box.
+
+{
+	# email Caddy uses for ACME registration when issuing certs.
+	# Override with ACME_EMAIL=ops@example.com in prod.
+	email {$ACME_EMAIL:ops@example.com}
+}
+
+# Match the configured SITE_DOMAIN (and any subdomain one level below, so
+# www.${SITE_DOMAIN} also gets the cert). Fall back to :80 plain HTTP for
+# any host that doesn't match — this is the path local dev takes.
+{$SITE_DOMAIN:example.com}, *.{$SITE_DOMAIN:example.com} {
+	encode zstd gzip
+
+	# /community/* is the riff SPA + Connect/gRPC surface. PocketBase's
+	# built-in routes (/, /_/, /api/*) all live under /community/ from
+	# the public host's perspective, so caddy just needs a single
+	# path-prefix matcher. We do NOT rewrite the path: riff's router
+	# already serves / and /_/ from the embedded SPA.
+	@community {
+		path /community
+		path /community/*
+	}
+	handle @community {
+		reverse_proxy localhost:8090 {
+			# PocketBase uses X-Forwarded-For for the client IP; pass it
+			# through so the rate limiter and the SSRF guards see the
+			# real address and not the caddy loopback.
+			header_up X-Forwarded-For {remote_host}
+			header_up X-Forwarded-Proto {scheme}
+		}
+	}
+
+	# Everything else: serve the static site from /var/www/site.
+	# Caddy's file_server honours index.html fallbacks and Content-Type
+	# detection; the Jekyll _site/ tree ships with index.html at root.
+	handle {
+		root * /var/www/site
+		file_server
+	}
+}
+
+# Fallback server for any host that doesn't match the configured
+# SITE_DOMAIN (e.g. raw IP, misconfigured DNS, local dev with
+# curl http://127.0.0.1). Returns 404 rather than a leaked default
+# cert, so an unrelated hostname pointing at this host gets a clear
+# error instead of a wrong-site cert.
+:80 {
+	respond 404
+}

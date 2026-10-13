@@ -94,6 +94,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
+      - name: Ensure empty ravine placeholder exists
+        # The build context `ravine` is bound to this empty directory
+        # because the ravine Jekyll repo is not checked out in CI today.
+        # See the comment on the `build-contexts` input below.
+        run: mkdir -p .empty-ravine
+
       - name: Build and push by digest
         id: build
         uses: docker/build-push-action@v6
@@ -104,6 +110,16 @@ jobs:
           build-args: |
             VERSION=${{ steps.version.outputs.version }}
             COMMIT=${{ github.sha }}
+          # The ravine Jekyll site lives in a separate repo and is not
+          # fetched by CI today, so the published canary image is shipped
+          # without the static site at `/`. The build context `ravine` is
+          # bound to an empty directory to satisfy the Dockerfile's
+          # `COPY --from=ravine . /var/www/site/`. The /community/*
+          # proxy path is unaffected. To ship a site-baked image from CI,
+          # replace the empty-dir trick with a checkout step that
+          # populates a real ravine build context.
+          build-contexts: |
+            ravine=${{ github.workspace }}/.empty-ravine
           cache-from: type=gha,scope=build-${{ matrix.platform }}
           cache-to: type=gha,mode=max,scope=build-${{ matrix.platform }}
           outputs: type=image,name=neosmemo/memos,push-by-digest=true,name-canonical=true,push=true
