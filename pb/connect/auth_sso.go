@@ -59,74 +59,14 @@ func (s *AuthServer) signInWithSSO(ctx context.Context, sso *v1.SignInRequest_SS
 		return nil, connect.NewError(connect.CodeInvalidArgument, "redirect_uri is required")
 	}
 
-	// (1) load the IdP
-	slug, ok := idpSlugFromResourceName(sso.GetIdpName())
-	if !ok {
-		return nil, connect.NewError(connect.CodeInvalidArgument, "idp_name must be identity-providers/{idp}")
-	}
-	idpRec, err := s.app.FindFirstRecordByFilter("identity_providers", "name={:n}", map[string]any{"n": slug})
-	if err != nil || idpRec == nil {
-		return nil, connect.NewError(connect.CodeNotFound, "identity provider not found")
-	}
-	if idpRec.GetString("type") != "OAUTH2" {
-		return nil, connect.NewError(connect.CodeFailedPrecondition, "identity provider is not OAuth2")
-	}
-
-	// (2) initialise the provider
-	cfgProto := decodeIdentityProviderConfig(idpRec.GetString("config")).GetOauth2Config()
-	if cfgProto == nil {
-		return nil, connect.NewError(connect.CodeFailedPrecondition, "identity provider has no OAuth2 config")
-	}
-	if cfgProto.GetClientId() == "" || cfgProto.GetClientSecret() == "" {
-		return nil, connect.NewError(connect.CodeFailedPrecondition, "identity provider config is missing client_id or client_secret")
-	}
-	providerName := ssoProviderNameFromSlug(slug)
-	if _, err := pbauth.NewProviderByName(providerName); err != nil {
-		return nil, connect.NewError(connect.CodeFailedPrecondition, "unsupported OAuth2 provider: "+providerName)
-	}
-	pbConfig := core.OAuth2ProviderConfig{
-		Name:         providerName,
-		ClientId:     cfgProto.GetClientId(),
-		ClientSecret: cfgProto.GetClientSecret(),
-		AuthURL:      cfgProto.GetAuthUrl(),
-		TokenURL:     cfgProto.GetTokenUrl(),
-		UserInfoURL:  cfgProto.GetUserInfoUrl(),
-		DisplayName:  idpRec.GetString("title"),
-	}
-	provider, err := pbConfig.InitProvider()
+	// (1)-(3) Resolve the IdP, exchange the code for an OAuth
+	// token, and fetch the userinfo. resolveIdpAndExchange is the
+	// shared helper the LinkedIdentity RPC also calls; keeping the
+	// two paths in lockstep means a future IdP feature (PKCE for
+	// link flows, an identifier_filter tweak) lands once.
+	_, _, providerName, oauthUser, err := resolveIdpAndExchange(ctx, s.app, sso.GetIdpName(), sso.GetRedirectUri(), sso.GetCode(), sso.GetCodeVerifier())
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, "failed to initialise OAuth2 provider: "+err.Error())
-	}
-	provider.SetContext(ctx)
-	provider.SetRedirectURL(sso.GetRedirectUri())
-
-	// (3) exchange code for token + userinfo
-	var opts []oauth2.AuthCodeOption
-	if provider.PKCE() && sso.GetCodeVerifier() != "" {
-		opts = append(opts, oauth2.SetAuthURLParam("code_verifier", sso.GetCodeVerifier()))
-	}
-	token, err := provider.FetchToken(sso.GetCode(), opts...)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeUnauthenticated, "failed to exchange OAuth2 code: "+err.Error())
-	}
-	oauthUser, err := provider.FetchAuthUser(token)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeUnauthenticated, "failed to fetch OAuth2 user: "+err.Error())
-	}
-	if oauthUser == nil || oauthUser.Id == "" {
-		return nil, connect.NewError(connect.CodeUnauthenticated, "OAuth2 provider returned no user id")
-	}
-
-	// identifier_filter is a glob applied to the OAuth
-	// email. We intentionally keep the parser minimal
-	// (single `*` wildcard) so the operator can express
-	// "everyone in the example.com Google Workspace" with
-	// `*@example.com`. A full regex parser is deferred to
-	// a later slice.
-	if filt := idpRec.GetString("identifier_filter"); filt != "" {
-		if oauthUser.Email == "" || !globMatch(filt, oauthUser.Email) {
-			return nil, connect.NewError(connect.CodePermissionDenied, "identity does not match the provider's identifier_filter")
-		}
+		return nil, err
 	}
 
 	// (4) find-or-create the user
@@ -311,4 +251,90 @@ func globMatch(pattern, value string) bool {
 	prefix := pattern[:idx]
 	suffix := pattern[idx+1:]
 	return strings.HasPrefix(value, prefix) && strings.HasSuffix(value, suffix) && len(value) >= len(prefix)+len(suffix)
+}
+
+// resolveIdpAndExchange is the shared IdP-resolution +
+// code-exchange path used by both the SignIn sso_credentials
+// branch and the UserService.CreateLinkedIdentity RPC. It
+// returns the IdP record (so callers can read the slug for
+// the proto resource name), the auth.Providers registry
+// key, and the OAuth userinfo resolved from the code.
+//
+// Returning a *connect.Error is the convention; the helper
+// never writes to the database itself, so callers can
+// choose between signing the caller in (signInWithSSO) and
+// persisting a fresh link row (CreateLinkedIdentity).
+func resolveIdpAndExchange(
+	ctx context.Context,
+	app core.App,
+	idpNameResource, redirectURI, code, codeVerifier string,
+) (slug string, idpRec *core.Record, providerName string, oauthUser *pbauth.AuthUser, err error) {
+	if idpNameResource == "" {
+		return "", nil, "", nil, connect.NewError(connect.CodeInvalidArgument, "idp_name is required")
+	}
+	slug, ok := idpSlugFromResourceName(idpNameResource)
+	if !ok {
+		return "", nil, "", nil, connect.NewError(connect.CodeInvalidArgument, "idp_name must be identity-providers/{idp}")
+	}
+	idpRec, lerr := app.FindFirstRecordByFilter("identity_providers", "name={:n}", map[string]any{"n": slug})
+	if lerr != nil || idpRec == nil {
+		return "", nil, "", nil, connect.NewError(connect.CodeNotFound, "identity provider not found")
+	}
+	if idpRec.GetString("type") != "OAUTH2" {
+		return "", nil, "", nil, connect.NewError(connect.CodeFailedPrecondition, "identity provider is not OAuth2")
+	}
+
+	cfgProto := decodeIdentityProviderConfig(idpRec.GetString("config")).GetOauth2Config()
+	if cfgProto == nil {
+		return "", nil, "", nil, connect.NewError(connect.CodeFailedPrecondition, "identity provider has no OAuth2 config")
+	}
+	if cfgProto.GetClientId() == "" || cfgProto.GetClientSecret() == "" {
+		return "", nil, "", nil, connect.NewError(connect.CodeFailedPrecondition, "identity provider config is missing client_id or client_secret")
+	}
+	providerName = ssoProviderNameFromSlug(slug)
+	if _, lerr := pbauth.NewProviderByName(providerName); lerr != nil {
+		return "", nil, "", nil, connect.NewError(connect.CodeFailedPrecondition, "unsupported OAuth2 provider: "+providerName)
+	}
+	pbConfig := core.OAuth2ProviderConfig{
+		Name:         providerName,
+		ClientId:     cfgProto.GetClientId(),
+		ClientSecret: cfgProto.GetClientSecret(),
+		AuthURL:      cfgProto.GetAuthUrl(),
+		TokenURL:     cfgProto.GetTokenUrl(),
+		UserInfoURL:  cfgProto.GetUserInfoUrl(),
+		DisplayName:  idpRec.GetString("title"),
+	}
+	provider, lerr := pbConfig.InitProvider()
+	if lerr != nil {
+		return "", nil, "", nil, connect.NewError(connect.CodeInternal, "failed to initialise OAuth2 provider: "+lerr.Error())
+	}
+	provider.SetContext(ctx)
+	provider.SetRedirectURL(redirectURI)
+
+	var opts []oauth2.AuthCodeOption
+	if provider.PKCE() && codeVerifier != "" {
+		opts = append(opts, oauth2.SetAuthURLParam("code_verifier", codeVerifier))
+	}
+	token, lerr := provider.FetchToken(code, opts...)
+	if lerr != nil {
+		return "", nil, "", nil, connect.NewError(connect.CodeUnauthenticated, "failed to exchange OAuth2 code: "+lerr.Error())
+	}
+	oauthUser, lerr = provider.FetchAuthUser(token)
+	if lerr != nil {
+		return "", nil, "", nil, connect.NewError(connect.CodeUnauthenticated, "failed to fetch OAuth2 user: "+lerr.Error())
+	}
+	if oauthUser == nil || oauthUser.Id == "" {
+		return "", nil, "", nil, connect.NewError(connect.CodeUnauthenticated, "OAuth2 provider returned no user id")
+	}
+
+	// identifier_filter is a glob applied to the OAuth
+	// email. The single-`*` wildcard parser mirrors the
+	// comment on the original in-line block; a full
+	// regex parser is deferred.
+	if filt := idpRec.GetString("identifier_filter"); filt != "" {
+		if oauthUser.Email == "" || !globMatch(filt, oauthUser.Email) {
+			return "", nil, "", nil, connect.NewError(connect.CodePermissionDenied, "identity does not match the provider's identifier_filter")
+		}
+	}
+	return slug, idpRec, providerName, oauthUser, nil
 }
