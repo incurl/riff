@@ -63,9 +63,7 @@ func Register(app core.App, limiter ratelimit.Limiter) error {
 	apiv1connect.RegisterMemoServiceHandler(srv, NewMemoServer(app))
 	apiv1connect.RegisterAttachmentServiceHandler(srv, NewAttachmentServer(app))
 	apiv1connect.RegisterInstanceServiceHandler(srv, NewInstanceServer(app))
-
-	// Stub services: every method returns Unimplemented.
-	apiv1connect.RegisterAIServiceHandler(srv, apiv1connect.UnimplementedAIServiceHandler{})
+	apiv1connect.RegisterAIServiceHandler(srv, NewAIServer(app))
 
 	// IdentityProviderService — admin-gated CRUD for the
 	// `identity_providers` table. The Connect handler is

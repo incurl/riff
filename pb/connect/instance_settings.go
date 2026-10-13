@@ -317,3 +317,33 @@ func instanceGeneralSetting(app core.App) *v1.InstanceSetting_GeneralSetting {
 	}
 	return body
 }
+
+// instanceAISetting returns the AI instance setting, or a
+// zero-value proto if no row exists yet. The read path
+// always returns the proto — the api_key field is
+// INPUT_ONLY in the wire shape, but the server-side read
+// is allowed to populate it (the converter masks on
+// every other read path; the AIService.Transcribe handler
+// is the trusted path that needs the raw key to call
+// upstream).
+//
+// The Transcribe handler is the only caller today; the
+// helper is small and the unmarshal error policy mirrors
+// instanceGeneralSetting — a corrupted row becomes a
+// zero-value proto so a single bad migration never
+// blocks the rest of the instance.
+func instanceAISetting(app core.App) *v1.InstanceSetting_AISetting {
+	row, err := app.FindFirstRecordByFilter("instance_settings", "key={:k}", map[string]any{"k": "AI"})
+	if err != nil || row == nil {
+		return &v1.InstanceSetting_AISetting{}
+	}
+	payload := []byte(row.GetString("payload"))
+	if len(payload) == 0 {
+		return &v1.InstanceSetting_AISetting{}
+	}
+	body := &v1.InstanceSetting_AISetting{}
+	if err := protojson.Unmarshal(payload, body); err != nil {
+		return &v1.InstanceSetting_AISetting{}
+	}
+	return body
+}
