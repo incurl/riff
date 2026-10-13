@@ -5,6 +5,66 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## Fly `http_service.checks` must match the Caddyfile layout (2026-10-13)
+
+`ravine.fly.dev` returned `HTTP ERROR 503` (Fly's generic page) for
+every request, with the only useful signal in the Fly edge-proxy logs:
+
+    proxy [lax] [error]
+    error.message="could not find a good candidate within 40 attempts
+                   at load balancing"
+    request.url="https://ravine.fly.dev/"
+
+The machine itself was healthy: caddy up, riff up, port 80 bound,
+`/var/opt/riff` mounted, PocketBase `GET /api/health` returning
+`{"message":"API is healthy.","code":200,"data":{}}` on the loopback.
+The 503 came from the **edge proxy**, not from caddy or riff.
+
+**Root cause.** The `[[http_service.checks]] path` in `fly.toml` did
+not match the caddy reverse-proxy layout:
+
+* `fly.toml` set `path = "/api/health"`.
+* `CADDYFILE = "Caddyfile.fly.community"`, which routes
+  `/community/*` to riff and serves everything else (including
+  `/api/health` at the root) from caddy's static-site `file_server`.
+* Fly's check probe therefore hit `file_server` and got **404**.
+* A critical check marks the machine unhealthy across the
+  `[[vm]]`'s region, and Fly's global edge proxy turns that into
+  `503 Service Unavailable` everywhere (not just the failing region).
+
+**What we did.** Updated `fly.toml` to
+`path = "/community/api/health"`. Caddy's
+`handle_path /community/*` strips the prefix and forwards the
+probe to `127.0.0.1:8090/api/health`, which returns 200. Pushed
+the new manifest with `fly deploy -a ravine --image
+registry.fly.io/ravine:dev --wait-timeout 60 -y`; the rolling
+update applied the new check, the check passed on the first probe,
+and the edge proxy started serving requests again.
+
+**Gotcha worth pinning.** `fly deploy` with a new health check
+that targets a path the *current* check does not validate cannot
+short-circuit the wait. The CLI doesn't know the new check is
+faster than the old one — it waits for the new check to pass on
+the *new* machine. With a single-machine deployment (`max_machines
+= 1` is implicit) the new machine is the only machine, so a
+failing check hangs the deploy for `--wait-timeout`. The escape
+hatch is `--strategy=immediate` if you need to force the update
+on machines whose state the new check can't see yet, but the
+normal rolling update is correct once the new path is right.
+
+**AGENTS.md update.** The Fly row in the Change Routing table now
+spells out that `[[http_service.checks]] path` must be caddy-routed
+to riff (not the static site), and the smoke-test command is the
+matching `https://<app>.fly.dev/community/api/health` (or the
+unprefixed variant for the `Caddyfile.fly` SPA-at-root layout).
+
+**Tested.** `curl -fsS https://ravine.fly.dev/community/api/health`
+returns 200 with the healthy body; `curl -fsS https://ravine.fly.dev/`
+returns the static site HTML; `curl -fsS -X POST
+https://ravine.fly.dev/community/memos.api.v1.AuthService/SignIn`
+returns a Connect `invalid_argument` 400 from riff (the
+`sso_credentials` field is required for `signin_account`).
+
 ## Swap on 256MB Fly machine (2026-10-13)
 
 The `ravine` Fly machine is sized at `shared-cpu-1x` with
