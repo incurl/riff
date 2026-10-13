@@ -88,7 +88,7 @@ func mustBuildMux(t *testing.T, app core.App) http.Handler {
 	}
 
 	// Run the OnServe chain. Register has already bound a
-	// BindFunc that calls e.Router.GET, so this mounts the
+	// BindFunc that calls e.Router.Any, so this mounts the
 	// static handler on the router.
 	if err := app.OnServe().Trigger(e); err != nil {
 		t.Fatalf("OnServe.Trigger: %v", err)

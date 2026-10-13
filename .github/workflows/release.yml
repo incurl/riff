@@ -103,7 +103,16 @@ jobs:
 
       - name: Build frontend release assets
         working-directory: web
-        run: pnpm release
+        # VITE_BASE_PATH prefixes the SPA's asset URLs and is read by
+        # web/vite.config.mts as the Vite `base`. The Fly.io layout
+        # (see fly.toml's CADDYFILE = "Caddyfile.fly.community")
+        # mounts the SPA under /community/ so caddy can serve the
+        # static site at the host root; Vite must therefore emit
+        # /community/-prefixed URLs that the caddy `handle_path`
+        # strips before reaching the riff listener. Local dev
+        # (`pnpm dev`) and the default `pnpm release` keep the
+        # env var unset, which leaves the SPA at "/" (root-relative).
+        run: VITE_BASE_PATH=/community/ pnpm release
 
       - name: Upload frontend artifacts
         uses: actions/upload-artifact@v4

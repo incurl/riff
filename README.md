@@ -42,9 +42,15 @@ Run riff from source (Go 1.27.0 required):
 ```bash
 git clone https://github.com/incurl/riff
 cd riff
-go run -buildvcs=true .
+go run -buildvcs=true . serve
 # riff is now serving on http://127.0.0.1:8090
 ```
+
+`serve` is a PocketBase subcommand and is required: the binary's root command
+only prints help, so `go run .` (without it) exits immediately. In a container,
+`PB_PORT=8090` switches the listener from the default `127.0.0.1:8090` to
+`0.0.0.0:8090`; see `scripts/supervisord.conf` for how the deploy image invokes
+it.
 
 The first run creates `./pb_data/` (PocketBase's data directory), registers every
 migration under `pb/migrations/`, and seeds the schema. The admin UI is at

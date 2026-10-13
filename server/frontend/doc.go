@@ -7,9 +7,12 @@
 //   - embed the contents of server/frontend/dist (a build
 //     artifact produced by `cd web && pnpm release`) into the
 //     riff binary at compile time; and
-//   - register a single GET /{path...} catch-all on the
+//   - register a single method-less /{path...} catch-all on the
 //     PocketBase router at OnServe time, with index.html
-//     fallback for the SPA's client-side routes.
+//     fallback for the SPA's client-side routes. (Method-less
+//     because the routes the rest of the binary registers are
+//     method-less too, and a GET-only catch-all makes Go's
+//     http.ServeMux panic at startup.)
 //
 // For a deeper write-up of the design, see
 // server/frontend/README.md. For the build-time prerequisite

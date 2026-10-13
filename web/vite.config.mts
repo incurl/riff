@@ -12,6 +12,15 @@ if (process.env.DEV_PROXY_SERVER && process.env.DEV_PROXY_SERVER.length > 0) {
 
 // https://vite.dev/config/
 export default defineConfig({
+  // The base path Vite injects into index.html and into
+  // `import.meta.env.BASE_URL`. Defaults to "/" so local dev and a
+  // root-mounted deployment work unchanged; override with
+  // VITE_BASE_PATH=/community/ pnpm release (see scripts/Dockerfile,
+  // which does NOT pass the env var by default). The companion
+  // Connect transport in web/src/connect.ts reads BASE_URL at
+  // runtime and concatenates it to window.location.origin, so the
+  // Vite `base` and the connect-web `baseUrl` stay in lockstep.
+  base: process.env.VITE_BASE_PATH || "/",
   plugins: [react(), babel({ presets: [reactCompilerPreset()] }), tailwindcss()],
   server: {
     host: "0.0.0.0",

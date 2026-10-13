@@ -26,6 +26,20 @@
 //     (/_/* for the admin UI, /api/* for the REST + Connect
 //     endpoints, /mcp for the MCP service) win on specificity,
 //     so this catch-all only handles what PocketBase does not.
+//
+//     The catch-all is registered with Any, never with GET. Go's
+//     http.ServeMux panics when two patterns overlap without one
+//     being strictly more specific, and every other route this
+//     binary adds is registered without a method — the Connect
+//     procedures (pb/connect), /mcp (server/mcp) — or with a
+//     specific one (/api/po33/* in pb/api). A "GET /{path...}"
+//     pattern is neither contained in nor a container of a
+//     method-less "/mcp"-style pattern, so registering it made
+//     the server fail during OnServe with a "conflicts with
+//     pattern" panic and no riff binary could listen at all.
+//     Leaving the method open keeps this pattern strictly the
+//     least specific in the mux, which is exactly what a
+//     catch-all needs to be.
 package frontend
 
 import (
@@ -44,9 +58,10 @@ import (
 var distFS embed.FS
 
 // Register mounts the SPA on the PocketBase app's HTTP listener
-// at OnServe time. The route is GET /{path...} with index.html
+// at OnServe time. The route is Any /{path...} with index.html
 // fallback; PocketBase's more specific routes (/_/*, /api/*,
-// /mcp) take precedence and are unaffected.
+// /mcp) take precedence and are unaffected. The method is left
+// open on purpose — see the package comment above.
 //
 // Register is the only entry point main.go needs. The embedded
 // fs.FS is exposed (via [FS]) for tests that want to inspect
@@ -63,7 +78,7 @@ func Register(app core.App) {
 		// indexFallback=true forwards missing paths to
 		// index.html so the SPA's client-side router can
 		// handle deep links (e.g. /m/123, /explore).
-		e.Router.GET("/{path...}", apis.Static(sub, true))
+		e.Router.Any("/{path...}", apis.Static(sub, true))
 		return e.Next()
 	})
 }

@@ -1,0 +1,62 @@
+# Caddy configuration for the riff image when something else terminates TLS
+# for it — today that is Fly.io (see fly.toml); the sibling scripts/Caddyfile
+# is the variant for a machine that owns its own certificates and public IP
+# (see scripts/compose.yaml).
+#
+# Three deliberate differences from scripts/Caddyfile:
+#
+#   1. The SPA is mounted at the ROOT. The Vite build under web/ emits
+#      root-relative asset URLs (/assets/index-*.js, /favicon.ico) and the
+#      Connect client posts to window.location.origin, so serving the app
+#      under a /community/* prefix answers its own asset requests with the
+#      index.html fallback and the app never boots. riff therefore owns the
+#      whole hostname, /_/ (admin UI), /api/*, /mcp, /file/* and /api/files/*
+#      included.
+#   2. No TLS site block. An edge proxy (Fly's) already terminated HTTPS and
+#      forwards plain HTTP to this listener, and Caddy's automatic HTTPS would
+#      answer the edge's own health checks with a 301 they cannot follow.
+#   3. No host matcher. The public hostname is assigned by the platform and
+#      the machine's private health checks arrive with the machine's 6PN
+#      address as the Host header, so matching a name here would 404 them.
+#
+# Caddy listens on :80 only; that is what Fly's [http_service] publishes as
+# internal_port, and its edge is what redirects plain-HTTP visitors (force_https
+# in fly.toml) and serves 443.
+
+# Shared proxy target: riff's PocketBase listener inside the same container.
+#
+# X-Forwarded-For is *replaced and rebuilt* rather than passed through,
+# because caddy treats the immediate peer (the platform's edge proxy) as
+# untrusted and would otherwise overwrite the header with that peer's address,
+# collapsing every visitor into one rate-limit bucket. The value keeps the
+# client address the edge reported and appends this hop; both
+# internal/clientip and PocketBase's trusted-proxy resolver walk the list from
+# the right, skip private hops, and settle on the client.
+#
+# X-Forwarded-Proto is pinned to https: the edge only ever reaches this
+# listener over plain HTTP after terminating TLS, and PocketBase uses the
+# header to build absolute URLs (file links, email links) and Secure cookies.
+(proxy) {
+	reverse_proxy 127.0.0.1:8090 {
+		header_up X-Forwarded-For "{http.request.header.X-Forwarded-For}, {remote_host}"
+		header_up X-Forwarded-Proto https
+	}
+}
+
+:80 {
+	encode zstd gzip
+
+	# Back-compat alias for the /community/… bookmarks the previous
+	# VPS/compose layout handed out. handle_path strips the prefix before
+	# proxying, so /community/api/health reaches riff's /api/health and
+	# /community/assets/x.js reaches the SPA bundle.
+	handle_path /community/* {
+		import proxy
+	}
+
+	# Everything else: the SPA, the PocketBase REST + Connect API, the
+	# admin UI under /_/, the MCP endpoint at /mcp, and /api/files/*.
+	handle {
+		import proxy
+	}
+}

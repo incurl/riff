@@ -11,10 +11,13 @@ Vite with `--outDir=../server/frontend/dist --emptyOutDir`, so
 the build output lands in this directory. The `//go:embed
 all:dist` directive in `embed.go` bakes the tree into the riff
 binary at compile time, and `Register` mounts a single
-`GET /{path...}` route on the PocketBase router at OnServe
-time. The route uses PocketBase's `apis.Static` with
+method-less `/{path...}` route on the PocketBase router at
+OnServe time. The route uses PocketBase's `apis.Static` with
 `indexFallback=true`, so deep links like `/m/123` fall through
 to `index.html` and the SPA's client-side router takes over.
+Matching every method is required: the Connect procedures and
+`/mcp` are method-less patterns, and Go's `http.ServeMux` panics
+at startup when a `GET`-only catch-all overlaps them.
 
 PocketBase's more specific routes (`/_/*` for the admin UI,
 `/api/*` for the REST + Connect endpoints, `/mcp` for the MCP

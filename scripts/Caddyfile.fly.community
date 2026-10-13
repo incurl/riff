@@ -1,0 +1,94 @@
+# Caddy configuration for the riff image behind a TLS-terminating edge
+# proxy (Fly.io) when the host serves TWO things: the baked-in static site
+# at the ROOT, and the riff SPA + Connect/gRPC surface under /community/.
+#
+# This is the inverse of scripts/Caddyfile.fly, which mounts riff at the
+# root and treats /community/* as a back-compat alias. That layout
+# assumes the operator wants riff to own the hostname; this one assumes
+# the static site is the primary content and riff is one of several
+# sub-apps. The two files share a common ancestor in the ACME variant
+# (scripts/Caddyfile), where the host matcher picks the public DNS name
+# and /community/* is a normal path-prefix reverse-proxy.
+#
+# Why a third file instead of inverting the existing one:
+#   * scripts/Caddyfile.fly is documented in three places (its own header,
+#     fly.toml, AGENTS.md) as "SPA at the root". Changing its meaning
+#     would silently break that contract.
+#   * Keeping a separate file makes the deploy intent explicit
+#     (CADDYFILE=Caddyfile.fly.community in fly.toml) and a one-env-var
+#     rollback target.
+#
+# Layout (all on :80 - Fly's edge terminates TLS, see fly.toml):
+#
+#   https://<host>/                         ->  static site at /var/www/site/
+#   https://<host>/community/*              ->  riff on 127.0.0.1:8090
+#                                                (prefix is stripped by
+#                                                handle_path so riff sees
+#                                                its normal paths)
+#   https://<host>/community (no slash)     ->  308 redirect to /community/
+#                                                so the SPA never boots
+#                                                against a parent-only URL
+#   anything else (e.g. a typo)             ->  404 (file_server misses)
+#
+# The riff SPA is built with VITE_BASE_PATH=/community/ pnpm release so
+# the emitted asset URLs and the connect-web baseUrl resolve under
+# /community/ (see web/vite.config.mts and web/src/connect.ts). The
+# static site is whatever the ravine build context contains - today
+# the Jekyll _site/ tree at /home/peter/CLionProjects/ravine.1une.cc.
+#
+# Same X-Forwarded-* contract as scripts/Caddyfile.fly: replace-and-append
+# the client IP and pin X-Forwarded-Proto to https so PocketBase's
+# trusted-proxy resolver, the rate limiter, the email link builder, and
+# the Secure cookie flag all see the public origin.
+
+(proxy) {
+	reverse_proxy 127.0.0.1:8090 {
+		header_up X-Forwarded-For "{http.request.header.X-Forwarded-For}, {remote_host}"
+		header_up X-Forwarded-Proto https
+	}
+}
+
+:80 {
+	encode zstd gzip
+
+	# Caddy evaluates handle blocks in declaration order; the first
+	# matcher that matches wins. We declare three, in this order:
+	#   1. exact /community      -> 308 to /community/, so the SPA's
+	#                               relative URL resolution finds
+	#                               /community/assets/... instead of
+	#                               /assets/... (which would hit the
+	#                               static site).
+	#   2. /community/*          -> reverse_proxy to riff (prefix
+	#                               stripped by handle_path).
+	#   3. anything else         -> file_server for the static site.
+	#
+	# The bare-`handle` at the end is a catch-all and is evaluated
+	# only when the previous two blocks do not match. Putting
+	# `redir` outside any `handle` block would be evaluated AFTER
+	# the catch-all and never see the request, because file_server
+	# would already have served a 404 for /community (no trailing
+	# slash, no matching file in /var/www/site).
+
+	# 1. /community (no trailing slash) -> 308 to /community/.
+	handle /community {
+		redir * /community/ 308
+	}
+
+	# 2. /community/* (and /community/ with the handle_path glob
+	# expansion Caddy applies): reverse_proxy to riff. handle_path
+	# strips the /community prefix before forwarding, so the requests
+	# riff sees are its normal /, /_/, /api/health, /mcp,
+	# /memos.api.v1.*, etc.
+	handle_path /community/* {
+		import proxy
+	}
+
+	# 3. Everything else: the static site. file_server handles
+	# index.html fallbacks (so /about/ resolves to /about/index.html)
+	# and Content-Type detection. 404s are intentional: a path that
+	# doesn't match a file in the site tree is a real miss.
+	handle {
+		root * /var/www/site
+		file_server
+	}
+}

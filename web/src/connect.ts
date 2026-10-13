@@ -61,9 +61,20 @@ const fetchWithCredentials: typeof globalThis.fetch = (input, init) => {
   });
 };
 
+// Connect/gRPC base URL. Vite's `base` config exposes the SPA's
+// mount path (e.g. "/community/") at import.meta.env.BASE_URL; the
+// same value goes into index.html so the asset URLs and the connect
+// posts line up. Local dev (no VITE_BASE_PATH) leaves the default
+// "/" in place, which the URL constructor treats as a trailing-slash
+// separator and produces the same `${origin}/<svc>/<method>` string
+// the previous code emitted. The default exports are kept
+// identical to the pre-sub-path code path so nothing else has to
+// branch on it.
+const apiBaseUrl = `${window.location.origin}${(import.meta.env.BASE_URL || "/").replace(/\/?$/, "/")}`;
+
 // Separate transport without auth interceptor to prevent recursion
 const refreshTransport = createConnectTransport({
-  baseUrl: window.location.origin,
+  baseUrl: apiBaseUrl,
   useBinaryFormat: true,
   fetch: fetchWithCredentials,
   interceptors: [],
@@ -182,7 +193,7 @@ const authInterceptor: Interceptor = (next) => async (req) => {
 // ============================================================================
 
 const transport = createConnectTransport({
-  baseUrl: window.location.origin,
+  baseUrl: apiBaseUrl,
   useBinaryFormat: true,
   fetch: fetchWithCredentials,
   interceptors: [authInterceptor],
