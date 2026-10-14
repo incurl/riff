@@ -65,9 +65,57 @@ fi
 echo ">> fly deploy -a ${RIFF_FLY_APP} --image ${RIFF_FLY_REGISTRY} -y"
 fly deploy -a "${RIFF_FLY_APP}" --image "${RIFF_FLY_REGISTRY}" -y
 
-# --- Smoke test --------------------------------------------------------------
+# --- Smoke tests -------------------------------------------------------------
+# Two checks, both must pass:
+#   1. The caddy-routed riff health endpoint (SPA sub-path mount is alive).
+#   2. The static site is reachable at the document root. `Caddyfile.fly.community`
+#      (the default) serves the baked Jekyll _site/ at /, so a GET / must
+#      return 200. A 308 to /community/ means the @spa exclusion list is
+#      missing the bare path and a future Caddyfile edit has regressed the
+#      same bug as the "caddy redirects root visits" incident on 2026-10-14.
+#
+# Check 2 uses -m timeout (not -fsS) because `-f` makes curl exit non-zero
+# on 3xx and we explicitly want to inspect the 308 to assert which
+# redirect target caddy chose. The case-statement below greps
+# %{redirect_url} for /community/ to distinguish the bug from a healthy
+# 308 elsewhere (e.g. a future `redir` that canonicalises trailing
+# slashes on the static site itself).
+
 echo
-echo ">> Smoke test: curl -fsS -m ${RIFF_FLY_SMOKE_TIMEOUT} https://${RIFF_FLY_SMOKE_HOST}${RIFF_FLY_SMOKE_PATH}"
+echo ">> Smoke test 1/2: curl -fsS -m ${RIFF_FLY_SMOKE_TIMEOUT} https://${RIFF_FLY_SMOKE_HOST}${RIFF_FLY_SMOKE_PATH}"
 curl -fsS -m "${RIFF_FLY_SMOKE_TIMEOUT}" "https://${RIFF_FLY_SMOKE_HOST}${RIFF_FLY_SMOKE_PATH}"
 echo
 echo "OK: ${RIFF_FLY_SMOKE_PATH} on ${RIFF_FLY_SMOKE_HOST} is healthy."
+
+echo
+echo ">> Smoke test 2/2: curl -sS -m ${RIFF_FLY_SMOKE_TIMEOUT} -o /dev/null -w 'http_code=%{http_code} redirect_url=%{redirect_url}\\n' https://${RIFF_FLY_SMOKE_HOST}/"
+_root_probe=$(curl -sS -m "${RIFF_FLY_SMOKE_TIMEOUT}" -o /dev/null -w 'http_code=%{http_code} redirect_url=%{redirect_url}' "https://${RIFF_FLY_SMOKE_HOST}/" || true)
+echo "${_root_probe}"
+_root_code=$(echo "${_root_probe}" | sed -n 's/^http_code=\([0-9][0-9][0-9]\).*/\1/p')
+_root_redirect=$(echo "${_root_probe}" | sed -n 's/^.*redirect_url=\(.*\)$/\1/p')
+case "${_root_code}" in
+  200)
+    echo "OK: / on ${RIFF_FLY_SMOKE_HOST} serves the static site."
+    ;;
+  3[0-9][0-9])
+    case "${_root_redirect}" in
+      *"/community"*|*"/community/"*)
+        echo "FAIL: / on ${RIFF_FLY_SMOKE_HOST} is being redirected to the SPA." >&2
+        echo "      The Caddyfile.fly.community @spa matcher is missing the bare" >&2
+        echo "      path '/' from its 'not path' exclusion list. Add it next to" >&2
+        echo "      /index.html (see scripts/Caddyfile.fly.community line 144)." >&2
+        exit 1
+        ;;
+      *)
+        echo "FAIL: / on ${RIFF_FLY_SMOKE_HOST} returned ${_root_code} -> ${_root_redirect}" >&2
+        echo "      (expected 200 with the static site body, or a static-site-canonicalising 308)." >&2
+        exit 1
+        ;;
+    esac
+    ;;
+  *)
+    echo "FAIL: / on ${RIFF_FLY_SMOKE_HOST} returned ${_root_code}" >&2
+    echo "      (expected 200 with the static site body)." >&2
+    exit 1
+    ;;
+esac

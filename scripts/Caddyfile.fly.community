@@ -131,10 +131,17 @@
 	# static site). / and /index.html are excluded so the homepage
 	# of the static site still resolves.
 	#
+	# Note: the bare path `/` MUST be in the exclusion list. Without
+	# it, GET / falls into @spa and gets 308'd to /community/, which
+	# sends the user to the SPA when they wanted the static site
+	# homepage. /index.html was already excluded; the prior version
+	# of this file listed `/` in this comment but not in the matcher,
+	# which is how the regression slipped in. Keep the two in sync.
+	#
 	# Caddy's redir {uri} placeholder preserves the query string,
 	# so /auth?redirect=%2F becomes /community/auth?redirect=%2F.
 	@spa {
-		not path /community /community/* /assets /assets/* /docs /docs/* /download /download/* /firmware /firmware/* /hardware /hardware/* /reader /reader/* /workflow /workflow/* /favicon.svg /CNAME /index.html
+		not path / /community /community/* /assets /assets/* /docs /docs/* /download /download/* /firmware /firmware/* /hardware /hardware/* /reader /reader/* /workflow /workflow/* /favicon.svg /CNAME /index.html
 	}
 	handle @spa {
 		redir * /community{uri} 308
