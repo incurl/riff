@@ -3,7 +3,7 @@ import tailwindcss from "@tailwindcss/vite";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import { resolve } from "path";
 import { defineConfig } from "vite";
-import { resolveDevProxyServer } from "@/lib/dev-proxy-server";
+import { resolveDevProxyServer } from "./src/lib/dev-proxy-server";
 
 const devProxyServer = resolveDevProxyServer();
 if (process.env.DEV_PROXY_SERVER && process.env.DEV_PROXY_SERVER.length > 0) {
