@@ -27,6 +27,7 @@ import { MEMO_COMMENTS_ANCHOR_ID } from "@/lib/memo-comments";
 import { cn } from "@/lib/utils";
 import { State } from "@/types/proto/api/v1/common_pb";
 import { Memo, type MemoRelation, Visibility } from "@/types/proto/api/v1/memo_service_pb";
+import { withBasePath } from "@/utils/base-path";
 import { useTranslate } from "@/utils/i18n";
 import { canManageMemo } from "@/utils/user";
 import MemoOutline from "./MemoOutline";
@@ -141,9 +142,17 @@ const MemoDetailSidebar = ({
   const showConnections = !forceReadonly && (!!parentMemo || !!parentStatus || referenced.length > 0);
 
   const handleCopyLink = () => {
-    const host = (profile.instanceUrl || window.location.origin).replace(/\/+$/, "");
-    const path = forceReadonly ? `${location.pathname}${location.search}` : `/${memo.name}`;
-    copy(`${host}${path.startsWith("/") ? path : `/${path}`}`);
+    // The host comes from the admin's `instanceUrl` (a canonical public URL)
+    // and falls back to whatever the SPA is currently mounted under. When
+    // the admin set the URL, we trust it as-is — the admin owns the public
+    // shape of the instance and is responsible for putting the sub-path in
+    // it. When the admin didn't, we build the URL against the SPA's own
+    // mount, which is always correct because the SPA is the source of
+    // truth for its own basename.
+    const host = profile.instanceUrl ? profile.instanceUrl.replace(/\/+$/, "") : window.location.origin;
+    const routerPath = forceReadonly ? `${location.pathname}${location.search}` : `/${memo.name}`;
+    const path = profile.instanceUrl ? routerPath : withBasePath(routerPath);
+    copy(`${host}${path}`);
     toast.success(t("message.succeed-copy-link"));
   };
 

@@ -1,12 +1,24 @@
 import { Attachment, MotionMediaFamily, MotionMediaRole } from "@/types/proto/api/v1/attachment_service_pb";
+import { BASE_URL } from "@/utils/base-path";
 
-export const getAttachmentUrl = (attachment: Attachment) => {
+// `baseUrl` is the SPA's server-relative origin with a trailing slash
+// (see `BASE_URL` in `base-path.ts`). It is parameterised so tests can
+// exercise the sub-path branch without overriding module-scope state.
+const buildServerFileUrl = (baseUrl: string, attachment: Attachment): string => `${baseUrl}file/${attachment.name}/${attachment.filename}`;
+
+/**
+ * Pure-form of {@link getAttachmentUrl} that accepts an explicit server
+ * base URL. Exported for unit tests so the sub-path branch can be
+ * exercised without overriding the module-scoped `BASE_URL`.
+ */
+export const getAttachmentUrlWith = (baseUrl: string, attachment: Attachment): string => {
   if (attachment.externalLink) {
     return attachment.externalLink;
   }
-
-  return `${window.location.origin}/file/${attachment.name}/${attachment.filename}`;
+  return buildServerFileUrl(baseUrl, attachment);
 };
+
+export const getAttachmentUrl = (attachment: Attachment): string => getAttachmentUrlWith(BASE_URL, attachment);
 
 // Appends a thumbnail or motion selector only to share-mode links; other external links fall back to the server-managed attachment URL.
 const withShareTokenParam = (externalLink: string | undefined, key: string): string | undefined => {
@@ -21,23 +33,33 @@ const withShareTokenParam = (externalLink: string | undefined, key: string): str
   return url.toString();
 };
 
-export const getAttachmentThumbnailUrl = (attachment: Attachment) => {
+/**
+ * Pure-form of {@link getAttachmentThumbnailUrl}; see `getAttachmentUrlWith`
+ * for the rationale.
+ */
+export const getAttachmentThumbnailUrlWith = (baseUrl: string, attachment: Attachment): string => {
   const shareUrl = withShareTokenParam(attachment.externalLink, "thumbnail");
   if (shareUrl) {
     return shareUrl;
   }
-
-  return `${window.location.origin}/file/${attachment.name}/${attachment.filename}?thumbnail=true`;
+  return `${buildServerFileUrl(baseUrl, attachment)}?thumbnail=true`;
 };
 
-export const getAttachmentMotionClipUrl = (attachment: Attachment) => {
+export const getAttachmentThumbnailUrl = (attachment: Attachment): string => getAttachmentThumbnailUrlWith(BASE_URL, attachment);
+
+/**
+ * Pure-form of {@link getAttachmentMotionClipUrl}; see `getAttachmentUrlWith`
+ * for the rationale.
+ */
+export const getAttachmentMotionClipUrlWith = (baseUrl: string, attachment: Attachment): string => {
   const shareUrl = withShareTokenParam(attachment.externalLink, "motion");
   if (shareUrl) {
     return shareUrl;
   }
-
-  return `${window.location.origin}/file/${attachment.name}/${attachment.filename}?motion=true`;
+  return `${buildServerFileUrl(baseUrl, attachment)}?motion=true`;
 };
+
+export const getAttachmentMotionClipUrl = (attachment: Attachment): string => getAttachmentMotionClipUrlWith(BASE_URL, attachment);
 
 export const getAttachmentType = (attachment: Attachment) => {
   if (isImage(attachment.type)) {

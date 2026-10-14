@@ -12,6 +12,7 @@ import { extractMemoIdFromName } from "@/lib/resource-names";
 import { ROUTES } from "@/router/routes";
 import { State } from "@/types/proto/api/v1/common_pb";
 import type { Memo } from "@/types/proto/api/v1/memo_service_pb";
+import { withBasePath } from "@/utils/base-path";
 import { useTranslate } from "@/utils/i18n";
 import { checkAllTasks, uncheckAllTasks } from "@/utils/markdown-task-actions";
 import { isMemoDetailPath } from "../MemoView/navigation";
@@ -110,13 +111,15 @@ export const useMemoActionHandlers = ({ memo, parentPage, onEdit, setDeleteDialo
   }, [memo.name, memo.state, t, isInMemoDetailPage, navigateTo, memoUpdatedCallback, updateMemo]);
 
   const handleCopyLink = useCallback(() => {
-    let host = profile.instanceUrl;
-    if (host === "") {
-      host = window.location.origin;
-    }
+    // See MemoDetailSidebar.handleCopyLink for the contract. When the admin
+    // set `instanceUrl` we trust it (and the path is a router-level memo
+    // name, no sub-path prefix); when they didn't, the SPA's own origin
+    // plus the basename is always the correct public shape.
+    const host = profile.instanceUrl ? profile.instanceUrl.replace(/\/+$/, "") : window.location.origin;
     // A comment's link lands on the comment inside its parent memo, as the comment previews do.
-    const path = memo.parent ? `${memo.parent}#${extractMemoIdFromName(memo.name)}` : memo.name;
-    copy(`${host}/${path}`);
+    const routerPath = memo.parent ? `${memo.parent}#${extractMemoIdFromName(memo.name)}` : memo.name;
+    const path = profile.instanceUrl ? routerPath : withBasePath(`/${routerPath}`);
+    copy(`${host}${path}`);
     toast.success(t("message.succeed-copy-link"));
   }, [memo.name, memo.parent, t, profile.instanceUrl]);
 

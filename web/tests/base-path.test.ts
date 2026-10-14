@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  baseUrlWith,
   isAbsoluteUrl,
   normalizeBasePath,
   stripBasePath,
@@ -178,5 +179,32 @@ describe("toBasenameAwareUrl (BASE_PATH-driven)", () => {
 
   it("is the identity for an absolute URL at the root mount", () => {
     expect(toBasenameAwareUrl("https://example.com/logo.png")).toBe("https://example.com/logo.png");
+  });
+});
+
+describe("baseUrlWith (pure, prefix-driven)", () => {
+  const origin = window.location.origin;
+
+  describe("with prefix '/'", () => {
+    it("returns '<origin>/' so callers can append '/file/...' without a join bug", () => {
+      // The trailing slash is load-bearing: `origin + "/file/..."` would
+      // collapse the leading slash of the path segment into the origin and
+      // (on hosts that lack one) yield "<origin>file/...". The helper's
+      // job is to make the join safe.
+      expect(baseUrlWith("/")).toBe(`${origin}/`);
+    });
+  });
+
+  describe("with prefix '/community'", () => {
+    it("prepends the prefix and a trailing slash", () => {
+      expect(baseUrlWith("/community")).toBe(`${origin}/community/`);
+    });
+
+    it("preserves the trailing slash the caller can append to", () => {
+      // The exact shape the attachment URL builders depend on: they
+      // concatenate `BASE_URL + "file/..."` and expect to land on
+      // `<origin>/community/file/...`, not `<origin>/communityfile/...`.
+      expect(`${baseUrlWith("/community")}file/attachments/uid/photo.png`).toBe(`${origin}/community/file/attachments/uid/photo.png`);
+    });
   });
 });

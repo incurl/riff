@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { Attachment } from "@/types/proto/api/v1/attachment_service_pb";
-import { getAttachmentMotionClipUrl, getAttachmentThumbnailUrl, getAttachmentUrl } from "@/utils/attachment";
+import {
+  getAttachmentMotionClipUrl,
+  getAttachmentMotionClipUrlWith,
+  getAttachmentThumbnailUrl,
+  getAttachmentThumbnailUrlWith,
+  getAttachmentUrl,
+  getAttachmentUrlWith,
+} from "@/utils/attachment";
 
 const origin = window.location.origin;
 
@@ -54,5 +61,40 @@ describe("attachment URL builders in share mode", () => {
     } as Attachment;
 
     expect(getAttachmentUrl(attachment)).toBe(attachment.externalLink);
+  });
+});
+
+// Pure-form coverage: the SPA's `${BASE_URL}file/...` shape must be
+// sub-path-aware. Without these, the SPA would emit
+// `<origin>/file/...` on a sub-path mount and the reverse proxy would
+// 308-redirect every image fetch through its SPA fallback.
+describe("attachment URL builders with explicit baseUrl", () => {
+  it("getAttachmentUrlWith builds a sub-path-aware server URL", () => {
+    expect(getAttachmentUrlWith(`${origin}/community/`, baseAttachment)).toBe(`${origin}/community/file/attachments/test-uid/photo.png`);
+  });
+
+  it("getAttachmentThumbnailUrlWith builds a sub-path-aware server URL with the thumbnail flag", () => {
+    expect(getAttachmentThumbnailUrlWith(`${origin}/community/`, baseAttachment)).toBe(
+      `${origin}/community/file/attachments/test-uid/photo.png?thumbnail=true`,
+    );
+  });
+
+  it("getAttachmentMotionClipUrlWith builds a sub-path-aware server URL with the motion flag", () => {
+    expect(getAttachmentMotionClipUrlWith(`${origin}/community/`, baseAttachment)).toBe(
+      `${origin}/community/file/attachments/test-uid/photo.png?motion=true`,
+    );
+  });
+
+  it("a root-mount base URL still produces a leading slash so the path is well-formed", () => {
+    // The trailing slash on the baseUrl is load-bearing: without it the
+    // concatenation collapses to `<origin>file/...` and the URL is wrong
+    // in a way the browser's URL parser would silently paper over.
+    expect(getAttachmentUrlWith(`${origin}/`, baseAttachment)).toBe(`${origin}/file/attachments/test-uid/photo.png`);
+  });
+
+  it("externalLink still wins over any baseUrl", () => {
+    const external = `${origin}/community/file/attachments/test-uid/photo.png?share_token=abc`;
+    const attachment = { ...baseAttachment, externalLink: external } as Attachment;
+    expect(getAttachmentUrlWith(`${origin}/community/`, attachment)).toBe(external);
   });
 });

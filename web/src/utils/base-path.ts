@@ -167,3 +167,45 @@ export const toBasenameAwareUrlWith = (url: string | undefined | null, prefix: "
  * is whatever Vite baked at build time.
  */
 export const toBasenameAwareUrl = (url: string | undefined | null): string => toBasenameAwareUrlWith(url, BASE_PATH);
+
+/**
+ * Builds the absolute base URL for *server* endpoints — i.e. anything the
+ * browser fetches with `fetch()` or sets as `<img src>` / `<a href>` where
+ * the reverse-proxy's prefix is part of the path the request must hit.
+ *
+ * `BASE_PATH` is the React Router basename (leading slash, no trailing
+ * slash). URL composition needs a trailing slash so the caller can simply
+ * append a path segment without worrying about the root case
+ * (`"https://host" + "/file/..."` is one segment too few). This is the
+ * single helper that does the join:
+ *
+ *   baseUrlWith("/")        === "https://host/"            // root mount
+ *   baseUrlWith("/community") === "https://host/community/"  // sub-path mount
+ *
+ * Exposed as `*With` so tests can pass an explicit prefix; the
+ * module-level `BASE_URL` reads `window.location.origin` at load time
+ * (Vite is always browser-targeted for the SPA, so `window` is defined).
+ *
+ * The helper intentionally reads `window.location.origin` instead of
+ * accepting it as a parameter: the origin is "where the SPA is mounted",
+ * not a server-controlled configuration knob, and centralising the read
+ * here is what makes the four attachment/share callers behave identically.
+ *
+ * Pass `BASE_PATH` in production; tests pass an explicit value to cover
+ * the sub-path branches.
+ */
+export const baseUrlWith = (prefix: "/" | `/${string}`): string => {
+  const origin = window.location.origin;
+  return prefix === "/" ? `${origin}/` : `${origin}${prefix}/`;
+};
+
+/**
+ * Module-level server base URL, e.g. `"https://ravine.fly.dev/community/"`.
+ * Equals `"https://<host>/"` on the root mount.
+ *
+ * Use this when the result is consumed by `fetch()`, `<img src>`, or any
+ * other browser-side API that resolves URLs against the document origin
+ * rather than the React Router basename — i.e. the inverse situation
+ * `toBasenameAwareUrl` exists for.
+ */
+export const BASE_URL: string = baseUrlWith(BASE_PATH);

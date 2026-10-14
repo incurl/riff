@@ -11,6 +11,7 @@ import {
   ListMemoSharesRequestSchema,
   MemoShareSchema,
 } from "@/types/proto/api/v1/memo_service_pb";
+import { BASE_URL } from "@/utils/base-path";
 
 // Query keys factory for share-related cache management.
 export const memoShareKeys = {
@@ -78,10 +79,14 @@ export function useSharedMemo(shareToken: string, options?: { enabled?: boolean 
 /**
  * Returns the share URL for a MemoShare resource.
  * The token is the last path segment of the share name (memos/{uid}/shares/{token}).
+ *
+ * `BASE_URL` carries the SPA's sub-path (or `/` for the root mount) so the
+ * resulting URL lands on the riff listener behind the reverse proxy
+ * instead of being intercepted by the SPA fallback.
  */
 export function getShareUrl(share: MemoShare): string {
   const token = share.name.split("/").pop() ?? "";
-  return `${window.location.origin}/memos/shares/${token}`;
+  return `${BASE_URL}memos/shares/${token}`;
 }
 
 /**
@@ -96,6 +101,6 @@ export function getShareToken(share: MemoShare): string {
 export function withShareAttachmentLinks(attachments: Attachment[], token: string): Attachment[] {
   return attachments.map((a) => {
     if (a.externalLink) return a;
-    return { ...a, externalLink: `${window.location.origin}/file/${a.name}/${a.filename}?share_token=${encodeURIComponent(token)}` };
+    return { ...a, externalLink: `${BASE_URL}file/${a.name}/${a.filename}?share_token=${encodeURIComponent(token)}` };
   });
 }

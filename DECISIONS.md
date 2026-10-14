@@ -5,6 +5,145 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## Attachment, share, and motion-media URLs were not sub-path-aware (2026-10-14)
+
+The 2026-10-14 `@spa`-matcher fix made the SPA usable at
+`https://ravine.fly.dev/community/`, but the SPA's own URL builders
+were still pointing at the document origin rather than the
+reverse-proxy prefix. The audit found four call sites that compose
+URLs as `${window.location.origin}/...` and need to be
+`${window.location.origin}${BASE_PATH}/...` on a sub-path mount:
+
+1. `web/src/utils/attachment.ts::getAttachmentUrl`,
+   `getAttachmentThumbnailUrl`, `getAttachmentMotionClipUrl`. These
+   build `${origin}/file/${name}/${filename}` for server-managed
+   attachments; on `/community/` they 308-redirect per image.
+2. `web/src/hooks/useMemoShareQueries.ts::getShareUrl` (the URL on
+   the "Copy share link" button) and
+   `withShareAttachmentLinks` (the share-mode `externalLink`
+   rewriter). Both build `${origin}/memos/shares/${token}` and
+   `${origin}/file/...`, with the same 308 hop.
+3. `web/src/hooks/useAttachmentLibrary.ts:127` — the
+   `AttachmentLibraryListItem.sourceUrl` falls back to
+   `${origin}/file/...` when the attachment has no `externalLink`,
+   so the attachment-library's link icon points at the static site.
+4. `web/src/components/MemoDetailSidebar/MemoDetailSidebar.tsx::handleCopyLink`
+   and `web/src/components/MemoActionMenu/hooks.ts::handleCopyLink`.
+   These are the *only* functional correctness bug in the class:
+   when the admin leaves `instanceUrl` unset, the share URL is
+   `${window.location.origin}/memos/uid` and lands on the static
+   site, not the memo on the SPA. On a root mount the static site
+   and the SPA are the same host, so this never fired; on a sub-path
+   mount it produces a real broken link.
+
+**The fix.** Add a `BASE_URL` constant to
+`web/src/utils/base-path.ts` — `${window.location.origin}` joined
+to `BASE_PATH` with a trailing slash, e.g.
+`"https://ravine.fly.dev/community/"` — and switch the four
+call sites to read it. The trailing slash is the load-bearing
+piece: `${baseUrl}file/...` is well-formed in both the root
+(`<origin>/file/...`) and sub-path (`<origin>/community/file/...`)
+cases, where `${origin}file/...` would silently collapse the path
+segment.
+
+For the two `handleCopyLink` functions the "admin set
+`instanceUrl`" path still trusts the admin's URL as-is (the
+admin owns the public shape of the instance and is responsible for
+putting the sub-path in `instanceUrl`); only the no-`instanceUrl`
+fallback adds the basename. This preserves back-compat for admins
+who already set the URL correctly while fixing the
+`window.location.origin` fallback path.
+
+**Pure-function form.** `attachment.ts` now exports
+`getAttachmentUrlWith(baseUrl, attachment)` and the matching
+`getAttachmentThumbnailUrlWith` / `getAttachmentMotionClipUrlWith`
+so the sub-path branch is testable without module-scope mocking,
+mirroring the existing `withBasePath` / `withBasePathWith` and
+`toBasenameAwareUrl` / `toBasenameAwareUrlWith` split.
+
+**Test coverage.**
+- `web/tests/base-path.test.ts` — 4 new `baseUrlWith` assertions
+  covering the root and sub-path shapes plus the trailing-slash
+  join invariant. Total file: 30 tests.
+- `web/tests/attachment-urls.test.ts` — 5 new assertions for the
+  `*With` form, including a sub-path case that pins the
+  `<origin>/community/file/...` shape. Total file: 10 tests.
+- `web/tests/transcription-service.test.ts` — unchanged
+  intentionally: `transcriptionService.transcribeAttachment` calls
+  `getAttachmentUrl(attachment)`, so it inherits the sub-path
+  fix via the helper. The 6 existing tests continue to assert
+  the `BASE_URL === "/"` behaviour, which is what `import.meta.env`
+  reads at module-load time in the jsdom test environment.
+
+**Caddyfile.** Considered adding `not path /file /file/* /memos/shares
+/memos/shares/*` to the `@spa` matcher so direct-origin pre-fix URLs
+stop 308-redirecting. Rejected: `/file/...` is not a path the SPA
+emits anymore (the fix makes every URL carry `/community/`), and
+*excluding* `/file/*` from `@spa` would route it to the static
+site's `file_server` and 404 — the only way to make a bare
+`/file/...` request land on riff is to add an explicit
+`handle /file/*` reverse_proxy block, which is a different
+deployment shape and is not justified by a transient migration
+window.
+
+**Verification.** `pnpm test` — 198 files, 1826 tests, all green.
+`pnpm lint` (tsc + biome) clean. This entry closes the
+"out of scope (separate fix)" cross-reference the
+2026-10-14 `@spa` entry left dangling at line 187.
+
+## `Caddyfile.fly.community` `@spa` matcher was 308-redirecting `GET /` to the SPA (2026-10-14)
+
+Visiting `https://ravine.fly.dev/` returned `308 Location: /community/`
+instead of the static site. The `@spa` named matcher in
+`scripts/Caddyfile.fly.community` uses a long `not path` list to carve
+out the static-site's top-level paths; the bare path `/` was not in
+the list, so `GET /` fell into `@spa` and the `redir * /community{uri}
+308` rule fired. The Caddyfile's own comment at the time promised
+"`/ and /index.html are excluded`" but only `/index.html` was actually
+on the matcher line — the comment and the code had drifted apart, which
+is the regression that escaped the prior deploy.
+
+**The fix.** Add `/` to the existing `not path` list (one token, with
+a new comment block explaining the keep-in-sync contract between the
+comment and the matcher). Verified live: after the fix, `GET /` returns
+200 with the static site's `index.html`.
+
+**The regression guard.** `scripts/fly_deploy.sh` previously only
+smoke-tested `/community/api/health`. That guard was one-sided: a
+SPA-only or static-site-only misroute would not fire. Added a second
+smoke test (2/2) that probes `GET /` and asserts either a 200 or a
+static-site-canonicalising 308 — anything matching `/community` in
+`%{redirect_url}` is now an `exit 1` with a stderr message that names
+the file and the line of the `@spa` matcher. Checked: the new
+smoke test correctly fails when pointed at the pre-fix
+`https://ravine.fly.dev/` and would pass on a post-fix deploy.
+
+**Why the guard matters, not just the fix.** A 1-token fix is
+load-bearing in the same way the `BASE_PATH` plumbing is: the
+`not path` list is a manually-maintained negative enumeration of
+every top-level static-site path. The current `_site/` tree has ten
+top-level entries; if the ravine Jekyll tree adds an eleventh (a new
+`/blog`, a new `/changelog`), the operator has to remember to add it
+here too. The smoke test is the backstop. The comment block above
+the matcher is the in-tree documentation that should keep that
+maintenance obvious to the next reader.
+
+**Files.**
+* `scripts/Caddyfile.fly.community` — add `/` to the `@spa`
+  `not path` list (line 144); add a 5-line comment block above the
+  matcher explaining the comment/matcher keep-in-sync contract.
+* `scripts/fly_deploy.sh` — split the smoke test into 1/2 and 2/2;
+  test 2 inspects `%{http_code}` and `%{redirect_url}` on `GET /` and
+  fails the deploy with an actionable message if the response is a
+  3xx whose target includes `/community`.
+
+**Verification.** `dash -n scripts/fly_deploy.sh` and
+`bash -n scripts/fly_deploy.sh` both clean (the script is POSIX sh and
+runs unchanged on Alpine's dash, the macOS / Linux `bash`, and the
+`/bin/sh` GoLand picks when it cannot find the shebang's interpreter).
+The new check was tested end-to-end against the still-buggy live
+site: it exits 1 with the expected stderr message.
+
 ## Logo URLs were hardcoded as root-relative paths, breaking the SPA on a sub-path mount (2026-10-14)
 
 A follow-up audit of the `redirectOnAuthFailure` fix surfaced a second
