@@ -5,6 +5,33 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## Vaultwarden cohabitation design deferred (2026-10-15)
+
+The user wants to migrate an existing `vw.1une.cc` vaultwarden
+instance into the same Fly machine that hosts riff
+(`ravine.fly.dev`) and serve both hostnames off the same caddy
+listener. The full design — supervisord-third-child layout,
+`/var/opt/riff/vaultwarden` sub-path on the existing
+`riff_data` volume, caddy `@vaultwarden host vw.1une.cc`
+matcher, `ROCKET_PORT=8080` loopback binding, and the
+`supervisorctl stop` → copy → `supervisorctl start` migration
+recipe — is captured at
+`docs/design/vaultwarden-cohabitation.md`.
+
+**Status: not implemented.** The user explicitly deferred the
+change because adding ~200 MB (binary + `web-vault`) to the
+deploy image is a blocker during riff's early development.
+Revisit when image size is no longer load-bearing, or when a
+second persistent workload on the machine makes the memory
+bump inevitable anyway.
+
+**Flagged but unmitigated risk:** the current 256 MB machine
+memory with a 512 MB swap may swap-thrash once a second Rust
+binary is in the same container. The design carries this as
+the first item in its "When to revisit" checklist (bump
+memory to 1 GB), and the entry above is the audit-log
+backstop for that risk.
+
 ## Attachment, share, and motion-media URLs were not sub-path-aware (2026-10-14)
 
 The 2026-10-14 `@spa`-matcher fix made the SPA usable at
