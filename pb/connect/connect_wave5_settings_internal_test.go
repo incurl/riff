@@ -214,21 +214,61 @@ func TestUserStats_GetForSelf(t *testing.T) {
 	assert.Len(t, stats.GetMemoCreatedTimestamps(), 3)
 }
 
-// TestUserStats_ListAllUserStats_AdminOnly locks down the directory view
-// to admins.
-func TestUserStats_ListAllUserStats_AdminOnly(t *testing.T) {
+// TestUserStats_ListAllUserStats_AnyCaller pins the upstream-aligned
+// directory contract: any caller (anonymous included) is accepted,
+// and the response is filtered by per-memo visibility so a non-admin
+// or anonymous caller only sees authors whose memos they can read.
+// The previous admin-only gate was lifted to match upstream
+// Memos's `ListUserStats` so the SPA's `useAllUserStats` (fired on
+// every collection page mount, including before sign-in) no longer
+// 403s.
+func TestUserStats_ListAllUserStats_AnyCaller(t *testing.T) {
 	app := newHookedApp(t)
 	alice := newUser(t, app, "alice")
+	bob := newUser(t, app, "bob")
 	admin := newSuperuser(t, app, "admin@example.com")
+	memos := NewMemoServer(app)
 	users := NewUserServer(app)
 
-	_, err := users.ListAllUserStats(withViewer(context.Background(), alice), &v1.ListAllUserStatsRequest{})
-	require.Error(t, err)
-	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
-
-	resp, err := users.ListAllUserStats(withViewer(context.Background(), admin), &v1.ListAllUserStatsRequest{})
+	// Alice posts a public note so she surfaces in every list below.
+	_, err := memos.CreateMemo(withViewer(context.Background(), alice), &v1.CreateMemoRequest{
+		Memo: &v1.Memo{Content: "hello", Visibility: v1.Visibility_PUBLIC},
+	})
 	require.NoError(t, err)
-	assert.NotEmpty(t, resp.GetStats())
+	// Bob's only memo is private, so anonymous and non-admin callers
+	// must not see him in the directory.
+	_, err = memos.CreateMemo(withViewer(context.Background(), bob), &v1.CreateMemoRequest{
+		Memo: &v1.Memo{Content: "secret", Visibility: v1.Visibility_PRIVATE},
+	})
+	require.NoError(t, err)
+
+	// Anonymous caller: 200, alice only.
+	anon, err := users.ListAllUserStats(context.Background(), &v1.ListAllUserStatsRequest{})
+	require.NoError(t, err, "anonymous callers must not be rejected; visibility filter handles privacy")
+	anonNames := userStatsNames(anon.GetStats())
+	assert.ElementsMatch(t, []string{"users/alice/stats"}, anonNames)
+
+	// Authenticated non-admin: same shape (alice only).
+	aliceList, err := users.ListAllUserStats(withViewer(context.Background(), alice), &v1.ListAllUserStatsRequest{})
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"users/alice/stats"}, userStatsNames(aliceList.GetStats()),
+		"alice must not see bob's private-only presence in the directory")
+
+	// Admin: sees everyone.
+	adminList, err := users.ListAllUserStats(withViewer(context.Background(), admin), &v1.ListAllUserStatsRequest{})
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"users/alice/stats", "users/bob/stats"}, userStatsNames(adminList.GetStats()))
+}
+
+// userStatsNames flattens a slice of UserStats into the resource
+// names. Tiny helper so the per-visibility assertions in
+// TestUserStats_ListAllUserStats_AnyCaller read top-to-bottom.
+func userStatsNames(stats []*v1.UserStats) []string {
+	out := make([]string, 0, len(stats))
+	for _, s := range stats {
+		out = append(out, s.GetName())
+	}
+	return out
 }
 
 // TestInstanceSetting_AdminOnlyAndRoundTrip verifies the read path is

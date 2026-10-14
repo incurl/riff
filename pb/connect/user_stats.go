@@ -17,16 +17,24 @@ import (
 // "patch", so the per-type counters are mostly zero; the heatmap uses
 // the timestamps verbatim, which is the data the React client actually
 // renders.
+//
+// Auth model: align with upstream Memos's `ListUserStats` /
+// `GetUserStats` (renamed in upstream, still `ListAllUserStats` here
+// for wire compatibility with the existing SPA hook). Any caller —
+// authenticated or anonymous — is allowed. The per-memo visibility
+// filter (`memos.ViewRule` evaluated per row via `CanAccessRecord`)
+// decides which memos contribute to the per-user tally. Anonymous
+// callers therefore see only authors with at least one PUBLIC memo,
+// and authenticated callers see PUBLIC + PROTECTED + their own
+// PRIVATE + the SPACE memos of any space they actively belong to.
+// The optional `filter` is accepted for proto compatibility but is
+// not yet translated to a PocketBase filter clause; the React client
+// never sends one.
 
-// GetUserStats returns the named user's stats. The caller must be the
-// user themselves or an admin. The optional `filter` is accepted for
-// proto compatibility but is not yet translated to a PocketBase filter
-// clause; the React client never sends one.
+// GetUserStats returns the named user's stats, filtered to memos the
+// caller can read. Anonymous callers are accepted; the visibility
+// filter narrows the response to PUBLIC memos of the named user.
 func (s *UserServer) GetUserStats(ctx context.Context, req *v1.GetUserStatsRequest) (*v1.UserStats, error) {
-	viewer := CurrentUser(ctx)
-	if viewer == nil {
-		return nil, connect.NewError(connect.CodeUnauthenticated, "authentication required")
-	}
 	username := creatorUsername(req.GetName())
 	if username == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, "name is required")
@@ -35,11 +43,8 @@ func (s *UserServer) GetUserStats(ctx context.Context, req *v1.GetUserStatsReque
 	if err != nil {
 		return nil, connect.NewError(connect.CodeNotFound, "user not found")
 	}
-	if target.Id != viewer.Id && !viewer.IsSuperuser() {
-		return nil, connect.NewError(connect.CodePermissionDenied, "you may only read your own stats")
-	}
 
-	stats, err := computeUserStats(s.app, target.Id)
+	stats, err := computeUserStatsForViewer(s.app, ctx, target.Id)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
 	}
@@ -47,17 +52,16 @@ func (s *UserServer) GetUserStats(ctx context.Context, req *v1.GetUserStatsReque
 	return stats, nil
 }
 
-// ListAllUserStats returns one UserStats row per user. Admin-only because
-// the response is the full member directory.
+// ListAllUserStats returns one UserStats row per user with at least
+// one memo the caller can read. The auth contract is "any caller";
+// the response is filtered by per-memo visibility so a non-admin or
+// anonymous caller only sees authors they would have any business
+// seeing in the directory view. The `State` field is accepted for
+// proto compatibility but riff's `memos` collection has no
+// `row_status` column, so the ARCHIVED branch from upstream does
+// not apply; this implementation always treats the request as
+// NORMAL.
 func (s *UserServer) ListAllUserStats(ctx context.Context, _ *v1.ListAllUserStatsRequest) (*v1.ListAllUserStatsResponse, error) {
-	viewer := CurrentUser(ctx)
-	if viewer == nil {
-		return nil, connect.NewError(connect.CodeUnauthenticated, "authentication required")
-	}
-	if !viewer.IsSuperuser() {
-		return nil, connect.NewError(connect.CodePermissionDenied, "admin privileges required")
-	}
-
 	users, err := s.app.FindCollectionByNameOrId("users")
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
@@ -69,8 +73,15 @@ func (s *UserServer) ListAllUserStats(ctx context.Context, _ *v1.ListAllUserStat
 
 	out := make([]*v1.UserStats, 0, len(rows))
 	for _, r := range rows {
-		stats, err := computeUserStats(s.app, r.Id)
+		stats, err := computeUserStatsForViewer(s.app, ctx, r.Id)
 		if err != nil {
+			continue
+		}
+		// Skip authors the caller cannot see at all — that is, users
+		// whose memos are all PROTECTED/PRIVATE/SPACE and not visible
+		// to this viewer. The empty `total_memo_count` is the
+		// "no visible memos" signal.
+		if stats.GetTotalMemoCount() == 0 {
 			continue
 		}
 		stats.Name = "users/" + r.GetString("username") + "/stats"
@@ -79,21 +90,41 @@ func (s *UserServer) ListAllUserStats(ctx context.Context, _ *v1.ListAllUserStat
 	return &v1.ListAllUserStatsResponse{Stats: out}, nil
 }
 
-// computeUserStats walks the user's memos in memory and tallies tag
-// counts and timestamps. This is fine while the count is small
-// (single-instance, single-user feed); a periodic heatmap cache would
-// be the right next step if profiling shows it matters.
-func computeUserStats(app core.App, userID string) (*v1.UserStats, error) {
+// computeUserStatsForViewer is the per-caller wrapper around
+// computeUserStats that drops memos the caller cannot read. It uses
+// the same `memos.ViewRule` the ListMemos handler relies on, so the
+// visibility contract is identical to the rest of the read API:
+// anonymous callers see only PUBLIC memos, authenticated callers see
+// PUBLIC + PROTECTED + their own PRIVATE + SPACE memos of any space
+// they actively belong to. The returned `TotalMemoCount` reflects
+// only the visible subset, so callers can use it as a "no visible
+// memos" sentinel in directory views.
+func computeUserStatsForViewer(app core.App, ctx context.Context, userID string) (*v1.UserStats, error) {
 	rows, err := app.FindRecordsByFilter("memos", "author={:uid}", "-created", 0, 0, map[string]any{"uid": userID})
 	if err != nil {
 		return nil, err
 	}
 
+	memos, err := app.FindCollectionByNameOrId("memos")
+	if err != nil {
+		return nil, err
+	}
+	requestInfo := requestInfoFor(ctx)
+
 	tagCount := map[string]int32{}
 	createdTimestamps := make([]*timestamppb.Timestamp, 0, len(rows))
 	updatedTimestamps := make([]*timestamppb.Timestamp, 0, len(rows))
 	todoCount := int32(0)
+	visible := 0
 	for _, r := range rows {
+		ok, err := app.CanAccessRecord(r, requestInfo, memos.ViewRule)
+		if err != nil {
+			continue
+		}
+		if !ok {
+			continue
+		}
+		visible++
 		for _, t := range r.GetStringSlice("tags") {
 			tagCount[t]++
 		}
@@ -112,7 +143,7 @@ func computeUserStats(app core.App, userID string) (*v1.UserStats, error) {
 			TodoCount: todoCount,
 		},
 		TagCount:              tagCount,
-		TotalMemoCount:        int32(len(rows)),
+		TotalMemoCount:        int32(visible),
 		MemoCreatedTimestamps: createdTimestamps,
 		MemoUpdatedTimestamps: updatedTimestamps,
 	}, nil

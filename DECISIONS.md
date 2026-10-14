@@ -5,6 +5,111 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## `ListAllUserStats` and `GetUserStats` open up the directory view; align with upstream Memos (2026-10-15)
+
+The browser console at `https://ravine.fly.dev/community/` shows a
+steady stream of `POST .../UserService/ListAllUserStats 403
+(Forbidden)` errors on every page navigation. The SPA's
+`useAllUserStats` hook (via `useFilteredMemoStats` →
+`AppSidebar`) fires the call on every mount, even when the user is
+signed in as a non-admin (or not signed in at all on a fresh
+install). The previous contract was admin-only, so every non-admin
+caller got rejected.
+
+**Diagnosis.** `pb/connect/user_stats.go::ListAllUserStats` and
+`GetUserStats` both gate the response on
+`viewer.IsSuperuser()` (or `target.Id != viewer.Id && !viewer.IsSuperuser()`
+for the per-user RPC). That is materially stricter than upstream
+Memos, which allows any caller to read the directory view and
+filters the response by per-memo visibility (the
+`MemoAccessScope` predicate). The same SPA hook that hits the 403
+also calls `useUserStats("users/<name>")` for the profile page,
+which is the same RPC shape, so the 403 is duplicated there.
+
+**Upstream Memos comparison.** From
+`server/api/user_service_stats.go::ListUserStats` (verbatim
+abridged):
+
+```go
+func (s *APIService) ListUserStats(ctx context.Context, request *apipb.ListUserStatsRequest) (*apipb.ListUserStatsResponse, error) {
+    // users/- lists every user; users/{user} narrows the list to one creator.
+    var creatorID *int32
+    if request.Parent != BuildUserName("-") {
+        user, err := ResolveUserByName(ctx, s.Store, request.Parent)
+        // ...
+    }
+    rowStatus := convertStateToStore(request.State)
+    memoFind := &store.FindMemo{
+        CreatorID:       creatorID,
+        ExcludeComments: true,
+        ExcludeContent:  true,
+        RowStatus:       &rowStatus,
+    }
+    accessScope, currentUser, err := s.resolveMemoAccessScope(ctx)
+    // ... filter memos by accessScope, group by creator, emit one UserStats per creator ...
+}
+```
+
+There is no admin gate. `resolveMemoAccessScope` returns
+`(allowPublic: instance.AllowsAnonymousAccess, user: currentUser)`
+for an anonymous caller and `(allowPublic: true, user: currentUser)`
+for an authenticated one, then the memo store applies that scope as
+a SQL predicate. The proto `ListUserStats` was renamed from
+`ListAllUserStats` in upstream; riff keeps the old name for
+wire compatibility with the existing SPA hook.
+
+**Decision.** Drop the admin gate, drop the `viewer == nil` early-out,
+and filter the per-memo tally by `memos.ViewRule` evaluated per row
+via `app.CanAccessRecord`. Anonymous callers are accepted; they see
+only authors with at least one memo that passes the visibility
+filter. The `users/<username>/stats` resource name on each row is
+preserved. The `state` request field is accepted for proto
+compatibility but riff's `memos` collection has no `row_status`
+column, so the ARCHIVED branch from upstream does not apply — every
+request is treated as NORMAL. That branch will be added when
+riff's memos table gains the `row_status` column.
+
+The new `computeUserStatsForViewer` helper is a per-caller wrapper
+around the existing per-user tally logic, so the wire shape is
+unchanged (still `UserStats` with `total_memo_count`,
+`memo_type_stats.todo_count`, `tag_count`, `memo_created_timestamps`,
+`memo_updated_timestamps`). The `attachment_storage_bytes` field
+that upstream's `GetUserStats` populates only when the caller is the
+target user remains unset in riff — adding the storage aggregation
+is a separate follow-up that is out of scope for this fix.
+
+**Test plan.**
+
+* `pb/connect/connect_wave5_settings_internal_test.go` —
+  `TestUserStats_ListAllUserStats_AnyCaller` (renamed from
+  `TestUserStats_ListAllUserStats_AdminOnly`). Walks the three
+  caller types — anonymous, signed-in non-admin, admin — and
+  asserts the visibility-filtered directory response for each.
+  The previous test pinned the admin-only contract; it was the
+  only place that knew the 403 was deliberate, and removing it is
+  the only behavioural change in this commit. The new test pins
+  the per-caller response shape so a future regression that
+  re-adds the gate (or breaks the visibility filter) fails loud.
+* `pb/connect/user_stats_internal_test.go` (new) —
+  `TestGetUserStats_RespectsVisibilityPerMemo` walks alice's
+  PUBLIC/PROTECTED/PRIVATE memos under three caller contexts and
+  asserts the response shape. `TestGetUserStats_UnknownNameStillInvalidArgument`
+  pins the `InvalidArgument` shape-only contract on an empty name.
+
+**Wire compatibility.** The proto request and response shapes are
+unchanged. The SPA's `useAllUserStats` hook keeps firing on every
+collection page mount and now gets a 200 with the visibility-filtered
+list instead of a 403. The SPA's existing `mergeTagCounts(...allUserStats.map((stats) => stats.tagCount))` aggregator in
+`useFilteredMemoStats` reads the same `tag_count` field it always
+did, so the activity calendar and tag sidebar keep rendering. No
+client update is required.
+
+**Status: implemented, deployment pending.** Same deployment
+blocker as the prior entry: rebuild `riff:dev` and push to the
+Fly registry. Both entries (this and the `GetInstanceSetting`
+default-on-miss fix from the same series) will retire the bulk of
+the console-error noise on `https://ravine.fly.dev/community/`.
+
 ## `GetInstanceSetting` returns a default-constructed proto on a missing row (2026-10-15)
 
 The deployed Fly instance (`https://ravine.fly.dev/community/`)
