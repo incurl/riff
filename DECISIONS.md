@@ -5,6 +5,210 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## `GetInstanceSetting` returns a default-constructed proto on a missing row (2026-10-15)
+
+The deployed Fly instance (`https://ravine.fly.dev/community/`)
+emits a steady stream of HTTP 404s on
+`POST /community/memos.api.v1.InstanceService/GetInstanceSetting`
+from the SPA's `useInstanceSetting` hook. The console-error
+pattern is benign-looking (the SPA falls back to defaults via
+the `create(InstanceSetting_XSchema, {})` path in
+`web/src/contexts/InstanceContext.tsx`) but every per-key fetch
+retries on navigation, so the 404s are visible to the operator
+on every page.
+
+**Diagnosis.** The 404 is the row lookup
+(`s.app.FindFirstRecordByFilter("instance_settings", "key={:k}", ...)`)
+missing — the `instance_settings` collection is created by
+`pb/migrations/1720000002_create_instance_settings.go` with
+`key` (text, unique) and `payload` (json), and nothing in the
+repo seeds default rows on a fresh install. The per-key
+`GetInstanceSetting` handler at `pb/connect/instance_settings.go:26-36`
+is strict: a missing row returns `CodeNotFound`. The sibling
+`BatchGetInstanceSettings` at lines 41-54 is documented as
+lenient — "Missing keys are skipped (no error) to match the
+Memos frontend which treats a not-yet-stored setting as an
+empty body" — so the two endpoints disagree on the same
+fresh-install state, which is the underlying inconsistency.
+
+**Upstream Memos comparison.** Upstream's contract for
+`GetInstanceSetting` is materially different from what riff
+shipped. From
+`server/api/instance_service.go::getInstanceSettingByName`
+(verbatim):
+
+```go
+switch instanceSettingKey {
+case storepb.InstanceSettingKey_BASIC:
+    var setting *storepb.InstanceBasicSetting
+    setting, err = s.Store.GetInstanceBasicSetting(ctx)
+    instanceSetting = &storepb.InstanceSetting{...}
+case storepb.InstanceSettingKey_GENERAL:
+    var setting *storepb.InstanceGeneralSetting
+    setting, err = s.Store.GetInstanceGeneralSetting(ctx)
+    instanceSetting = &storepb.InstanceSetting{...}
+// ... MEMO_RELATED, STORAGE, TAGS, NOTIFICATION, AI, ACCESS ...
+default:
+    return nil, status.Errorf(codes.InvalidArgument,
+        "unsupported instance setting key: %v", instanceSettingKey)
+}
+```
+
+Every known key delegates to a typed store getter. The store
+getter (`store/instance_setting.go::GetInstanceGeneralSetting`,
+verbatim) is the place that constructs the default on a miss
+— no DB write, just an in-memory fallback:
+
+```go
+instanceSetting, err := s.Store.GetInstanceSetting(ctx, &FindInstanceSetting{
+    Name: storepb.InstanceSettingKey_GENERAL.String(),
+})
+if err != nil {
+    return nil, errors.Wrap(err, "failed to get instance general setting")
+}
+instanceGeneralSetting := &storepb.InstanceGeneralSetting{}
+if instanceSetting != nil {
+    instanceGeneralSetting = instanceSetting.GetGeneralSetting()
+}
+s.cacheInstanceSetting(ctx, &storepb.InstanceSetting{...})
+return instanceGeneralSetting, nil
+```
+
+The upstream test that pins this contract
+(`server/api/test/instance_service_test.go:148-172`) calls
+`GetInstanceSetting` on a brand-new test service with no
+seeded rows, expects `NoError`, and asserts the response
+carries a non-nil default body. Per-key subtests exist for
+`general`, `storage`, `memo_related`, `tags`, and `access`;
+the only failure path is "name doesn't decompose to a
+known key" → `InvalidArgument`. Upstream's known set is
+**9 keys** (`BASIC`, `GENERAL`, `MEMO_RELATED`, `STORAGE`,
+`TAGS`, `NOTIFICATION`, `AI`, `ACCESS`, `USAGE_LIMITS`),
+of which riff currently exposes **7** (riff's proto omits
+`BASIC` and `USAGE_LIMITS`).
+
+**Decision.** Adopt upstream's read-side default-construction
+pattern verbatim. Two corrections the upstream check forced:
+
+* **Closed set is 7, not 6.** The first draft listed
+  `{GENERAL, MEMO_RELATED, STORAGE, NOTIFICATION, AI, ACCESS}`
+  and missed `TAGS`. Verified via
+  `proto/api/v1/instance_service.proto:127` (`oneof value` has
+  a `TagsSetting tags_setting` variant) and line 143 (`enum
+  Key` has `TAGS = 4`). The new `defaultInstanceSettingForKey`
+  helper covers all seven.
+* **No DB write on the read path.** The first option
+  described "write a default row ... and return it", which
+  would also write `STORAGE` and `NOTIFICATION` defaults
+  from any caller — bypassing the admin-only check that
+  `UpdateInstanceSetting` already enforces. Upstream never
+  upserts on read; the per-key typed getter just returns the
+  empty-constructed proto. The new `defaultInstanceSettingForKey`
+  helper is a pure function (no `core.App` dependency) that
+  produces the same shape.
+
+The fix unifies `GetInstanceSetting` and
+`BatchGetInstanceSettings` on a single contract: **a known
+key always returns a non-nil body (default-constructed on
+a missing row); an unknown key is rejected by
+`splitInstanceSettingName` with `CodeInvalidArgument`**.
+This matches the leniency comment `BatchGetInstanceSettings`
+already promises and removes the per-key vs. batch
+disagreement. Two changes:
+
+* `pb/connect/instance_settings.go:23-36` — replace the
+  `CodeNotFound` on miss with a call to the new
+  `defaultInstanceSettingForKey(key)` helper. The helper
+  lives at the bottom of the file alongside the existing
+  `instanceGeneralSetting` / `instanceAISetting` typed
+  readers, which were already the right shape but only
+  used for the `GetInstanceProfile` path.
+* `pb/connect/instance_settings.go:41-55` —
+  `BatchGetInstanceSettings` now substitutes the default
+  for any missing key instead of skipping it, so the
+  response carries one entry per known key in the
+  requested set.
+
+**Doc-comment fix folded in.** The block comment at
+`instance_settings.go:23-25` claimed "Unknown keys produce
+FailedPrecondition so the SPA can distinguish 'missing' from
+'broken' without a separate error code." The code at
+line 33 (now removed) returned `connect.CodeNotFound`, not
+`CodeFailedPrecondition`. The new comment accurately
+describes the new contract.
+
+**Oneof wrapper naming asymmetry.** protoreflect camelcases
+`AI` as `Ai` for the oneof variant name, so the wrapper
+type is `InstanceSetting_AiSetting` (no trailing underscore)
+while the other six are `InstanceSetting_GeneralSetting_`
+etc. The new helper carries a comment about this so a
+future refactor doesn't add a non-existent
+`InstanceSetting_AISetting_` type by mistake.
+
+**Tests.**
+
+* `pb/connect/instance_settings_internal_test.go` (new) —
+  three regression tests pin the new contract:
+  (a) `TestGetInstanceSetting_MissingRowReturnsDefault`
+  walks the seven known keys and asserts each one returns
+  a non-nil default body without a row being created;
+  (b) `TestGetInstanceSetting_UnknownKeyStillNotFound`
+  pins that `instance/settings/GARBAGE` still returns
+  `CodeNotFound`; (c) `TestBatchGetInstanceSettings_FillsDefaults`
+  asserts the batch path now returns a body for every
+  requested known key, including ones with no stored row.
+* `pb/connect/connect_wave5_settings_internal_test.go:243-247`
+  — the `require.Error(t, err, "no row yet")` assertion
+  flipped to `require.NoError` and the body is asserted
+  to be a non-nil `*v1.InstanceSetting_GeneralSetting{}`.
+  The trailing "Initial read returns empty body" comment
+  is now accurate (it wasn't before — the previous test
+  pinned the *opposite* of what its comment said).
+* `pb/connect/connect_wave5_settings_internal_test.go:303`
+  — the batch assertion `assert.Len(t, batch.GetSettings(), 1)`
+  became `assert.Len(t, batch.GetSettings(), 3)` because
+  `STORAGE` and `ACCESS` are no longer skipped.
+
+**Status: implemented, deployment pending.** The fix is
+wire-compatible (still an `InstanceSetting` with a `oneof
+value` for every known key; only the *missing-row*
+behaviour changes), so no client update is required — the
+SPA's own `create(InstanceSetting_XSchema, {})` fallback
+paths in `InstanceContext.tsx` already handle the default
+body that now comes back from the server. The next step
+is to rebuild `riff:dev` and push to the Fly registry
+(`cd web && pnpm release && docker buildx build …`).
+
+**Alternatives considered and rejected.**
+
+1. *Client-side: SPA catches `not_found` in
+   `useInstanceSetting`* (~15 lines in
+   `web/src/hooks/useInstanceQueries.ts`). The SPA already
+   has a fallback in `InstanceContext.tsx`, but making the
+   client compensate leaves the server's "404 for any
+   missing key" shape as a footgun for any future caller
+   that doesn't replicate the catch-and-default pattern
+   (the MCP server, the future riff CLI, etc.). Server-side
+   leniency is the contract the
+   `BatchGetInstanceSettings` comment already promises;
+   server-side fix is the right place to make it real.
+2. *Server seed hook: write all 7 default rows in
+   `OnServe` when the collection is empty.* One-time
+   seed with a guard against re-seeding. Rejected
+   because it conflates "the collection is empty" (the
+   seed condition) with "the operator wants defaults"
+   (the seed action): an operator who has deliberately
+   deleted a row to fall back to defaults would have
+   the row resurrected on the next deploy. The chosen
+   fix is row-by-row and only synthesises the default
+   in memory, leaving the DB state alone.
+3. *DB-level default seed in the migration.* The 9-key
+   upstream set includes `USAGE_LIMITS` and `BASIC` that
+   riff's proto doesn't expose, so a migration-time
+   default would either drift from the proto or grow
+   on every proto change. The handler-side default
+   tracks the proto for free.
+
 ## Vaultwarden cohabitation design deferred (2026-10-15)
 
 The user wants to migrate an existing `vw.1une.cc` vaultwarden

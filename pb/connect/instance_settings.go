@@ -20,9 +20,18 @@ import (
 // the proto JSON body so adding a new setting kind never needs a
 // migration.
 
-// GetInstanceSetting returns a single setting by key. Unknown keys
-// produce FailedPrecondition so the SPA can distinguish "missing" from
-// "broken" without a separate error code.
+// GetInstanceSetting returns a single setting by key. The closed set
+// of keys (see splitInstanceSettingName) is seven strings; an
+// unknown key fails parsing in splitInstanceSettingName with
+// CodeInvalidArgument. A known key with no stored row is
+// indistinguishable from a key whose payload is the zero value, so
+// the handler returns a default-constructed body in that case
+// rather than CodeNotFound. This mirrors upstream Memos's
+// `getInstanceSettingByName` switch
+// (usememos/memos@main/server/api/instance_service.go), which
+// delegates each key to a typed store getter that falls back to a
+// zero-value proto on a miss. The BatchGetInstanceSettings path
+// applies the same rule below.
 func (s *InstanceServer) GetInstanceSetting(ctx context.Context, req *v1.GetInstanceSettingRequest) (*v1.InstanceSetting, error) {
 	key, err := splitInstanceSettingName(req.GetName())
 	if err != nil {
@@ -30,23 +39,57 @@ func (s *InstanceServer) GetInstanceSetting(ctx context.Context, req *v1.GetInst
 	}
 	row, err := s.app.FindFirstRecordByFilter("instance_settings", "key={:k}", map[string]any{"k": key})
 	if err != nil {
+		// No row yet. The split-instance-setting-name check above
+		// already accepted `key` as one of the seven known values,
+		// so the SPA is allowed to ask for any of them; the
+		// correct response is the default body, not a 404. The
+		// no-write behaviour matches upstream: the read path
+		// never upserts, so an operator who deletes a row to
+		// revert to defaults doesn't have it resurrected on the
+		// next read.
+		if setting := defaultInstanceSettingForKey(key); setting != nil {
+			return setting, nil
+		}
+		// Defensive: the switch in splitInstanceSettingName is
+		// the single source of truth for the closed set; if a
+		// new key is added to defaultInstanceSettingForKey but
+		// not splitInstanceSettingName, surface the mismatch
+		// rather than silently returning the wrong default.
 		return nil, connect.NewError(connect.CodeNotFound, "setting not found")
 	}
 	return recordToInstanceSetting(row), nil
 }
 
 // BatchGetInstanceSettings fetches several settings in one round-trip.
-// Missing keys are skipped (no error) to match the Memos frontend which
-// treats a not-yet-stored setting as an empty body.
+// Known keys with no stored row are filled in with a default-constructed
+// body, not skipped, so the response carries one entry per known key
+// the caller asked for (matching the upstream Memos behaviour and the
+// per-key GetInstanceSetting contract). Unparseable names (e.g. an
+// empty string or a name that doesn't decompose to a known key) are
+// dropped from the response without an error, since the SPA's
+// batch-read on the settings page is best-effort: returning a single
+// non-2xx because one of N names is malformed would force the frontend
+// to retry the whole batch.
 func (s *InstanceServer) BatchGetInstanceSettings(ctx context.Context, req *v1.BatchGetInstanceSettingsRequest) (*v1.BatchGetInstanceSettingsResponse, error) {
 	out := make([]*v1.InstanceSetting, 0, len(req.GetNames()))
 	for _, name := range req.GetNames() {
 		key, err := splitInstanceSettingName(name)
 		if err != nil {
+			// Unparseable name: drop it from the batch rather
+			// than fail the whole call.
 			continue
 		}
 		row, err := s.app.FindFirstRecordByFilter("instance_settings", "key={:k}", map[string]any{"k": key})
 		if err != nil {
+			// No row yet: synthesise the default body. Mirrors
+			// GetInstanceSetting's miss path above.
+			if setting := defaultInstanceSettingForKey(key); setting != nil {
+				out = append(out, setting)
+				continue
+			}
+			// Defensive: a known key should always have a
+			// default, but if the closed-set switch is out of
+			// sync, skip rather than 500.
 			continue
 		}
 		out = append(out, recordToInstanceSetting(row))
@@ -346,4 +389,55 @@ func instanceAISetting(app core.App) *v1.InstanceSetting_AISetting {
 		return &v1.InstanceSetting_AISetting{}
 	}
 	return body
+}
+
+// defaultInstanceSettingForKey returns a default-constructed
+// *v1.InstanceSetting for a known key, populated with the matching
+// oneof variant's zero-value message. It is the read-side
+// fallback used by GetInstanceSetting and BatchGetInstanceSettings
+// when no row exists in the instance_settings collection for the
+// requested key.
+//
+// The closed set is the same seven strings splitInstanceSettingName
+// accepts: GENERAL, STORAGE, MEMO_RELATED, TAGS, NOTIFICATION, AI,
+// ACCESS. Anything else returns nil; the caller treats nil as "this
+// key has no synthesised default, fall back to CodeNotFound / drop
+// from the batch".
+//
+// The helper has no core.App dependency: a default body is a
+// pure-proto construction, so there's no row to read. The seven
+// arms mirror the case ladder in recordToInstanceSetting above;
+// the AI case uses InstanceSetting_AiSetting (no trailing
+// underscore) because the proto field is `ai_setting` and the
+// generated wrapper is named after the camelcased field name
+// (see proto/gen/api/v1/instance_service.pb.go:613), which differs
+// from the other six keys whose field names already end in
+// `Setting` (the trailing underscore on the other wrappers is the
+// protoreflect collision-avoidance convention). A mismatch
+// between this switch and splitInstanceSettingName's switch is
+// caught at the call site (CodeNotFound / silent drop in the
+// batch path) rather than via a build-time check; the new
+// regression test in instance_settings_internal_test.go pins
+// every key in the closed set.
+func defaultInstanceSettingForKey(key string) *v1.InstanceSetting {
+	setting := &v1.InstanceSetting{Name: "instance/settings/" + key}
+	switch key {
+	case "GENERAL":
+		setting.Value = &v1.InstanceSetting_GeneralSetting_{GeneralSetting: &v1.InstanceSetting_GeneralSetting{}}
+	case "STORAGE":
+		setting.Value = &v1.InstanceSetting_StorageSetting_{StorageSetting: &v1.InstanceSetting_StorageSetting{}}
+	case "MEMO_RELATED":
+		setting.Value = &v1.InstanceSetting_MemoRelatedSetting_{MemoRelatedSetting: &v1.InstanceSetting_MemoRelatedSetting{}}
+	case "TAGS":
+		setting.Value = &v1.InstanceSetting_TagsSetting_{TagsSetting: &v1.InstanceSetting_TagsSetting{}}
+	case "NOTIFICATION":
+		setting.Value = &v1.InstanceSetting_NotificationSetting_{NotificationSetting: &v1.InstanceSetting_NotificationSetting{}}
+	case "AI":
+		setting.Value = &v1.InstanceSetting_AiSetting{AiSetting: &v1.InstanceSetting_AISetting{}}
+	case "ACCESS":
+		setting.Value = &v1.InstanceSetting_AccessSetting_{AccessSetting: &v1.InstanceSetting_AccessSetting{}}
+	default:
+		return nil
+	}
+	return setting
 }

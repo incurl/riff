@@ -240,12 +240,16 @@ func TestInstanceSetting_AdminOnlyAndRoundTrip(t *testing.T) {
 	admin := newSuperuser(t, app, "admin@example.com")
 	inst := NewInstanceServer(app)
 
-	// Initial read returns empty body.
-	_, err := inst.GetInstanceSetting(withViewer(context.Background(), alice), &v1.GetInstanceSettingRequest{
+	// Initial read returns the default body (no row yet), mirroring
+	// upstream Memos's getInstanceSettingByName which synthesises a
+	// zero-value proto on a miss rather than returning an error.
+	defaultGot, err := inst.GetInstanceSetting(withViewer(context.Background(), alice), &v1.GetInstanceSettingRequest{
 		Name: "instance/settings/GENERAL",
 	})
-	require.Error(t, err, "no row yet")
-	assert.Equal(t, connect.CodeNotFound, connect.CodeOf(err))
+	require.NoError(t, err)
+	general := defaultGot.GetGeneralSetting()
+	require.NotNil(t, general, "default body must be GENERAL, not unset")
+	assert.Equal(t, false, general.GetDisallowUserRegistration())
 
 	// Non-admin cannot write.
 	_, err = inst.UpdateInstanceSetting(withViewer(context.Background(), alice), &v1.UpdateInstanceSettingRequest{
@@ -288,18 +292,29 @@ func TestInstanceSetting_AdminOnlyAndRoundTrip(t *testing.T) {
 	assert.Equal(t, int32(1), got.GetGeneralSetting().GetWeekStartDayOffset())
 	assert.Equal(t, "console.log('hi')", got.GetGeneralSetting().GetAdditionalScript())
 
-	// BatchGet collects several keys at once. Missing keys are skipped,
-	// not errored.
+	// BatchGet collects several keys at once. Known keys with no
+	// stored row are filled in with the default body, so the
+	// response carries one entry per requested known key.
 	batch, err := inst.BatchGetInstanceSettings(withViewer(context.Background(), alice), &v1.BatchGetInstanceSettingsRequest{
 		Names: []string{
 			"instance/settings/GENERAL",
-			"instance/settings/STORAGE", // not stored yet
-			"instance/settings/ACCESS",
+			"instance/settings/STORAGE", // not stored yet — must come back as a default
+			"instance/settings/ACCESS",  // not stored yet — must come back as a default
 		},
 	})
 	require.NoError(t, err)
-	// We didn't write STORAGE or ACCESS, so we should get exactly GENERAL.
-	assert.Len(t, batch.GetSettings(), 1)
+	require.Len(t, batch.GetSettings(), 3)
+	// GENERAL carries the value the admin wrote above; STORAGE and
+	// ACCESS are the zero-value defaults, but each must populate
+	// the matching oneof variant (not nil).
+	byName := map[string]*v1.InstanceSetting{}
+	for _, s := range batch.GetSettings() {
+		byName[s.GetName()] = s
+	}
+	assert.Equal(t, true, byName["instance/settings/GENERAL"].GetGeneralSetting().GetDisallowUserRegistration())
+	assert.Equal(t, int32(1), byName["instance/settings/GENERAL"].GetGeneralSetting().GetWeekStartDayOffset())
+	assert.NotNil(t, byName["instance/settings/STORAGE"].GetStorageSetting(), "missing STORAGE must still come back with a default body")
+	assert.NotNil(t, byName["instance/settings/ACCESS"].GetAccessSetting(), "missing ACCESS must still come back with a default body")
 }
 
 // TestInstanceStats_AdminOnly verifies the admin-only stats endpoint
