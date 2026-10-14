@@ -49,7 +49,8 @@ golangci-lint run --fix                          # Auto-fix lint, including goim
 
 # Frontend
 cd web && pnpm install             # Install dependencies
-cd web && pnpm dev                 # Dev server on :3001
+cd web && pnpm dev                 # Dev server on :3001; proxies /api, /api/v1/sse, /memos.api.v1, /file to DEV_PROXY_SERVER (default http://localhost:8090, i.e. the riff backend)
+cd web && DEV_PROXY_SERVER=http://riff.internal:9000 pnpm dev   # Dev against a backend on a different host/port
 cd web && pnpm lint                # Type check + Biome lint
 cd web && pnpm test                # Vitest unit tests (requires Node 24+; see web/.nvmrc and the Frontend Conventions)
 cd web && pnpm build               # Production build
@@ -109,6 +110,7 @@ Tests live next to the code (`*_test.go`) or in the same package's `*_test.go` b
 | Internal package logic | Relevant `internal/` package tests | `go test -v -race ./internal/...` |
 | Frontend behavior | Components/hooks/contexts under `web/src/` | `cd web && pnpm lint && pnpm test` |
 | Frontend production output | Vite config or release-sensitive UI | `cd web && pnpm build` or `pnpm release` |
+| Vite dev proxy target | `web/vite.config.mts` plus `web/src/lib/dev-proxy-server.ts` (the pure resolver; the test in `web/tests/vite-dev-proxy.test.ts` pins the default). Default is `http://localhost:8090` (PocketBase). Override with `DEV_PROXY_SERVER=http://host:port pnpm dev` for container / remote backends. | `cd web && ./node_modules/.bin/vitest run tests/vite-dev-proxy.test.ts` (Node 24+ via `nvm use` is required; see the test runner note in the Frontend Conventions) |
 | Proto API | `.proto` source plus generated outputs | `cd proto && buf generate && buf lint` |
 | Public unauthenticated route | Add the route in `pb/api/` or `pb/connect/`; declare the access rule in the matching `pb/migrations/` collection (use the `noAuth` route option in `pb/connect/` if no PocketBase record is loaded). | Targeted test in the package that owns the route, or manual route check. |
 | Rate limit middleware on a route | `pb/connect/ratelimit.go` (`RateLimit`) plus `Route.BindFunc` at the call site | `go test -v -run TestRateLimit ./pb/connect/...` |

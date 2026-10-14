@@ -1,13 +1,13 @@
 import babel from "@rolldown/plugin-babel";
+import tailwindcss from "@tailwindcss/vite";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import { resolve } from "path";
 import { defineConfig } from "vite";
-import tailwindcss from "@tailwindcss/vite";
+import { resolveDevProxyServer } from "@/lib/dev-proxy-server";
 
-let devProxyServer = "http://localhost:8081";
+const devProxyServer = resolveDevProxyServer();
 if (process.env.DEV_PROXY_SERVER && process.env.DEV_PROXY_SERVER.length > 0) {
   console.log("Use devProxyServer from environment: ", process.env.DEV_PROXY_SERVER);
-  devProxyServer = process.env.DEV_PROXY_SERVER;
 }
 
 // https://vite.dev/config/
