@@ -2,10 +2,14 @@ package connect
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
+	"fmt"
+	"strings"
 
 	"connectrpc.com/connect/v2"
 	"github.com/pocketbase/pocketbase/core"
+	"github.com/pocketbase/pocketbase/tools/filesystem"
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	v1 "github.com/incurl/riff/proto/gen/api/v1"
@@ -143,7 +147,7 @@ func (s *UserServer) CreateUser(ctx context.Context, req *v1.CreateUserRequest) 
 	}
 	if req.User.GetAvatarUrl() != "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument,
-			"avatar_url cannot be set here; upload the avatar to the users collection instead")
+			"avatar_url cannot be set on user creation; create the account first and then update the avatar")
 	}
 
 	viewer := CurrentUser(ctx)
@@ -294,6 +298,11 @@ func (s *UserServer) UpdateUser(ctx context.Context, req *v1.UpdateUserRequest) 
 	if targets("description") {
 		target.Set("bio", req.User.GetDescription())
 	}
+	if targets("avatar_url") {
+		if err := applyAvatarURLToRecord(target, req.User.GetAvatarUrl()); err != nil {
+			return nil, err
+		}
+	}
 	if targets("password") && req.User.GetPassword() != "" {
 		if err := setPassword(target, req.User.GetPassword()); err != nil {
 			return nil, err
@@ -361,4 +370,113 @@ func requireAdmin(ctx context.Context) error {
 		return connect.NewError(connect.CodePermissionDenied, "admin privileges required")
 	}
 	return nil
+}
+
+// applyAvatarURLToRecord translates the proto's `User.avatar_url`
+// field into a write to the PocketBase `users.avatar` FileField.
+// The wire format is a data URL (`data:<mediatype>;base64,<bytes>`),
+// produced by the SPA's `convertFileToBase64` helper. We only
+// accept data URLs because:
+//
+//   - The schema's `users.avatar` is a single-file FileField, not a
+//     URL column, so a remote URL would have nowhere to land.
+//   - A data URL is a self-contained blob; the SPA never has a
+//     remote host for avatars.
+//
+// Empty string clears the avatar (the SPA's "remove avatar" button
+// posts `avatar_url: ""`). Any other string is rejected so a caller
+// can't smuggle a string into a field that is supposed to hold a
+// stored filename.
+//
+// On a successful upload the FileField's record interceptor moves
+// the staged bytes into the canonical `<collectionId>/<recordId>/`
+// directory and rewrites the column to the new filename. The
+// caller reads it back via recordToUser (which now reads the column
+// as a string slice) and surfaces the resulting
+// `/api/files/users/{id}/{filename}` URL.
+func applyAvatarURLToRecord(rec *core.Record, avatarURL string) error {
+	avatarURL = strings.TrimSpace(avatarURL)
+	if avatarURL == "" {
+		// Clear the field. Setting an empty slice normalises to
+		// the empty value for a non-multiple FileField, which
+		// also drops the previous on-disk file via PB's
+		// rememberFilesToDelete hook.
+		rec.Set("avatar", []string{})
+		return nil
+	}
+	const dataPrefix = "data:"
+	if !strings.HasPrefix(avatarURL, dataPrefix) {
+		return connect.NewError(connect.CodeInvalidArgument,
+			"avatar_url must be a data: URL (got a non-data string)")
+	}
+	// Expect `data:<mediatype>;base64,<payload>`. mimetype-style
+	// data URLs all use the base64 segment; the SPA's
+	// FileReader.readAsDataURL produces exactly this shape.
+	comma := strings.Index(avatarURL, ",")
+	if comma <= 0 {
+		return connect.NewError(connect.CodeInvalidArgument,
+			"avatar_url data: URL is malformed (no comma separator)")
+	}
+	header := avatarURL[len(dataPrefix):comma]
+	payload := avatarURL[comma+1:]
+	if !strings.Contains(header, ";base64") {
+		return connect.NewError(connect.CodeInvalidArgument,
+			"avatar_url data: URL must be base64-encoded")
+	}
+	bytes, err := base64.StdEncoding.DecodeString(payload)
+	if err != nil {
+		return connect.NewError(connect.CodeInvalidArgument,
+			fmt.Sprintf("avatar_url base64 decode failed: %s", err.Error()))
+	}
+	if len(bytes) == 0 {
+		return connect.NewError(connect.CodeInvalidArgument,
+			"avatar_url base64 payload is empty")
+	}
+	// PocketBase's FileField.MaxSize defaults to 5 MB on the
+	// `users.avatar` column. Mirroring that here keeps the error
+	// message informative when the SPA pre-cropped image still
+	// overshoots (the SPA caps at 2 MB; PB's default is the
+	// hard limit).
+	const maxAvatarBytes = 5 << 20
+	if int64(len(bytes)) > maxAvatarBytes {
+		return connect.NewError(connect.CodeInvalidArgument,
+			fmt.Sprintf("avatar exceeds %d-byte limit", maxAvatarBytes))
+	}
+	// Build a temporary filename derived from the data URL's
+	// declared mediatype so the extension matches the bytes
+	// (PB's normalizeName keeps the trailing extension but
+	// rewrites the basename to snake_case + a random suffix).
+	mediatype := strings.SplitN(header, ";", 2)[0]
+	ext := mediatypeExt(mediatype)
+	originalName := "avatar" + ext
+	file, err := filesystem.NewFileFromBytes(bytes, originalName)
+	if err != nil {
+		return connect.NewError(connect.CodeInternal,
+			fmt.Sprintf("stage avatar file: %s", err.Error()))
+	}
+	rec.Set("avatar", file)
+	return nil
+}
+
+// mediatypeExt maps an image mediatype (e.g. "image/png") to a
+// filename suffix (".png") for the staged file. The set is
+// intentionally narrow: it mirrors PocketBase's `users.avatar`
+// MimeTypes allow-list, and the FileField's interceptor will
+// still sniff the actual bytes via mimetype.DetectReader and
+// reject anything that does not match, so this is purely a
+// filename-hint and is never the source of truth for validation.
+func mediatypeExt(mediatype string) string {
+	switch strings.ToLower(strings.TrimSpace(mediatype)) {
+	case "image/jpeg", "image/jpg":
+		return ".jpg"
+	case "image/png":
+		return ".png"
+	case "image/gif":
+		return ".gif"
+	case "image/webp":
+		return ".webp"
+	case "image/svg+xml":
+		return ".svg"
+	}
+	return ".bin"
 }

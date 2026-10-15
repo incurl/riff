@@ -2,6 +2,10 @@ package connect
 
 import (
 	"context"
+	"encoding/base64"
+	"fmt"
+	"io"
+	"strings"
 	"testing"
 
 	"connectrpc.com/connect/v2"
@@ -372,4 +376,207 @@ func TestDeleteUser_SelfOnly(t *testing.T) {
 
 	_, err = srv.DeleteUser(withViewer(context.Background(), alice), &v1.DeleteUserRequest{Name: "users/alice"})
 	require.NoError(t, err)
+}
+
+// avatarTestPNG is a 1x1 transparent PNG. The bytes double as a
+// known-good input for the data-URL upload path: PB's FileField
+// sniffs via mimetype.DetectReader and accepts anything in the
+// MimeTypes allow-list (`image/jpeg, image/png, image/svg+xml,
+// image/gif, image/webp`).
+var avatarTestPNG = []byte{
+	0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+	0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+	0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+	0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
+	0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41,
+	0x54, 0x78, 0x9C, 0x63, 0x60, 0x60, 0x60, 0x60,
+	0x60, 0x00, 0x00, 0x00, 0x05, 0x00, 0x01, 0x5C,
+	0xCD, 0xFF, 0x69, 0x00, 0x00, 0x00, 0x00, 0x49,
+	0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+}
+
+// avatarDataURL returns the bytes above encoded as a data: URL,
+// matching the shape the SPA's `convertFileToBase64` produces
+// (FileReader.readAsDataURL). Tests can adjust the mediatype
+// prefix to exercise the rejection paths.
+func avatarDataURL(mediatype string) string {
+	return fmt.Sprintf("data:%s;base64,%s", mediatype, base64.StdEncoding.EncodeToString(avatarTestPNG))
+}
+
+// readAvatarBytes reads the avatar file from PocketBase's
+// filesystem at the canonical key (collection id / record id /
+// filename). Used to confirm the on-disk file matches the bytes
+// the client submitted.
+func readAvatarBytes(t *testing.T, app core.App, rec *core.Record) []byte {
+	t.Helper()
+	filenames := rec.GetStringSlice("avatar")
+	require.Len(t, filenames, 1, "expected exactly one avatar file on the record")
+	fsys, err := app.NewFilesystem()
+	require.NoError(t, err)
+	r, err := fsys.GetReader(fmt.Sprintf("%s/%s/%s", rec.Collection().Id, rec.Id, filenames[0]))
+	require.NoError(t, err, "avatar file should be readable at the canonical key")
+	defer r.Close()
+	got, err := io.ReadAll(r)
+	require.NoError(t, err)
+	return got
+}
+
+// TestUpdateUser_Avatar_DataURL_WritesFileAndPersistsFilename pins the
+// "avatar upload is not saved" regression: the SPA's UpdateAccountDialog
+// posts a base64 data URL through `User.avatar_url` and expects
+// recordToUser to return a working `/api/files/users/{id}/{name}` URL
+// afterwards. The bytes should also be retrievable from PocketBase's
+// filesystem at the canonical key.
+func TestUpdateUser_Avatar_DataURL_WritesFileAndPersistsFilename(t *testing.T) {
+	app := newHookedApp(t)
+	alice := newUser(t, app, "alice")
+	srv := NewUserServer(app)
+
+	updated, err := srv.UpdateUser(withViewer(context.Background(), alice), &v1.UpdateUserRequest{
+		User: &v1.User{
+			Name:      "users/alice",
+			AvatarUrl: avatarDataURL("image/png"),
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"avatar_url"}},
+	})
+	require.NoError(t, err)
+
+	// The returned User has a working avatar URL on the
+	// `/api/files/users/{id}/{filename}` shape, not a JSON-looking
+	// one and not a base64 data URL.
+	avatarURL := updated.GetAvatarUrl()
+	assert.True(t, strings.HasPrefix(avatarURL, "/api/files/users/"+alice.Id+"/"),
+		"avatar URL must point at the files endpoint, got %q", avatarURL)
+	assert.NotContains(t, avatarURL, "[", "avatar URL must not be the raw JSON-sliced filename")
+	assert.NotContains(t, avatarURL, "base64,", "avatar URL must not be the submitted data URL")
+
+	// The on-disk file matches the bytes the client sent.
+	rec, err := lookupUserByName(app, "alice")
+	require.NoError(t, err)
+	assert.Equal(t, avatarTestPNG, readAvatarBytes(t, app, rec),
+		"the bytes on disk should match the submitted PNG")
+
+	// re-reading via recordToUser (the same path GetUser takes)
+	// must return the same URL — the test app's persistence has
+	// to round-trip without truncation.
+	again, err := srv.GetUser(context.Background(), &v1.GetUserRequest{Name: "users/alice"})
+	require.NoError(t, err)
+	assert.Equal(t, avatarURL, again.GetAvatarUrl())
+}
+
+// TestUpdateUser_Avatar_EmptyString_ClearsFile pins the SPA's
+// "remove avatar" path: the dialog sends `avatar_url: ""` with
+// `["avatar_url"]` in the mask, and the avatar field should be
+// empty afterwards (recordToUser returns an empty URL).
+func TestUpdateUser_Avatar_EmptyString_ClearsFile(t *testing.T) {
+	app := newHookedApp(t)
+	alice := newUser(t, app, "alice")
+	srv := NewUserServer(app)
+
+	// First write an avatar.
+	_, err := srv.UpdateUser(withViewer(context.Background(), alice), &v1.UpdateUserRequest{
+		User:       &v1.User{Name: "users/alice", AvatarUrl: avatarDataURL("image/png")},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"avatar_url"}},
+	})
+	require.NoError(t, err)
+	rec, err := lookupUserByName(app, "alice")
+	require.NoError(t, err)
+	require.Len(t, rec.GetStringSlice("avatar"), 1, "precondition: avatar is set")
+
+	// Now clear it.
+	updated, err := srv.UpdateUser(withViewer(context.Background(), alice), &v1.UpdateUserRequest{
+		User:       &v1.User{Name: "users/alice", AvatarUrl: ""},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"avatar_url"}},
+	})
+	require.NoError(t, err)
+	assert.Empty(t, updated.GetAvatarUrl(), "empty avatar_url must surface as an empty URL")
+
+	rec, err = lookupUserByName(app, "alice")
+	require.NoError(t, err)
+	assert.Empty(t, rec.GetStringSlice("avatar"),
+		"empty avatar_url must clear the underlying FileField slice")
+}
+
+// TestUpdateUser_Avatar_RejectsNonDataURL guards against a
+// caller smuggling a remote URL or a plain string into a field
+// that is supposed to hold a stored filename. The schema's
+// FileField would reject a remote URL anyway, but doing the
+// check in the handler keeps the error message actionable.
+//
+// (An empty mediatype is RFC-legal: `data:;base64,...`. We accept
+// it because PocketBase's FileField sniffs the actual bytes via
+// mimetype.DetectReader and rejects what it cannot match; the
+// mediatype hint is purely a filename suggestion.)
+func TestUpdateUser_Avatar_RejectsNonDataURL(t *testing.T) {
+	app := newHookedApp(t)
+	alice := newUser(t, app, "alice")
+	srv := NewUserServer(app)
+
+	cases := []struct {
+		name  string
+		value string
+	}{
+		{"remote url", "https://example.com/avatar.png"},
+		{"plain string", "not a url at all"},
+		{"non-base64 data url", "data:image/png,abcdef"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := srv.UpdateUser(withViewer(context.Background(), alice), &v1.UpdateUserRequest{
+				User:       &v1.User{Name: "users/alice", AvatarUrl: tc.value},
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"avatar_url"}},
+			})
+			require.Error(t, err)
+			assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+		})
+	}
+}
+
+// TestUpdateUser_Avatar_OutsideMask_NotTouched asserts the
+// field-mask contract: a request whose mask does not include
+// `avatar_url` must not erase an existing avatar.
+func TestUpdateUser_Avatar_OutsideMask_NotTouched(t *testing.T) {
+	app := newHookedApp(t)
+	alice := newUser(t, app, "alice")
+	srv := NewUserServer(app)
+
+	// Seed an avatar.
+	_, err := srv.UpdateUser(withViewer(context.Background(), alice), &v1.UpdateUserRequest{
+		User:       &v1.User{Name: "users/alice", AvatarUrl: avatarDataURL("image/png")},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"avatar_url"}},
+	})
+	require.NoError(t, err)
+
+	// Update the display name only; avatar must survive.
+	updated, err := srv.UpdateUser(withViewer(context.Background(), alice), &v1.UpdateUserRequest{
+		User:       &v1.User{Name: "users/alice", DisplayName: "Alice The Updated"},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"display_name"}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "Alice The Updated", updated.GetDisplayName())
+	assert.NotEmpty(t, updated.GetAvatarUrl(), "avatar must not be cleared when outside the mask")
+}
+
+// TestRecordToUser_AvatarFileField_ProducesRelativeURL is the
+// pure converter test: it writes a slice-shaped value into the
+// avatar column via SetRaw (bypassing the field validator that
+// would refuse a plain string), and asserts the resulting
+// AvatarUrl uses the first entry, not a JSON-serialized slice.
+func TestRecordToUser_AvatarFileField_ProducesRelativeURL(t *testing.T) {
+	app := newHookedApp(t)
+	alice := newUser(t, app, "alice")
+
+	rec, err := lookupUserByName(app, "alice")
+	require.NoError(t, err)
+
+	// One filename → one URL.
+	rec.SetRaw("avatar", []string{"abc123.png"})
+	u := recordToUser(rec)
+	assert.Equal(t, "/api/files/users/"+alice.Id+"/abc123.png", u.GetAvatarUrl())
+
+	// Empty slice → empty URL, never a path with `["..."]`.
+	rec.SetRaw("avatar", []string{})
+	u = recordToUser(rec)
+	assert.Empty(t, u.GetAvatarUrl(),
+		"no avatar must surface as an empty string, not a broken path")
 }

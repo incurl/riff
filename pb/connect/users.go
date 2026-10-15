@@ -21,8 +21,11 @@ import (
 //     field) if `display_name` is empty.
 //   - `avatar_url` is a relative path that the React client
 //     resolves against the PocketBase base URL via the file token
-//     system. We just expose the filename; the SDK knows how to
-//     fetch it.
+//     system. The `users.avatar` column is a PocketBase FileField
+//     (MaxSelect=1) that stores one filename, so we read it as a
+//     string slice and surface the first entry. Reading the column
+//     with `GetString` would yield the JSON-serialized slice
+//     (e.g. `["abc.png"]`) and produce a broken URL.
 //   - `role` is USER for every `users` record. ADMIN maps to
 //     PocketBase's separate superuser collection, so a `users`
 //     record can never report ADMIN.
@@ -56,13 +59,15 @@ func recordToUser(rec *core.Record) *v1.User {
 		// name works for both collections.
 		username = rec.GetString("email")
 	}
-	avatar := rec.GetString("avatar")
-	// PocketBase stores file fields as just the filename;
-	// the client SDK knows how to fetch it. We expose a
-	// stable URL shape that the React layer can resolve.
+	// `avatar` is a single-file FileField; read the first
+	// (only) entry from the slice PocketBase stores in the
+	// column. An empty slice means "no avatar", and we leave
+	// the URL empty rather than emit a path with a JSON-looking
+	// filename.
+	avatarFilenames := rec.GetStringSlice("avatar")
 	var avatarURL string
-	if avatar != "" {
-		avatarURL = "/api/files/users/" + rec.Id + "/" + avatar
+	if len(avatarFilenames) > 0 {
+		avatarURL = "/api/files/users/" + rec.Id + "/" + avatarFilenames[0]
 	}
 
 	return &v1.User{
@@ -104,7 +109,11 @@ func userToRecord(rec *core.Record, u *v1.User) {
 // `users` record, rejecting the two fields riff cannot represent so the caller
 // learns immediately instead of silently losing data:
 //
-//   - `avatar_url` is a URL, but the schema stores an uploaded file.
+//   - `avatar_url` is accepted on the update path (see
+//     applyAvatarURLToRecord in user.go), but refused here because
+//     a freshly minted record does not yet have a stable id to
+//     anchor the FileField's on-disk key against. Callers should
+//     create the row first, then PATCH with `avatar_url` set.
 //   - the ADMIN role lives in the superuser collection, not in `users`.
 func applyUserFields(rec *core.Record, u *v1.User) error {
 	if u.GetRole() != v1.User_USER && u.GetRole() != v1.User_ROLE_UNSPECIFIED {
@@ -113,7 +122,7 @@ func applyUserFields(rec *core.Record, u *v1.User) error {
 	}
 	if u.GetAvatarUrl() != "" {
 		return connect.NewError(connect.CodeInvalidArgument,
-			"avatar_url cannot be set here; upload the avatar to the users collection instead")
+			"avatar_url cannot be set on user creation; create the account first and then update the avatar")
 	}
 
 	userToRecord(rec, u)

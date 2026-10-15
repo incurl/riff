@@ -5,6 +5,79 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## `UserServer.UpdateUser` writes user-uploaded avatars to the FileField; the proto `avatar_url` is a data-URL pipe (2026-10-16)
+
+`UserService.UpdateUser` silently dropped the `avatar_url` field, so
+the "Update account" dialog could not save a profile picture — the
+SPA's `UpdateAccountDialog` posts a base64 data URL and the handler
+returned `200 OK` with the avatar field unchanged. The user sees
+"message.update-succeed" but the avatar never lands.
+
+**Three bugs compounded.**
+
+1. **`recordToUser` read the FileField as a string.** `users.avatar`
+   is a PocketBase `FileField` (MaxSelect=1) whose raw value is a
+   slice of filenames; `rec.GetString("avatar")` returned the
+   JSON-serialised slice (e.g. `["abc.png"]`), so the resulting
+   `AvatarUrl` was always `/api/files/users/{id}/["abc.png"]`. The
+   fix: `rec.GetStringSlice("avatar")` and take the first element,
+   or empty string when the slice is empty.
+
+2. **`UpdateUser` had no `avatar_url` branch.** The handler supports
+   `username`, `email`, `display_name`, `description`, `password`,
+   and `role`, but a request whose mask contained only
+   `["avatar_url"]` was processed without any error and saved
+   without touching the avatar column. The fix: a new
+   `targets("avatar_url")` branch that calls
+   `applyAvatarURLToRecord`.
+
+3. **The proto `avatar_url` cannot land in a `FileField` directly.**
+   `avatar_url` is a plain `string` on the wire, but the underlying
+   column is a `FileField` that expects a `*filesystem.File` and
+   runs the on-disk upload through its record interceptor
+   (`processFilesToUpload`). The fix: in
+   `applyAvatarURLToRecord`, decode the data URL, build a
+   `filesystem.NewFileFromBytes(...)` with a derived extension, and
+   hand that to `rec.Set("avatar", file)`. PB's FileField moves
+   the bytes to the canonical key and rewrites the column to the
+   new (normalised) filename on save.
+
+**Wire format.** The SPA's `convertFileToBase64` produces
+`data:<mediatype>;base64,<bytes>` (FileReader.readAsDataURL). That
+is the only `avatar_url` shape the handler accepts — anything else
+returns `InvalidArgument` so a caller cannot smuggle a remote URL
+into a field that is supposed to hold a stored filename. The SPA's
+"remove avatar" path posts `avatar_url: ""`, which the handler
+treats as a clear: `rec.Set("avatar", []string{})` lets PB's
+`rememberFilesToDelete` hook drop the previous on-disk file on the
+subsequent save.
+
+**Mimetype handling.** The handler does *not* validate the mediatype
+hint. PocketBase's FileField interceptor sniffs the actual bytes via
+`mimetype.DetectReader` and rejects anything outside the
+`users.avatar` MimeTypes allow-list (`image/jpeg, image/png,
+image/svg+xml, image/gif, image/webp`). The mediatype hint is only
+used to derive a filename extension, so an empty mediatype
+(`data:;base64,...`) is accepted.
+
+**Why not the create path?** `applyUserFields` (the create path)
+still rejects `avatar_url` with a clear error message. The
+bootstrap path doesn't need avatars, and the create path has no
+record id at the point we'd want to write the file, so the
+upload-after-create model is the cleanest fit.
+
+**Affected files.**
+
+- `pb/connect/users.go` — `recordToUser` reads the FileField as a
+  string slice and surfaces the first filename.
+- `pb/connect/user.go` — new `applyAvatarURLToRecord` helper, the
+  `mediatypeExt` map, and the `targets("avatar_url")` branch in
+  `UpdateUser`.
+- `pb/connect/connect_wave4_user_internal_test.go` — five new
+  tests: data-URL upload round-trip (verifying on-disk bytes),
+  empty-string clear, non-data-URL rejection, out-of-mask
+  preservation, and the converter's first-filename reading.
+
 ## `ListAllUserStats` and `GetUserStats` open up the directory view; align with upstream Memos (2026-10-15)
 
 The browser console at `https://ravine.fly.dev/community/` shows a
