@@ -11,10 +11,9 @@ import (
 //
 // Fields added:
 //
-//	username   (text, required, unique, 3-30 chars, pattern [a-z0-9_])
-//	avatar     (file, single, image MIME types only, max 5 MB)
-//	bio        (text, max 500 chars)
-//	is_creator (bool, default false; opt-in flag for verified PO-33 creators)
+//	username (text, required, unique, 3-30 chars, pattern [a-z0-9_])
+//	avatar   (file, single, image MIME types only, max 5 MB)   (PocketBase built-in; left untouched)
+//	bio      (text, max 500 chars)
 //
 // Access rules:
 //
@@ -31,14 +30,19 @@ import (
 // Notes for future phases:
 //
 //   - The default `users` collection already has a `name` field
-//     (PocketBase built-in) plus an `avatar` file field. We add a SECOND
-//     `avatar` here? No — we re-use the built-in by leaving it alone and
-//     adding only `username`, `bio`, and `is_creator`. The built-in
-//     `avatar` is renamed in our React layer to display as the profile
-//     picture. The spec asks for a separate `avatar` field, but since
-//     PB ships with one already, adding a duplicate would be confusing.
-//     The net effect is the same: one avatar file per user.
+//     (PocketBase built-in) plus an `avatar` file field. We re-use the
+//     built-in `avatar` by leaving it alone. The built-in `avatar` is
+//     renamed in our React layer to display as the profile picture. The
+//     net effect is the same: one avatar file per user.
 //     (Documented in DECISIONS.md.)
+//
+// Historical fields (now removed):
+//
+//	is_creator — added by this migration in the original design, dropped
+//	             in the 1700000002_remove_is_creator migration. The flag
+//	             was never exposed on the wire; verified-creator state
+//	             will be modelled by a follow-up migration when the
+//	             community verification flow lands.
 func init() {
 	migrations.Register(func(txApp core.App) error {
 		users, err := txApp.FindCollectionByNameOrId("users")
@@ -70,15 +74,6 @@ func init() {
 			})
 		}
 
-		// --- is_creator ---------------------------------------------------
-		if users.Fields.GetByName("is_creator") == nil {
-			users.Fields.Add(&core.BoolField{
-				Name:     "is_creator",
-				System:   false,
-				Required: false,
-			})
-		}
-
 		// --- access rules -------------------------------------------------
 		// Empty string ("") means "allow". nil means "superuser only".
 		// We want list/view to be public, mutations to be self-only.
@@ -99,7 +94,7 @@ func init() {
 			return err
 		}
 
-		for _, name := range []string{"username", "bio", "is_creator"} {
+		for _, name := range []string{"username", "bio"} {
 			users.Fields.RemoveByName(name)
 		}
 		// Drop our index if it still exists.

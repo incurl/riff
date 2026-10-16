@@ -6,6 +6,171 @@ backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
 
+## Bootstrap admin lookup falls through to _superusers (2026-10-16)
+
+The Memos SPA's settings page calls
+`ListUserSettings(parent="users/{username}")` to read the GENERAL row,
+and `GetUser(name="users/{username}")` to resolve the admin's profile.
+On a fresh instance the bootstrap admin has only a `_superusers` row
+(no `users` row at all). The lookup used to scan `users` only — the
+request 404'd with "user not found" and the page rendered as a broken
+error. The same fall-through also unblocks `BatchGetUsers` mentions of
+the admin on the first memo on a fresh instance.
+
+**`lookupUserByName` (memo.go) now scans `users` and falls through
+to `_superusers` with the installer-placeholder exclusion.** The
+fall-through mirrors the convention `AuthServer.findByIdentity`
+(auth.go) has used since the self-service sign-up wave: both lookups
+treat the two collections as the same logical "user", and both
+filter the PocketBase installer placeholder
+(`core.DefaultInstallerEmail`, i.e. `__pbinstaller@example.com`) so a
+fresh install without a real admin does not surface the placeholder
+as if it were a real account. The helper has the same signature as
+before, so every caller in `user_settings.go`, `user_notifications.go`,
+`user_webhooks.go`, `user_personal_access_tokens.go` (they all already
+used the helper) picks up the change for free.
+
+**`UserServer.GetUser` and `UserServer.BatchGetUsers` were switched
+to the shared helper.** They used to inline a `users`-only filter
+(`user.go:48` and `user.go:96-97`); both now call `lookupUserByName`.
+`ListUsers` is intentionally untouched: the proto's `ListUsersResponse`
+is the community roster, not the admin team, and a `_superusers` row
+should not appear there. `recordToUser` already surfaces role=ADMIN
+for a superuser record (it branches on `rec.IsSuperuser()`), and it
+already falls back to `email` when `username` is empty (lines 54-61)
+— the resource name stays `users/{email}` so a `GetUser` and a
+`GetUserSetting` on the same admin return the same `users/{...}` name.
+
+**`recordToUserSetting` and `defaultUserSetting` now use the same
+`username OR email` fallback for the wire resource name.** They
+used to read `user.GetString("username")` directly, which produced
+`users//settings/GENERAL` (empty username slot) for any superuser
+record. The new `settingOwnerName` helper mirrors the
+`recordToUser` convention so the wire shape stays
+`users/{name}/settings/{key}` for both kinds of owner.
+
+**`UserSetting` read path now works end-to-end for the bootstrap
+admin.** `GetUserSetting` returns a defaulted body with the correct
+`users/{email}/settings/GENERAL` name, and `ListUserSettings` returns
+the (currently empty) result the SPA renders as the unconfigured
+state. This is the regression the user reported: the page no longer
+404's, the form renders, and the admin can see what settings exist.
+
+**`UserSetting` write path is a known limitation, not a fix.** The
+`user_settings.user` column is a PocketBase `RelationField` pointing
+at the `users` collection (migration 1720000000). A RelationField
+cannot point at two collections, so the existing schema cannot store
+a row owned by a `_superusers` record. `UpdateUserSetting` on a
+bootstrap admin will still fail at the relation-write step with
+`invalid_argument: user: Failed to find all relation records with
+the provided ids.` The user-visible effect of the fix: the page
+renders, the defaulted body loads, but a save attempt surfaces a
+clear error. The full fix is a follow-up schema change — either a
+parallel `user_email` text column on `user_settings` (with the
+unique index widened to `(user, user_email, key)` and a CHECK-style
+invariant that exactly one is set), or a nullable `user` field. The
+follow-up is out of scope for this slice.
+
+**Trade-off: an unauthenticated caller can now ask
+`GetUser("users/{admin-email}")` and learn the admin's display name.**
+The `users` collection's `listRule` is `""` (public read — needed
+for @mentions and the public profile page), and `GetUser` is a
+public-read RPC by design. The fall-through does not add a new
+information channel: the admin's display name is already publicly
+readable on any instance that has a `users` row, and the fall-through
+is the only way to surface the same answer on instances that have
+only a superuser. The privacy impact is bounded — the only new
+exposure is the admin's email becoming a valid resource name on
+fresh installs, which is required for the settings page to render.
+
+**Tests.** Four new tests pin the regression and the trade-off:
+`TestListUserSettings_BootstrapAdminResolvesThroughSuperusers` (the
+settings read path), `TestGetUser_BootstrapAdmin` (the user lookup),
+`TestBatchGetUsers_ResolvesSuperuser` (the timeline mention path),
+`TestGetUser_AnonymousCannotProbeSuperuser` (the installer
+placeholder is filtered; the public-read path is intentional). All
+four pass under `-race` in 5s each, well clear of the 1-minute
+scheduler tick that panics in `pb/hooks/scheduler.go:83` (a
+pre-existing test-infra bug, not introduced here).
+
+**Revert cost.** Reverting this entry is mechanical: drop the
+fall-through in `lookupUserByName` (memo.go:439-460), revert
+`GetUser`/`BatchGetUsers` in `user.go` to their inline
+`users`-only filters, and remove the four tests. The settings panel
+returns to its broken state.
+
+
+## is_creator removed from users: pure schema cleanup, no wire change (2026-10-16)
+
+The `is_creator` BoolField on the `users` auth collection is gone.
+It was added in 1700000001_extend_users.go as a "opt-in flag for
+verified PO-33 creators" — a placeholder for a community
+verification flow that has since been redesigned as a separate
+domain concept (a junction between `users` and a future
+`creator_program` resource) rather than a flag on every user row.
+
+**Nothing on the wire changed.** No proto field references
+`is_creator` (verified with a repo-wide grep across `.go`,
+`.proto`, `.ts`, `.tsx`, `.yaml`, `.yml` — only the original
+migration, `main_test.go`, and the frozen design doc in this file
+mention the name). No API surface, no frontend code, no generated
+OpenAPI shape. The field was internal-only.
+
+**Two migrations touch this:**
+
+- `1700000001_extend_users.go` (up) no longer adds `is_creator`
+  for fresh installs. Its down branch's `RemoveByName` list no
+  longer mentions it. The doc comment was updated to flag the
+  field as "Historical fields (now removed)" with a forward
+  pointer to the new migration.
+- `1700000002_remove_is_creator.go` is a new migration. Its up
+  branch calls `users.Fields.RemoveByName("is_creator")` and
+  saves. `Fields.RemoveByName` is a silent no-op when the field
+  is absent (PocketBase v0.40.5, core/fields_list.go), so the
+  migration is safe on fresh installs (where the field was never
+  added) and on re-apply (e.g. if PocketBase's migrate plugin
+  re-runs the up branch). Its down branch re-adds the field with
+  the same shape, so the migration is fully reversible — matching
+  the existing repo convention that every migration has a
+  working down.
+
+**`main_test.go` was updated to:**
+
+- Drop the `is_creator` field-presence assertion from
+  `TestExtendUsersMigration_FieldsAndRules`.
+- Drop the `rec.Set("is_creator", true)` and the
+  `got.GetBool("is_creator")` readback from
+  `TestExtendUsersMigration_CreateAndReadBack`.
+- Add `TestRemoveIsCreatorMigration_FieldGone` which asserts the
+  field is absent after migrations run. The assertion is the
+  contract: a future change that re-adds the field (e.g. an
+  accidental rebase of the original migration, or a copy-paste
+  during a new migration) will fail this test with a clear
+  message that names the new migration and asks the author to
+  audit every wire surface before removing the assertion.
+
+**Why a new migration instead of an in-place edit.** AGENTS.md
+is explicit: "Schema changes are a new Go migration in
+`pb/migrations/`. PocketBase applies them on the next
+`app.Bootstrap()` run; the migratecmd plugin handles this
+automatically. Migrations must be idempotent across fresh installs
+and existing instances." The 1700000001 migration is already in
+the apply history of every existing instance, so editing its up
+branch alone would leave those instances with the field still
+present. The new 1700000002 migration is the only correct way
+to drop the field for both fresh and existing installs.
+
+**Why no entry in `docs/design/`.** AGENTS.md: "Design
+documents in `docs/design/` are frozen after implementation. Do
+not update implemented designs to track later code changes." The
+shape of the `users` collection is a frozen design concern;
+this entry is the audit log of the deviation, and a future
+design-doc rewrite is the only place the historical schema would
+be erased. (The original `1700000001` design doc's
+"is_creator" line is left as-is in the comment as a Historical
+fields entry, not deleted — same convention.)
+
+
 ## PO-33 device binding lands: 2 new collections, 3 idempotent extensions, Ed25519 over canonical JSON (2026-10-16)
 
 The PO-33 binding flow (docs/design/po33-device-binding.md) shipped

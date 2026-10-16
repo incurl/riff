@@ -45,10 +45,6 @@ func TestExtendUsersMigration_FieldsAndRules(t *testing.T) {
 	require.NotNil(t, bio, "bio field must be added")
 	assert.Equal(t, core.FieldTypeText, bio.Type())
 
-	isCreator := users.Fields.GetByName("is_creator")
-	require.NotNil(t, isCreator, "is_creator field must be added")
-	assert.Equal(t, core.FieldTypeBool, isCreator.Type())
-
 	avatar := users.Fields.GetByName("avatar")
 	require.NotNil(t, avatar, "built-in avatar file field must still be present")
 	assert.Equal(t, core.FieldTypeFile, avatar.Type())
@@ -89,7 +85,6 @@ func TestExtendUsersMigration_CreateAndReadBack(t *testing.T) {
 	rec.Set("username", "ada")
 	rec.Set("email", "ada@example.com")
 	rec.Set("password", "correct horse battery staple")
-	rec.Set("is_creator", true)
 	rec.Set("bio", "Pocket-Operator enthusiast. Currently sampling rain.")
 
 	require.NoError(t, app.Save(rec), "save should succeed")
@@ -98,8 +93,26 @@ func TestExtendUsersMigration_CreateAndReadBack(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "ada", got.GetString("username"))
 	assert.Equal(t, "ada@example.com", got.GetString("email"))
-	assert.Equal(t, true, got.GetBool("is_creator"))
 	assert.Equal(t, "Pocket-Operator enthusiast. Currently sampling rain.", got.GetString("bio"))
+}
+
+// TestRemoveIsCreatorMigration_FieldGone pins the removal of the
+// `is_creator` BoolField. The field was added in
+// 1700000001_extend_users.go and dropped in
+// 1700000002_remove_is_creator.go. After both migrations run, the
+// `users` collection must not contain the field — this test fails
+// loudly if a future change re-introduces it (e.g. by mistake in a
+// rebase of the original migration) so the schema shape stays
+// pinned to a single source of truth.
+func TestRemoveIsCreatorMigration_FieldGone(t *testing.T) {
+	app := newTestApp(t)
+
+	users, err := app.FindCollectionByNameOrId("users")
+	require.NoError(t, err)
+	require.Nil(t, users.Fields.GetByName("is_creator"),
+		"is_creator must be removed by 1700000002_remove_is_creator.go; "+
+			"if you re-added it intentionally, update this test and "+
+			"audit every wire surface for the field first")
 }
 
 // newTestApp builds a fresh PocketBase app in a per-test temp dir,
