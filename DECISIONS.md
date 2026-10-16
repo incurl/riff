@@ -5,6 +5,79 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+
+## PO-33 device binding lands: 2 new collections, 3 idempotent extensions, Ed25519 over canonical JSON (2026-10-16)
+
+The PO-33 binding flow (docs/design/po33-device-binding.md) shipped
+in this slice. The feature is the first riff surface that does not
+talk to the Memos frontend: the device signs requests with an
+Ed25519 key the user pairs through a QR code.
+
+**Schema is 2 new collections + 3 idempotent extensions, not 5 new
+tables.** The original sketch had 5 new tables; after Q3 and Q5 the
+PO-33-specific fields ride on the existing `memos.payload` JSON
+column via the new `MemoPayload.sketch` oneof. The two new tables
+are `po33_devices` and `device_authorizations`; a third
+(`po33_sketch_downloads`) is the device-side audit log. The three
+idempotent extensions are: `memos.source` (select: text | sketch),
+`memo_relations.type` extended with `BACKUP_FILE`, and
+`patches`/`samples.device_fingerprint_snapshot` (text).
+
+**`memos.source` is not `Required: true` with no default.** An
+earlier draft did this and the existing memo-test fixtures in
+`pb/connect/connect_wave6_shares_internal_test.go` failed because
+they create memos via `core.NewRecord` and bypass the create handler.
+The fix is two-pronged: the migration makes the column
+`Required: false` (the constraint is moved to the save hook) and
+`pb/hooks/memos.go` defaults the value to `"text"` in the
+`OnRecordCreateRequest` hook. A PO-33 upload handler sets
+`"sketch"` explicitly.
+
+**Ed25519 over canonical JSON, not protojson.** The device signs a
+canonical serialisation of the authorization request (sorted keys,
+no whitespace, fixed integer rendering) and the server verifies with
+the same library (`internal/ed25519verify`). protojson would have
+introduced platform-dependent quoting and a 32-bit-vs-64-bit integer
+trap. The library exposes a 1-line `Verify(pub, msg, sig)` and a
+`CanonicalizeAuthorizationRequest` the device firmware replicates
+in C. The byte sequence is pinned by
+`TestCanonicalizeAuthorizationRequest_KnownVector`.
+
+**Device-side download path lives in /api/po33/sketches/download,
+not a Connect RPC.** The device runs an HTTP/1.1 client with a
+one-shot signature header rather than a Connect library, and the
+Connect protocol assumes a per-request auth token. The route is a
+future slice; the audit-log table is in place and the
+`device_last_seen` hook is wired to bump `last_seen_at` on every
+audit row insert.
+
+**`memos` view rule covers anonymous web playback.** No new auth
+surface was added for the web side: a public sketch is anonymous
+playable through the existing `memos.viewRule` and PocketBase's
+file-serve routes. Only the device-side download is auth-bearer
+keyed.
+
+**No SPA changes in this slice.** The frontend contract is
+additive: `Memo.payload.sketch` is unset on every existing memo, so
+the SPA can keep reading the flat `property` and `location` fields.
+A future SPA slice adds the "sketch" tab on the memo card and the
+"My devices" page.
+
+**Files added:**
+
+- `internal/ed25519verify/`, `internal/qr/`, `internal/random/crockford.go` — three stdlib-only helper packages; `internal/qr` is the only place that imports `github.com/skip2/go-qrcode` (added to `go.mod`).
+- `pb/migrations/1840000000..1840000005/` — five idempotent migrations.
+- `proto/api/v1/po33_device_service.proto`, `proto/api/v1/po33_sketch_service.proto` — two new service protos; the regenerated `MemoPayload.sketch` is the only change to the existing `memo_service.proto`.
+- `pb/connect/device_service.go` + `device_service_converters.go`, `pb/connect/sketch_service.go` — Connect handlers.
+- `pb/api/po33_device_routes.go` — REST routes for /pair/start, /pair/{code}/qrcode, /pair/finish, /pair/{id}.
+- `pb/connect/memos_translate_sketch.go` — adds the `SketchPayload` envelope round-trip.
+- `pb/hooks/scheduler.go`, `pb/hooks/device_last_seen.go`, `pb/hooks/device_revoked.go` — three new hooks.
+
+**Deferred to a future slice:** the `/api/po33/sketches/download`
+device-side route, the live `device` relation on `patches`/`samples`,
+the device-side `last_seen_at` bump on the request header (today
+only bumps on audit-log insert), and the SPA UI.
+
 ## `UserServer.UpdateUser` writes user-uploaded avatars to the FileField; the proto `avatar_url` is a data-URL pipe (2026-10-16)
 
 `UserService.UpdateUser` silently dropped the `avatar_url` field, so

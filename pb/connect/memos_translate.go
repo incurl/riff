@@ -2,6 +2,7 @@ package connect
 
 import (
 	"encoding/json"
+	"errors"
 
 	"github.com/pocketbase/pocketbase/core"
 
@@ -105,29 +106,14 @@ func memoPayloadFromRecord(rec *core.Record) *v1.MemoPayload {
 			Latitude    float64 `json:"latitude"`
 			Longitude   float64 `json:"longitude"`
 		} `json:"location"`
+		// The PO-33 sketch sub-object is decoded
+		// when present; nil otherwise. The pointer
+		// lets json.Unmarshal leave the field alone
+		// when the key is absent.
+		Sketch *sketchShape `json:"sketch,omitempty"`
 	}
-	switch v := raw.(type) {
-	case []byte:
-		if len(v) == 0 || string(v) == "null" {
-			return nil
-		}
-		if err := json.Unmarshal(v, &asStruct); err != nil {
-			return nil
-		}
-	default:
-		// PocketBase re-marshals the stored struct into JSON and
-		// back when handing it to a caller, so we have to go
-		// through JSON rather than type-asserting directly.
-		b, err := json.Marshal(v)
-		if err != nil {
-			return nil
-		}
-		if len(b) == 0 || string(b) == "null" {
-			return nil
-		}
-		if err := json.Unmarshal(b, &asStruct); err != nil {
-			return nil
-		}
+	if err := decodePayload(raw, &asStruct); err != nil {
+		return nil
 	}
 	out := &v1.MemoPayload{
 		Property: &v1.MemoPayload_Property{
@@ -143,8 +129,42 @@ func memoPayloadFromRecord(rec *core.Record) *v1.MemoPayload {
 			Longitude:   asStruct.Location.Longitude,
 		},
 	}
+	if sk := sketchPayloadFromShape(asStruct.Sketch); sk != nil {
+		out.Sketch = sk
+	}
 	return out
 }
+
+// decodePayload accepts the same two input shapes
+// the previous inline switch did (raw bytes, or a
+// Go struct that needs to be re-marshalled) and
+// unmarshals into dst. Returning an error leaves
+// the caller to map it to a nil envelope; the
+// caller never needs the error string.
+func decodePayload(raw any, dst any) error {
+	switch v := raw.(type) {
+	case []byte:
+		if len(v) == 0 || string(v) == "null" {
+			return errEmptyPayload
+		}
+		return json.Unmarshal(v, dst)
+	default:
+		b, err := json.Marshal(v)
+		if err != nil {
+			return err
+		}
+		if len(b) == 0 || string(b) == "null" {
+			return errEmptyPayload
+		}
+		return json.Unmarshal(b, dst)
+	}
+}
+
+// errEmptyPayload is the sentinel for "payload
+// column is null/empty/JSON null". A typed
+// error makes the early-return path explicit and
+// testable.
+var errEmptyPayload = errors.New("empty payload")
 
 // memoReactions loads the reactions attached to a memo.
 func memoReactions(app core.App, memoID string) []*v1.Reaction {

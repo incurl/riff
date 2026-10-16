@@ -1,0 +1,40 @@
+syntax = "proto3";
+
+package memos.api.v1;
+
+import "api/v1/memo_service.proto";
+import "google/api/annotations.proto";
+import "google/api/field_behavior.proto";
+
+option go_package = "gen/api/v1";
+
+// SketchService is the SPA-facing read side of the
+// PO-33 sketch upload flow. The two endpoints
+// today are ListMySketches and (in a future slice)
+// GetSketch / DeleteSketch. The actual device
+// download path (/api/po33/sketches/download) is a
+// REST route rather than a Connect RPC because the
+// device runs an HTTP/1.1 client with a one-shot
+// signature header rather than a Connect library.
+service SketchService {
+  // ListMySketches returns every memo the caller
+  // authored with source=sketch. The response
+  // includes the full Memo proto (with the
+  // SketchPayload envelope populated) plus the
+  // patches and samples as Attachment objects.
+  // Pagination is by created-desc, max 100 per
+  // page.
+  rpc ListMySketches(ListMySketchesRequest) returns (ListMySketchesResponse) {
+    option (google.api.http) = {get: "/api/v1/po33/sketches"};
+  }
+}
+
+message ListMySketchesRequest {
+  int32 page_size = 1 [(google.api.field_behavior) = OPTIONAL];
+  string page_token = 2 [(google.api.field_behavior) = OPTIONAL];
+}
+
+message ListMySketchesResponse {
+  repeated Memo memos = 1;
+  string next_page_token = 2;
+}

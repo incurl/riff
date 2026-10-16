@@ -74,6 +74,21 @@ func Register(app core.App, limiter ratelimit.Limiter) error {
 	// that consumes the `config` blob.
 	apiv1connect.RegisterIdentityProviderServiceHandler(srv, NewIdentityProviderServer(app))
 
+	// DeviceService — PO-33 device binding CRUD. The
+	// SPA-facing read side (List / Get) and the
+	// device-binding write side (Revoke) live here.
+	// The device-side signing handshake lives in
+	// /api/po33/pair/* (REST, no auth, bearer-keyed)
+	// rather than in this service because the device
+	// has no auth token until after it pairs.
+	apiv1connect.RegisterDeviceServiceHandler(srv, NewDeviceServer(app))
+
+	// SketchService — SPA-facing read of the caller's
+	// own sketch memos. The actual device download
+	// path is /api/po33/sketches/download (REST) and
+	// the device upload path is a future slice.
+	apiv1connect.RegisterSketchServiceHandler(srv, NewSketchServer(app))
+
 	// Mount the connect-go HTTP handlers on a stdlib mux.
 	mux := http.NewServeMux()
 	connecthttp.Mount(mux, srv)

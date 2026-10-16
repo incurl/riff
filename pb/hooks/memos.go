@@ -70,6 +70,17 @@ func registerMemos(app core.App) {
 
 		e.Record.Set("tags", extractHashtags(mdSvc, e.Record.GetString("content")))
 		e.Record.Set("payload", materialisePayload(mdSvc, e.Record.GetString("content")))
+		// Default the `source` discriminator to "text"
+		// when the caller did not set it. Every
+		// existing memo (pre-PO-33 binding) is a
+		// text memo, and a missing value would fail
+		// the column's required check. The PO-33
+		// upload handler always sets "sketch"
+		// explicitly, so this default only applies
+		// to text memos.
+		if e.Record.GetString("source") == "" {
+			e.Record.Set("source", "text")
+		}
 		return e.Next()
 	})
 

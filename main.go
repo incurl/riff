@@ -124,7 +124,7 @@ func main() {
 
 	// --- Custom REST routes ---------------------------------------------
 	// /api/po33/* endpoints (feed, space memos, invite, move).
-	api.Register(app)
+	api.Register(app, rateLimiter)
 
 	// --- Connect/gRPC services ------------------------------------------
 	// /memos.api.v1.*/* endpoints. The Memos React frontend

@@ -73,7 +73,7 @@ func newTestEnv(t *testing.T) *testEnv {
 // RegisterAll wires hooks + routes for tests.
 func RegisterAll(app core.App) {
 	hooks.Register(app)
-	api.Register(app)
+	api.Register(app, nil)
 }
 
 // do is a small helper that makes a JSON HTTP request and

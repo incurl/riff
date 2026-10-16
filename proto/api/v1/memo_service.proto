@@ -312,6 +312,14 @@ message MemoPayload {
   // shape matches the upstream proto from day one.
   Location location = 2;
 
+  // Populated when the memo is a PO-33 sketch upload
+  // (i.e. `memos.source == "sketch"`). Carries the
+  // device-level metadata that does not fit the existing
+  // property/location fields. Optional on every other
+  // memo; clients reading non-sketch memos see it
+  // unset.
+  SketchPayload sketch = 3;
+
   // Computed properties of a memo, mirroring `Memo.Property`.
   message Property {
     bool has_link = 1;
@@ -321,6 +329,57 @@ message MemoPayload {
     // The title extracted from the first H1 heading, if present.
     string title = 5;
   }
+}
+
+// SketchPayload is the PO-33 device metadata riding
+// inside `MemoPayload.sketch`. The fields mirror the
+// device's storage layout:
+//
+//   - model            — the PO-33 model the sketch
+//                        was uploaded from. Today the
+//                        value is "PO-33" but the
+//                        field is open for future
+//                        variants (PO-33 K.O!, etc).
+//   - slot_count       — 16 for PO-33, 16 for PO-33
+//                        K.O!, 8 for the older
+//                        PO-33 micro. The value the
+//                        device reported at upload
+//                        time.
+//   - bpm              — the BPM the device stamped
+//                        on the sketch. Optional:
+//                        not every device models BPM.
+//   - device_fingerprint — the hex SHA-256 of the
+//                        device's Ed25519 public key,
+//                        the same value the device
+//                        showed the user at pairing
+//                        time. Lets the SPA render
+//                        "uploaded from device EF3A91C2".
+//   - uploaded_at_unix  — unix-second timestamp the
+//                        device recorded at upload
+//                        time. Distinct from the
+//                        memo's create_time which is
+//                        the server's clock.
+message SketchPayload {
+  // The device model identifier, e.g. "PO-33".
+  string model = 1;
+
+  // The number of sample slots the device exposes.
+  int32 slot_count = 2;
+
+  // The BPM the device stamped on the sketch.
+  optional int32 bpm = 3;
+
+  // The hex SHA-256 of the device's Ed25519 public
+  // key, exactly the value the device's pairing
+  // screen displayed.
+  string device_fingerprint = 4;
+
+  // The unix-second timestamp the device recorded
+  // at upload time. The server's create_time on the
+  // memo is the canonical timestamp; this field
+  // is the device's clock, captured for forensic
+  // purposes.
+  int64 uploaded_at_unix = 5;
 }
 
 message Location {

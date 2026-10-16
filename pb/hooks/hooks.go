@@ -25,4 +25,15 @@ func Register(app core.App) {
 	registerWebhookDrain(app)
 	registerNotifications(app)
 	registerNotificationsEmailHook(app)
+
+	// PO-33 device binding. The scheduler purges
+	// expired in-flight authorizations; the
+	// last-seen hook bumps a device's
+	// `last_seen_at` on every successful
+	// authenticated request; the device-revoked
+	// hook cascades the snapshot fingerprint on
+	// revoke.
+	registerScheduler(app)
+	registerDeviceLastSeen(app)
+	registerDeviceRevoked(app)
 }

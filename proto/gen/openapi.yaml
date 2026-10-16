@@ -1344,6 +1344,128 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/Status'
+    /api/v1/po33-devices/{po33-device}:
+        get:
+            tags:
+                - DeviceService
+            description: |-
+                GetDevice returns a single device by resource
+                 name. The caller must be the device owner; the
+                 public_key is masked on every read.
+            operationId: DeviceService_GetDevice
+            parameters:
+                - name: po33-device
+                  in: path
+                  description: The po33-device id.
+                  required: true
+                  schema:
+                    type: string
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Device'
+                default:
+                    description: Default error response
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Status'
+        delete:
+            tags:
+                - DeviceService
+            description: |-
+                RevokeDevice marks the device as REVOKED, nulls
+                 the live `device` relation on every patch/sample
+                 the device uploaded, and copies the fingerprint
+                 into a per-attachment snapshot.
+            operationId: DeviceService_RevokeDevice
+            parameters:
+                - name: po33-device
+                  in: path
+                  description: The po33-device id.
+                  required: true
+                  schema:
+                    type: string
+            responses:
+                "200":
+                    description: OK
+                    content: {}
+                default:
+                    description: Default error response
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Status'
+    /api/v1/po33/devices:
+        get:
+            tags:
+                - DeviceService
+            description: |-
+                ListDevices returns the bound PO-33 devices the
+                 caller owns.
+            operationId: DeviceService_ListDevices
+            parameters:
+                - name: pageSize
+                  in: query
+                  schema:
+                    type: integer
+                    format: int32
+                - name: pageToken
+                  in: query
+                  schema:
+                    type: string
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ListDevicesResponse'
+                default:
+                    description: Default error response
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Status'
+    /api/v1/po33/sketches:
+        get:
+            tags:
+                - SketchService
+            description: |-
+                ListMySketches returns every memo the caller
+                 authored with source=sketch. The response
+                 includes the full Memo proto (with the
+                 SketchPayload envelope populated) plus the
+                 patches and samples as Attachment objects.
+                 Pagination is by created-desc, max 100 per
+                 page.
+            operationId: SketchService_ListMySketches
+            parameters:
+                - name: pageSize
+                  in: query
+                  schema:
+                    type: integer
+                    format: int32
+                - name: pageToken
+                  in: query
+                  schema:
+                    type: string
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ListMySketchesResponse'
+                default:
+                    description: Default error response
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Status'
     /api/v1/shares/{shareToken}/memo:
         get:
             tags:
@@ -3391,6 +3513,44 @@ components:
                 name:
                     type: string
                     description: 'Required. Format: spaces/{space}/invitations/{username}.'
+        Device:
+            type: object
+            properties:
+                name:
+                    type: string
+                user:
+                    readOnly: true
+                    type: string
+                label:
+                    type: string
+                    description: The label the user gave the device ("Studio PO-33").
+                publicKeyFingerprint:
+                    readOnly: true
+                    type: string
+                    description: |-
+                        The SHA-256 fingerprint of the device's Ed25519
+                         public key. The 8-char short form is what the
+                         device's pairing screen showed the user at
+                         pairing time; the full form is authoritative.
+                status:
+                    readOnly: true
+                    enum:
+                        - DEVICE_STATUS_UNSPECIFIED
+                        - DEVICE_STATUS_ACTIVE
+                        - DEVICE_STATUS_REVOKED
+                    type: string
+                    format: enum
+                lastSeenAt:
+                    readOnly: true
+                    type: string
+                    format: date-time
+                createTime:
+                    readOnly: true
+                    type: string
+                    format: date-time
+            description: |-
+                Device is a bound PO-33 sampler.
+                 Format: po33-devices/{device}
         FieldMapping:
             type: object
             properties:
@@ -3926,6 +4086,15 @@ components:
                     description: |-
                         A token that can be sent as `page_token` to retrieve the next page.
                          If this field is omitted, there are no subsequent pages.
+        ListDevicesResponse:
+            type: object
+            properties:
+                devices:
+                    type: array
+                    items:
+                        $ref: '#/components/schemas/Device'
+                nextPageToken:
+                    type: string
         ListIdentityProvidersResponse:
             type: object
             properties:
@@ -4015,6 +4184,15 @@ components:
                     description: |-
                         A token that can be sent as `page_token` to retrieve the next page.
                          If this field is omitted, there are no subsequent pages.
+        ListMySketchesResponse:
+            type: object
+            properties:
+                memos:
+                    type: array
+                    items:
+                        $ref: '#/components/schemas/Memo'
+                nextPageToken:
+                    type: string
         ListPersonalAccessTokensResponse:
             type: object
             properties:
@@ -4366,6 +4544,16 @@ components:
                     description: |-
                         Empty until a future geo feature lands; kept here so the column
                          shape matches the upstream proto from day one.
+                sketch:
+                    allOf:
+                        - $ref: '#/components/schemas/SketchPayload'
+                    description: |-
+                        Populated when the memo is a PO-33 sketch upload
+                         (i.e. `memos.source == "sketch"`). Carries the
+                         device-level metadata that does not fit the existing
+                         property/location fields. Optional on every other
+                         memo; clients reading non-sketch memos see it
+                         unset.
             description: |-
                 MemoPayload is the server-computed envelope stored in the
                  `memos.payload` JSON column and re-exposed here for clients that
@@ -4771,6 +4959,63 @@ components:
                         When the access token expires.
                          Client should call RefreshToken before this time.
                     format: date-time
+        SketchPayload:
+            type: object
+            properties:
+                model:
+                    type: string
+                    description: The device model identifier, e.g. "PO-33".
+                slotCount:
+                    type: integer
+                    description: The number of sample slots the device exposes.
+                    format: int32
+                bpm:
+                    type: integer
+                    description: The BPM the device stamped on the sketch.
+                    format: int32
+                deviceFingerprint:
+                    type: string
+                    description: |-
+                        The hex SHA-256 of the device's Ed25519 public
+                         key, exactly the value the device's pairing
+                         screen displayed.
+                uploadedAtUnix:
+                    type: string
+                    description: |-
+                        The unix-second timestamp the device recorded
+                         at upload time. The server's create_time on the
+                         memo is the canonical timestamp; this field
+                         is the device's clock, captured for forensic
+                         purposes.
+            description: |-
+                SketchPayload is the PO-33 device metadata riding
+                 inside `MemoPayload.sketch`. The fields mirror the
+                 device's storage layout:
+
+                   - model            — the PO-33 model the sketch
+                                        was uploaded from. Today the
+                                        value is "PO-33" but the
+                                        field is open for future
+                                        variants (PO-33 K.O!, etc).
+                   - slot_count       — 16 for PO-33, 16 for PO-33
+                                        K.O!, 8 for the older
+                                        PO-33 micro. The value the
+                                        device reported at upload
+                                        time.
+                   - bpm              — the BPM the device stamped
+                                        on the sketch. Optional:
+                                        not every device models BPM.
+                   - device_fingerprint — the hex SHA-256 of the
+                                        device's Ed25519 public key,
+                                        the same value the device
+                                        showed the user at pairing
+                                        time. Lets the SPA render
+                                        "uploaded from device EF3A91C2".
+                   - uploaded_at_unix  — unix-second timestamp the
+                                        device recorded at upload
+                                        time. Distinct from the
+                                        memo's create_time which is
+                                        the server's clock.
         Space:
             required:
                 - title
@@ -5423,9 +5668,33 @@ tags:
     - name: AIService
     - name: AttachmentService
     - name: AuthService
+    - name: DeviceService
+      description: |-
+        DeviceService manages the PO-33 device binding flow
+         described in docs/design/po33-device-binding.md.
+
+         Every RPC is admin-or-owner gated through the
+         Connect handler; the underlying PocketBase
+         collection (`po33_devices`) has nil *Rule fields
+         so the rule engine cannot be tricked into letting
+         a non-owner through. The device-side signing
+         handshake lives in /api/po33/pair/* (REST, no
+         auth, bearer-keyed) rather than in this service
+         because the device has no auth token until after
+         it pairs.
     - name: IdentityProviderService
     - name: InstanceService
     - name: MemoService
+    - name: SketchService
+      description: |-
+        SketchService is the SPA-facing read side of the
+         PO-33 sketch upload flow. The two endpoints
+         today are ListMySketches and (in a future slice)
+         GetSketch / DeleteSketch. The actual device
+         download path (/api/po33/sketches/download) is a
+         REST route rather than a Connect RPC because the
+         device runs an HTTP/1.1 client with a one-shot
+         signature header rather than a Connect library.
     - name: SpaceService
       description: SpaceService manages collaborative spaces and their memberships.
     - name: UserService

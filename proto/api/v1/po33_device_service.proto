@@ -1,0 +1,113 @@
+syntax = "proto3";
+
+package memos.api.v1;
+
+import "google/api/annotations.proto";
+import "google/api/client.proto";
+import "google/api/field_behavior.proto";
+import "google/api/resource.proto";
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "gen/api/v1";
+
+// DeviceService manages the PO-33 device binding flow
+// described in docs/design/po33-device-binding.md.
+//
+// Every RPC is admin-or-owner gated through the
+// Connect handler; the underlying PocketBase
+// collection (`po33_devices`) has nil *Rule fields
+// so the rule engine cannot be tricked into letting
+// a non-owner through. The device-side signing
+// handshake lives in /api/po33/pair/* (REST, no
+// auth, bearer-keyed) rather than in this service
+// because the device has no auth token until after
+// it pairs.
+service DeviceService {
+  // ListDevices returns the bound PO-33 devices the
+  // caller owns.
+  rpc ListDevices(ListDevicesRequest) returns (ListDevicesResponse) {
+    option (google.api.http) = {get: "/api/v1/po33/devices"};
+  }
+
+  // GetDevice returns a single device by resource
+  // name. The caller must be the device owner; the
+  // public_key is masked on every read.
+  rpc GetDevice(GetDeviceRequest) returns (Device) {
+    option (google.api.http) = {get: "/api/v1/{name=po33-devices/*}"};
+    option (google.api.method_signature) = "name";
+  }
+
+  // RevokeDevice marks the device as REVOKED, nulls
+  // the live `device` relation on every patch/sample
+  // the device uploaded, and copies the fingerprint
+  // into a per-attachment snapshot.
+  rpc RevokeDevice(RevokeDeviceRequest) returns (google.protobuf.Empty) {
+    option (google.api.http) = {delete: "/api/v1/{name=po33-devices/*}"};
+    option (google.api.method_signature) = "name";
+  }
+}
+
+// Device is a bound PO-33 sampler.
+// Format: po33-devices/{device}
+message Device {
+  option (google.api.resource) = {
+    type: "memos.api.v1/Device"
+    pattern: "po33-devices/{device}"
+    name_field: "name"
+    singular: "device"
+    plural: "devices"
+  };
+
+  string name = 1 [(google.api.field_behavior) = IDENTIFIER];
+
+  string user = 2 [
+    (google.api.field_behavior) = OUTPUT_ONLY,
+    (google.api.resource_reference) = {type: "memos.api.v1/User"}
+  ];
+
+  // The label the user gave the device ("Studio PO-33").
+  string label = 3 [(google.api.field_behavior) = OPTIONAL];
+
+  // The SHA-256 fingerprint of the device's Ed25519
+  // public key. The 8-char short form is what the
+  // device's pairing screen showed the user at
+  // pairing time; the full form is authoritative.
+  string public_key_fingerprint = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  DeviceStatus status = 5 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  google.protobuf.Timestamp last_seen_at = 6 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  google.protobuf.Timestamp create_time = 7 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+enum DeviceStatus {
+  DEVICE_STATUS_UNSPECIFIED = 0;
+  DEVICE_STATUS_ACTIVE = 1;
+  DEVICE_STATUS_REVOKED = 2;
+}
+
+message ListDevicesRequest {
+  int32 page_size = 1 [(google.api.field_behavior) = OPTIONAL];
+  string page_token = 2 [(google.api.field_behavior) = OPTIONAL];
+}
+
+message ListDevicesResponse {
+  repeated Device devices = 1;
+  string next_page_token = 2;
+}
+
+message GetDeviceRequest {
+  string name = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.resource_reference) = {type: "memos.api.v1/Device"}
+  ];
+}
+
+message RevokeDeviceRequest {
+  string name = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.resource_reference) = {type: "memos.api.v1/Device"}
+  ];
+}

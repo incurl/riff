@@ -108,6 +108,17 @@ var procedureScope = map[string]ratelimit.Scope{
 	apiv1connect.UserServiceDeleteUserWebhookProcedure:                           ratelimit.ScopeWriteUser,
 	apiv1connect.UserServiceGetUserWebhookSigningSecretProcedure:                 ratelimit.ScopeWriteUser,
 	apiv1connect.UserServiceUpdateUserSettingProcedure:                           ratelimit.ScopeWriteUser,
+	// PO-33 device binding. List / Get are
+	// reads on the caller's own devices and
+	// fall under the catch-all authenticated
+	// bucket; Revoke is a write that mutates
+	// the device row and shares the
+	// ScopeWriteUser budget with the other
+	// user-driven mutations.
+	apiv1connect.DeviceServiceRevokeDeviceProcedure:                               ratelimit.ScopeWriteUser,
+	// SketchService is read-only and falls
+	// under the catch-all authenticated
+	// bucket; no row needed.
 }
 
 // RateLimit returns a PocketBase-compatible middleware that consults
