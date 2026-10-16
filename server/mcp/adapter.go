@@ -1,9 +1,10 @@
 // adapter.go is a port of github.com/usememos/memos/server/mcp/adapter.go
 // with import paths rewritten. The single behavioral change is the dispatch
-// type: upstream holds *echo.Echo and calls echoServer.ServeHTTP, riff holds
-// http.Handler and calls the same ServeHTTP method. This lets the MCP server
-// dispatch tool calls into any HTTP handler riff exposes, without requiring
-// riff to import or instantiate labstack/echo/v5 just for this one call site.
+// type: upstream held *echo.Echo (the field was named echoServer) and called
+// echoServer.ServeHTTP, riff holds http.Handler and calls the same ServeHTTP
+// method on the renamed `handler` field. This lets the MCP server dispatch
+// tool calls into any HTTP handler riff exposes, without requiring riff to
+// import or instantiate labstack/echo/v5 just for this one call site.
 
 package mcp
 
@@ -26,11 +27,11 @@ import (
 )
 
 type apiAdapter struct {
-	echoServer http.Handler
+	handler http.Handler
 }
 
-func newAPIAdapter(echoServer http.Handler) *apiAdapter {
-	return &apiAdapter{echoServer: echoServer}
+func newAPIAdapter(handler http.Handler) *apiAdapter {
+	return &apiAdapter{handler: handler}
 }
 
 func (a *apiAdapter) execute(ctx context.Context, operation *openAPIOperation, arguments map[string]any, authorization string) (*sdkmcp.CallToolResult, error) {
@@ -40,7 +41,7 @@ func (a *apiAdapter) execute(ctx context.Context, operation *openAPIOperation, a
 	}
 
 	recorder := httptest.NewRecorder()
-	a.echoServer.ServeHTTP(recorder, req)
+	a.handler.ServeHTTP(recorder, req)
 
 	value, err := decodeJSONValue(recorder.Body.Bytes())
 	if err != nil {

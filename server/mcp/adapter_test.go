@@ -349,7 +349,7 @@ func TestBuildAPIRequestEscapesPathAndStringifiesPrimitiveQueryParameters(t *tes
 }
 
 func TestExecuteOperationReturnsObjectStructuredContent(t *testing.T) {
-	echoServer := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+	handler := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		require.Equal(t, "Bearer token", request.Header.Get("Authorization"))
 		writer.Header().Set("Content-Type", "application/json")
 		writer.WriteHeader(http.StatusOK)
@@ -360,7 +360,7 @@ func TestExecuteOperationReturnsObjectStructuredContent(t *testing.T) {
 		Method: "GET",
 		Path:   "/api/v1/memos",
 	}
-	adapter := newAPIAdapter(echoServer)
+	adapter := newAPIAdapter(handler)
 
 	result, err := adapter.execute(context.Background(), operation, map[string]any{}, "Bearer token")
 	require.NoError(t, err)
@@ -371,7 +371,7 @@ func TestExecuteOperationReturnsObjectStructuredContent(t *testing.T) {
 }
 
 func TestExecuteOperationConvertsAPIErrorsToToolErrors(t *testing.T) {
-	echoServer := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+	handler := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
 		writer.WriteHeader(http.StatusNotFound)
 		_, _ = io.WriteString(writer, `{"message":"missing memo"}`)
@@ -382,7 +382,7 @@ func TestExecuteOperationConvertsAPIErrorsToToolErrors(t *testing.T) {
 		Path:       "/api/v1/memos/{memo}",
 		Parameters: []openAPIParameter{{Name: "memo", In: "path", Required: true}},
 	}
-	adapter := newAPIAdapter(echoServer)
+	adapter := newAPIAdapter(handler)
 
 	result, err := adapter.execute(context.Background(), operation, map[string]any{"memo": "missing"}, "")
 	require.NoError(t, err)
