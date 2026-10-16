@@ -6,6 +6,96 @@ backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
 
+## Connect-only transport: no gRPC-Gateway REST surface for the Memos API (2026-10-16)
+
+Riff serves the Memos-shaped API **Connect-only**. The only externally
+callable surface for the Memos API today is the Connect HTTP/JSON
+mux at `/memos.api.v1.<Service>/<Method>` (the `connect-go` mount in
+`pb/connect/connect.go::registerConnectRoutes`). There is **no
+grpc-gateway**, no `runtime.NewServeMux`, and no
+`RegisterXxxServiceHandlerServer` calls anywhere in the tree. Verified
+three ways: `grep grpc-gateway go.mod` is empty, `grep gateway
+proto/buf.gen.yaml` is empty, and `find proto/gen -name '*_gw*.go'`
+is empty. A third party pointing `curl https://riff.example.com/api/v1/memos`
+gets a PocketBase 404, not a Memos response; the only `/api/...` URL
+the SPA itself fetches is `/api/v1/sse` (a PocketBase-side SSE handler).
+
+**Why this is a divergence from upstream `usememos/memos@main`.**
+Upstream serves both transports side by side from the same handler set
+in `server/api/api.go`: Connect at `/memos.api.<Service>/<Method>` plus
+a `runtime.NewServeMux` mounted at `/api/...` and `/file/...` filled by
+`apipb.RegisterXxxServiceHandlerServer(ctx, gwMux, s)`. The proto
+package has moved from `memos.api.v1` → `memos.api` and the REST
+prefix from `/api/v1/...` → `/api/...`. The Memos SPA upstream is
+Connect-only too, but the REST surface is **explicitly there for
+third-party consumers** (mobile clients, scripts, Zapier, the old
+memos REST users) and the upstream `removedAPIVersionHandler` 410s
+the old paths to push clients forward. Riff never brought the REST
+mount across; today there is no third-party REST surface to expose
+the Memos API. Riff is also one proto-package version behind upstream
+(still on `memos.api.v1`).
+
+**Why we accept it for now.** The current SPA, the only first-party
+client, talks Connect. The only operators who asked for REST so far
+are still small enough to be served by Connect (curl-able JSON
+already). And the **collision risk is the load-bearing reason this
+is the right time to make the call, not the wrong time**: the
+`google.api.http` annotations on every rpc below all start with
+`/api/v1/...`, which **is exactly the path group PocketBase owns for
+its own REST namespace**. If we ever add a gateway mount that uses
+these annotations verbatim, every call collides with PocketBase. The
+proto comments at the top of every service file below mark this so
+the next editor does not unknowingly re-enable the collision by
+adding the gateway plugin to `buf.gen.yaml`.
+
+**What this commit actually ships.** Two pieces of insurance, no
+runtime change:
+
+1. This entry, which is the authoritative answer to "why does riff
+   not have a Memos REST API?".
+2. A package-level comment block in every `proto/api/v1/*.proto`
+   that carries `option (google.api.http)`, explaining that the
+   annotations are **OpenAPI-only (MCP catalog)** today and that any
+   future gateway mount must use a non-`/api/...` prefix (recommended:
+   `/memos/api/v1/...` so the path matches the existing Connect
+   package and stays consistent with the caddy-routed Fly deploy
+   layout in `scripts/Caddyfile.fly.community`).
+
+**Future-proofing, if/when we add REST.** The work is non-trivial but
+mechanical and lives in four places: (a) re-base every
+`option (google.api.http)` path in `proto/api/v1/*.proto` to a
+riff-only prefix; (b) add `protoc-gen-grpc-gateway` to
+`proto/buf.gen.yaml` and run `buf generate` to emit
+`proto/gen/api/v1/*_gw.pb.go`; (c) write a new `pb/connect/gateway.go`
+that owns a `runtime.NewServeMux` filled by the eight
+`RegisterXxxServiceHandlerServer` calls; (d) mount that mux in
+`pb/connect/connect.go::registerConnectRoutes` *before* the SPA
+catch-all, *after* the existing Connect mount, and never overlap
+`/api/po33` or PocketBase's `/api/...` group. The Connect handlers
+in `pb/connect/` are written against `connect.NewError(connect.CodeX, ...)`
+per AGENTS.md "Go Conventions", so they are **not** directly
+portable to `status.Errorf(codes.X, ...)` (which is what grpc-gateway
+transcodes from) — adding a translation shim or refactoring the
+handlers to use `status.Errorf` is its own change.
+
+**Files.**
+* `DECISIONS.md` — this entry.
+* `proto/api/v1/ai_service.proto`, `attachment_service.proto`,
+  `auth_service.proto`, `idp_service.proto`, `instance_service.proto`,
+  `memo_service.proto`, `po33_device_service.proto`,
+  `po33_sketch_service.proto`, `space_service.proto`,
+  `user_service.proto` — added the same 8-line package-level comment
+  block under `package memos.api.v1;` flagging the OpenAPI-only role
+  of the annotations and the prefix rule. `common.proto` is unchanged
+  (no annotations, no service). `README.md` is unchanged.
+
+**Verification.** `go build ./...` clean (the proto comments do not
+affect generation). `cd proto && buf generate` is a no-op for
+Go/TypeScript output (comments do not change descriptor content) and
+`proto/gen/openapi.yaml` is also a no-op (annotations unchanged).
+The AGENTS.md "Proto API" row points future editors at this entry
+via the `google.api.http` mention under the cross-check note.
+
 ## Bootstrap admin lookup falls through to _superusers (2026-10-16)
 
 The Memos SPA's settings page calls

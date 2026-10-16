@@ -2,6 +2,21 @@ syntax = "proto3";
 
 package memos.api.v1;
 
+// -----------------------------------------------------------------------
+// Connect-only surface — read this before editing annotations.
+//
+// The `option (google.api.http)` annotations in this file are
+// OpenAPI-only today: they feed `proto/gen/openapi.yaml`, which the MCP
+// service in `server/mcp/` reads at startup to build its tool catalog.
+// There is **no** grpc-gateway mount in the riff binary, no
+// `runtime.NewServeMux`, and no `RegisterXxxServiceHandlerServer` calls
+// in the tree. See DECISIONS.md, top entry dated 2026-10-16.
+//
+// If/when a REST surface is added, the annotations MUST be re-based to
+// a non-`/api/...` prefix (recommended: `/memos/api/v1/...`) so the
+// gateway does not collide with PocketBase's `/api/...` namespace.
+// -----------------------------------------------------------------------
+
 import "google/api/annotations.proto";
 import "google/api/client.proto";
 import "google/api/field_behavior.proto";
