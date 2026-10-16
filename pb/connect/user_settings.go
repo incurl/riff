@@ -221,7 +221,7 @@ func splitUserSettingName(name string) (username, keyName string, err error) {
 func recordToUserSetting(user *core.Record, rec *core.Record) (*v1.UserSetting, error) {
 	key := rec.GetString("key")
 	setting := &v1.UserSetting{
-		Name: "users/" + user.GetString("username") + "/settings/" + key,
+		Name: "users/" + settingOwnerName(user) + "/settings/" + key,
 	}
 	payload := []byte(rec.GetString("payload"))
 	switch key {
@@ -255,11 +255,25 @@ func recordToUserSetting(user *core.Record, rec *core.Record) (*v1.UserSetting, 
 	return setting, nil
 }
 
+// settingOwnerName returns the username a settings response should
+// surface in the resource name. The `user` column on `user_settings`
+// points at the `users` collection; the bootstrap admin lives in
+// `_superusers` instead, where PocketBase's identity column is
+// `email`, not `username`. This mirrors the same convention in
+// `recordToUser` (users.go) so the wire shape stays
+// `users/{name}/settings/{key}` for both kinds of owner.
+func settingOwnerName(user *core.Record) string {
+	if name := user.GetString("username"); name != "" {
+		return name
+	}
+	return user.GetString("email")
+}
+
 // defaultUserSetting returns a zero-value body for keys the user has not
 // yet stored. Used so the React settings page always has something to
 // render.
 func defaultUserSetting(user *core.Record, keyName string) *v1.UserSetting {
-	name := "users/" + user.GetString("username") + "/settings/" + keyName
+	name := "users/" + settingOwnerName(user) + "/settings/" + keyName
 	switch keyName {
 	case "GENERAL":
 		return &v1.UserSetting{

@@ -422,8 +422,37 @@ func resolveSpaceNameToID(app core.App, name string) (string, error) {
 	return rows[0].Id, nil
 }
 
+// lookupUserByName resolves a resource-name username (the bit after
+// "users/") to a PocketBase record. The proto treats both the
+// `users` collection and the `_superusers` collection as the same
+// logical "user" (a superuser has role=ADMIN via `recordToUser`'s
+// `IsSuperuser()` check, and a superuser's email becomes its
+// resource name when `username` is empty), so we fall through to
+// `_superusers` when `users` returns no match.
+//
+// The PocketBase installer placeholder
+// (`__pbinstaller@example.com`) is excluded from the fall-through
+// so a fresh instance without a real admin does not surface the
+// placeholder as if it were a real account. This mirrors
+// `AuthServer.findByIdentity` and the installer-aware lookups in
+// `instance.go::findFirstAdmin` / `needsSetup`.
 func lookupUserByName(app core.App, username string) (*core.Record, error) {
 	rows, err := app.FindRecordsByFilter("users", "username={:u}", "", 1, 0, map[string]any{"u": username})
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) > 0 {
+		return rows[0], nil
+	}
+
+	superusers, err := app.FindCollectionByNameOrId(core.CollectionNameSuperusers)
+	if err != nil {
+		return nil, err
+	}
+	rows, err = app.FindRecordsByFilter(superusers,
+		"email={:u} && email != {:installer}", "", 1, 0,
+		map[string]any{"u": username, "installer": core.DefaultInstallerEmail},
+	)
 	if err != nil {
 		return nil, err
 	}

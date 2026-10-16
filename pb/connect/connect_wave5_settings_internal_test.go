@@ -102,6 +102,59 @@ func TestUserSetting_CrossUserDenied(t *testing.T) {
 	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
 }
 
+// TestListUserSettings_BootstrapAdminResolvesThroughSuperusers pins
+// the regression that motivated sharing `lookupUserByName` with
+// `AuthServer.findByIdentity`: the Memos SPA's settings page calls
+// `ListUserSettings(parent="users/{username}")` to read the GENERAL
+// row, and on a fresh instance the bootstrap admin only has a
+// `_superusers` row. The handler used to scan `users` only — the
+// request 404'd and the page rendered as a "user not found" error.
+//
+// Read path: the lookup now resolves the superuser, and the
+// defaulted body carries a `users/{email}/settings/GENERAL` resource
+// name (not the malformed `users//settings/GENERAL` that a naïve
+// `GetString("username")` would produce on a superuser record).
+//
+// Write path is a known limitation: `user_settings.user` is a
+// PocketBase `RelationField` pointing at the `users` collection, so
+// the existing schema cannot store a row owned by a `_superusers`
+// record. UpdateUserSetting on a bootstrap admin will fail at the
+// relation-write step. The fix is a follow-up schema change
+// (parallel `user_email` text column on `user_settings`, or a
+// nullable `user` field) — see DECISIONS.md. Until then the SPA
+// must fall back to a different path for the admin's settings;
+// the read side (which the page does on first paint and which
+// used to 404) is the one that has to work.
+func TestListUserSettings_BootstrapAdminResolvesThroughSuperusers(t *testing.T) {
+	app := newHookedApp(t)
+	admin := newSuperuser(t, app, "admin@example.com")
+	users := NewUserServer(app)
+
+	ctx := withViewer(context.Background(), admin)
+
+	// GetUserSetting returns a defaulted body so the SPA's settings
+	// form can render on first paint. The wire Name must carry the
+	// admin's email in the username slot, not an empty string.
+	getResp, err := users.GetUserSetting(ctx, &v1.GetUserSettingRequest{
+		Name: "users/admin@example.com/settings/GENERAL",
+	})
+	require.NoError(t, err, "GetUserSetting must resolve the bootstrap admin through the _superusers fall-through")
+	require.NotNil(t, getResp)
+	assert.Equal(t, "users/admin@example.com/settings/GENERAL", getResp.GetName(),
+		"the resource name must carry the superuser's email, not the empty `users.username` column")
+	require.NotNil(t, getResp.GetGeneralSetting(),
+		"default body must be GENERAL, not unset, so the SPA can render its form")
+
+	// ListUserSettings returns the same empty-result the SPA
+	// expects when nothing has been stored yet.
+	listResp, err := users.ListUserSettings(ctx, &v1.ListUserSettingsRequest{
+		Parent: "users/admin@example.com",
+	})
+	require.NoError(t, err, "ListUserSettings must resolve the bootstrap admin, not 404")
+	assert.Empty(t, listResp.GetSettings(),
+		"no rows have been written; the empty result is what the SPA renders as the unconfigured state")
+}
+
 // TestMemoView_CRUD covers create/read/update/delete for MemoView.
 // The React layer pins these in the sidebar; the names carry the
 // owner's username so we resolve to the right record id.

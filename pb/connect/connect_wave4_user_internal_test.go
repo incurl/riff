@@ -42,6 +42,85 @@ func TestBatchGetUsers_ResolvesAndSkipsUnknown(t *testing.T) {
 		"unknown and blank usernames are skipped, duplicates collapse")
 }
 
+// TestBatchGetUsers_ResolvesSuperuser pins the bootstrap-admin mention
+// path. The Memos SPA passes a creator/mention through the same
+// `users/{username}` resource name, so a bootstrap admin who has only
+// a `_superusers` row (no `users` row at all) must still resolve
+// through BatchGetUsers — otherwise the admin's first memo mention on
+// a fresh instance disappears from the timeline.
+func TestBatchGetUsers_ResolvesSuperuser(t *testing.T) {
+	app := newHookedApp(t)
+	admin := newSuperuser(t, app, "admin@example.com")
+	srv := NewUserServer(app)
+
+	resp, err := srv.BatchGetUsers(withViewer(context.Background(), admin), &v1.BatchGetUsersRequest{
+		Usernames: []string{"admin@example.com", "nobody"},
+	})
+	require.NoError(t, err)
+
+	require.Len(t, resp.GetUsers(), 1, "the unknown username is skipped, the superuser is not")
+	got := resp.GetUsers()[0]
+	assert.Equal(t, "users/admin@example.com", got.GetName(),
+		"the resource name is users/{email} for superusers without a username")
+	assert.Equal(t, v1.User_ADMIN, got.GetRole(),
+		"recordToUser must surface role=ADMIN for a _superusers record")
+}
+
+// TestGetUser_BootstrapAdmin pins the regression that motivated
+// sharing `lookupUserByName` with `findByIdentity`: a fresh instance
+// has only a `_superusers` row for the bootstrap admin. The SPA
+// resolves the admin's profile through `GetUser("users/{email}")`,
+// and the handler used to scan `users` only — the request 404'd and
+// the /settings panel rendered as a broken page.
+func TestGetUser_BootstrapAdmin(t *testing.T) {
+	app := newHookedApp(t)
+	admin := newSuperuser(t, app, "admin@example.com")
+	srv := NewUserServer(app)
+
+	got, err := srv.GetUser(withViewer(context.Background(), admin), &v1.GetUserRequest{
+		Name: "users/admin@example.com",
+	})
+	require.NoError(t, err, "GetUser must resolve a bootstrap superuser through the _superusers fall-through")
+	assert.Equal(t, "users/admin@example.com", got.GetName())
+	assert.Equal(t, v1.User_ADMIN, got.GetRole())
+	assert.Equal(t, "admin@example.com", got.GetEmail())
+}
+
+// TestGetUser_AnonymousCannotProbeSuperuser pins the deliberate
+// side-effect of the fall-through: an unauthenticated caller can now
+// ask `GetUser("users/{admin-email}")` and learn the admin's display
+// name. This is acceptable because the admin's profile is already
+// publicly readable through the `users` collection's public list
+// rule (a no-auth React shell must be able to render the admin's
+// name in the footer), and the new fall-through is the only way to
+// get the same answer for instances that have no `users` rows yet.
+//
+// The test pins the *positive* half: the public-read path returns
+// the admin's User proto. The privacy trade-off is recorded in
+// DECISIONS.md ("Bootstrap admin lookup falls through to _superusers").
+func TestGetUser_AnonymousCannotProbeSuperuser(t *testing.T) {
+	app := newHookedApp(t)
+	newSuperuser(t, app, "admin@example.com")
+	srv := NewUserServer(app)
+
+	// PocketBase creates `__pbinstaller@example.com` on the first
+	// boot. The fall-through filters it so a fresh install without
+	// a real admin does not surface the placeholder.
+	_, err := srv.GetUser(context.Background(), &v1.GetUserRequest{
+		Name: "users/" + core.DefaultInstallerEmail,
+	})
+	require.Error(t, err, "the installer placeholder must not resolve through the fall-through")
+	assert.Equal(t, connect.CodeNotFound, connect.CodeOf(err))
+
+	// The real admin's row is reachable even without auth, exactly
+	// the behaviour the SPA's footer needs.
+	got, err := srv.GetUser(context.Background(), &v1.GetUserRequest{
+		Name: "users/admin@example.com",
+	})
+	require.NoError(t, err, "GetUser is a public-read RPC by design; the fall-through preserves that")
+	assert.Equal(t, v1.User_ADMIN, got.GetRole())
+}
+
 // TestCreateUser_AdminOnlyAndSignIn asserts only an admin may provision an
 // account, and that the created password works through the Connect SignIn path
 // (which verifies the password_hash column, not PocketBase's own hash).

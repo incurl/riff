@@ -39,20 +39,21 @@ type UserServer struct {
 func NewUserServer(app core.App) *UserServer { return &UserServer{app: app} }
 
 // GetUser returns a single user by resource name
-// ("users/{username}").
+// ("users/{username}"). The shared `lookupUserByName` helper
+// also resolves the bootstrap admin in `_superusers`, so the SPA
+// can render the admin's profile (and a non-admin can resolve
+// "users/{admin-email}" through the public read path) on
+// instances that have only a superuser and no `users` rows yet.
 func (s *UserServer) GetUser(ctx context.Context, req *v1.GetUserRequest) (*v1.User, error) {
 	username := creatorUsername(req.Name)
 	if username == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, "name is required")
 	}
-	rows, err := s.app.FindRecordsByFilter("users", "username={:u}", "", 1, 0, map[string]any{"u": username})
+	rec, err := lookupUserByName(s.app, username)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err.Error())
-	}
-	if len(rows) == 0 {
 		return nil, connect.NewError(connect.CodeNotFound, "user not found")
 	}
-	return recordToUser(rows[0]), nil
+	return recordToUser(rec), nil
 }
 
 // ListUsers returns a paginated list of users.
@@ -76,12 +77,12 @@ func (s *UserServer) ListUsers(ctx context.Context, req *v1.ListUsersRequest) (*
 // BatchGetUsers resolves usernames to users. Unknown usernames are skipped
 // rather than failed: the client asks for every creator and mention at once and
 // must still render memos whose author has since been deleted.
+//
+// The shared `lookupUserByName` helper is used per name so a
+// bootstrap admin's `users/{email}` mention resolves through
+// `_superusers` on instances without a `users` row for the admin
+// (e.g. the installer's first memo mention on a fresh instance).
 func (s *UserServer) BatchGetUsers(ctx context.Context, req *v1.BatchGetUsersRequest) (*v1.BatchGetUsersResponse, error) {
-	users, err := s.app.FindCollectionByNameOrId("users")
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err.Error())
-	}
-
 	out := make([]*v1.User, 0, len(req.GetUsernames()))
 	seen := make(map[string]struct{}, len(req.GetUsernames()))
 	for _, username := range req.GetUsernames() {
@@ -93,15 +94,11 @@ func (s *UserServer) BatchGetUsers(ctx context.Context, req *v1.BatchGetUsersReq
 		}
 		seen[username] = struct{}{}
 
-		rows, err := s.app.FindRecordsByFilter(users,
-			"username={:u}", "", 1, 0, map[string]any{"u": username})
+		rec, err := lookupUserByName(s.app, username)
 		if err != nil {
-			return nil, connect.NewError(connect.CodeInternal, err.Error())
-		}
-		if len(rows) == 0 {
 			continue
 		}
-		out = append(out, recordToUser(rows[0]))
+		out = append(out, recordToUser(rec))
 	}
 	return &v1.BatchGetUsersResponse{Users: out}, nil
 }
