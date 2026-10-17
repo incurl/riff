@@ -153,10 +153,28 @@ func registerConnectRoutes(srv *connect.Server, mux *http.ServeMux, r *router.Ro
 // func(next connect.ServerFunc) connect.ServerFunc. The request
 // headers are reached via CallInfo stored in the context.
 //
-// The token is a PocketBase auth JWT for the `users` collection.
-// FindAuthRecordByToken takes the token first and the accepted token
-// types (auth, file, verification, …) after it; core.TokenTypeAuth
-// keeps refresh/file tokens from being accepted here.
+// Two token shapes are accepted:
+//
+//  1. A PocketBase auth JWT for the `users` collection, resolved
+//     via FindAuthRecordByToken. The accepted token types are
+//     restricted to core.TokenTypeAuth so refresh/file tokens
+//     cannot be replayed here.
+//
+//  2. A riff-issued "memos_pat_*" personal access token, resolved
+//     via resolvePersonalAccessToken. PATs are structurally
+//     opaque (not JWS) and their only representation on the
+//     server side is a bcrypt digest, which FindAuthRecordByToken
+//     cannot parse; the PAT branch is the read path for the
+//     UserService.PersonalAccessToken RPCs.
+//
+// The JWT branch runs first because it is the cheap fast path for
+// the common case. A non-PAT token (anything that does not start
+// with the memos_pat_ prefix) is left to the JWT resolver's
+// verdict; a token with the right prefix that does not match any
+// row falls through to "unauthenticated" the same way a wrong JWT
+// does. Errors from the PAT branch are swallowed: the contract is
+// "wrong/expired/revoked token == anonymous", so a 401 is
+// produced one layer up by the per-procedure CurrentUser guard.
 func withAuth(app core.App) connect.ServerInterceptor {
 	return func(next connect.ServerFunc) connect.ServerFunc {
 		return connect.ServerFunc(func(ctx context.Context, spec connect.Spec, stream connect.ServerStream) error {
@@ -166,6 +184,13 @@ func withAuth(app core.App) connect.ServerInterceptor {
 					rec, err := app.FindAuthRecordByToken(tok, core.TokenTypeAuth)
 					if err == nil {
 						ctx = context.WithValue(ctx, ctxKeyAuthRecord{}, rec)
+					} else if pat, perr := resolvePersonalAccessToken(app, tok); perr == nil && pat != nil {
+						// PAT verified; record lives in the
+						// same users collection a JWT would
+						// resolve to, so handlers see a
+						// uniform *core.Record via
+						// CurrentUser(ctx).
+						ctx = context.WithValue(ctx, ctxKeyAuthRecord{}, pat)
 					}
 				}
 			}
