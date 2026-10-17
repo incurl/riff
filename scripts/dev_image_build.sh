@@ -47,6 +47,13 @@ set -eu
 # the build invocation can resolve with `readlink -f`; a real path also
 # works.
 : "${RIFF_RAVINE_LINK:=scripts/ravine}"
+# Alpine mirror URLs the Dockerfile's apk install layer will probe.
+# Defaults match the Dockerfile; override for a private mirror or a
+# regional CDN when dl-cdn.alpinelinux.org is unreachable from the
+# build host. Set RIFF_ALPINE_REPO_FALLBACK="" to disable the
+# fallback and force the primary only.
+: "${RIFF_ALPINE_REPO_PRIMARY:=https://dl-cdn.alpinelinux.org/alpine/v3.21}"
+: "${RIFF_ALPINE_REPO_FALLBACK:=https://mirrors.tuna.tsinghua.edu.cn/alpine/v3.21}"
 # Caddy needs /var/opt/riff on the deploy target, but for the local image
 # the data dir is `./pb_data` (main.go's DefaultDataDir). Nothing to do here
 # — the Dockerfile's CMD path runs `riff serve` with `directory=/var/opt/riff`
@@ -115,6 +122,8 @@ echo "       -f scripts/Dockerfile \\"
 echo "       --build-context ravine=${ravine_ctx} \\"
 echo "       --build-arg VERSION=${version} \\"
 echo "       --build-arg COMMIT=${commit} \\"
+echo "       --build-arg ALPINE_REPO_PRIMARY=${RIFF_ALPINE_REPO_PRIMARY} \\"
+echo "       --build-arg ALPINE_REPO_FALLBACK=${RIFF_ALPINE_REPO_FALLBACK} \\"
 echo "       -t ${RIFF_IMAGE_TAG} --load ."
 
 exec docker buildx build \
@@ -123,6 +132,8 @@ exec docker buildx build \
   --build-context "ravine=${ravine_ctx}" \
   --build-arg "VERSION=${version}" \
   --build-arg "COMMIT=${commit}" \
+  --build-arg "ALPINE_REPO_PRIMARY=${RIFF_ALPINE_REPO_PRIMARY}" \
+  --build-arg "ALPINE_REPO_FALLBACK=${RIFF_ALPINE_REPO_FALLBACK}" \
   -t "${RIFF_IMAGE_TAG}" \
   --load \
   .

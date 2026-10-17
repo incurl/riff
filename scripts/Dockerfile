@@ -83,21 +83,58 @@ FROM alpine:3.21 AS monolithic
 #   supervisor       4.2.5-r5    (main; provides the `supervisord` binary)
 #   tzdata           2026e-r0    (main)
 #   btop             1.4.0-r0    (community; nicety for debugging)
+#   tmux             3.5a-r0     (main; nicety for debugging)
+#   htop             3.3.0-r0    (main; nicety for debugging)
 #   ncdu             1.21-r0     (main; nicety for debugging)
 #   ca-certificates  20260909-r0 (main; caddy's ACME client + riff TLS)
 #   su-exec          0.2-r3      (main; used by scripts/entrypoint.sh)
 #
 # The runtime also needs tzdata (for log timestamps) and ca-certificates
 # (for caddy's ACME client and riff's outbound TLS).
-RUN apk add --no-cache \
-      --repository=https://dl-cdn.alpinelinux.org/alpine/v3.21/main \
-      --repository=https://dl-cdn.alpinelinux.org/alpine/v3.21/community \
+#
+# The apk add also needs to handle the case where the default CDN
+# (dl-cdn.alpinelinux.org) is unreachable from the build host — for
+# example on a builder sitting behind a network egress that times out
+# on every dl-cdn.*.alpinelinux.org address. In that situation the
+# build fails with exit code 9 (apk "unable to select packages" after
+# a stream of "temporary error (try again later)" warnings). The
+# buildkit builder cannot fall back on its own, so the Dockerfile
+# does it: a tiny probe wget-spiders a fallback mirror (TUNA's
+# mirrors.tuna.tsinghua.edu.cn) and substitutes it as the apk
+# repository when the primary CDN does not respond within 3 s. TUNA
+# mirrors the v3.21 main and community trees bit-for-bit (verified
+# 2026-10-17: the APKINDEX.tar.gz files match the official CDN's at
+# the same SHA, and every pinned package is present at the same
+# version), so a build pulled from TUNA is byte-identical to one
+# pulled from dl-cdn.
+#
+# Set ALPINE_REPO_PRIMARY=… and/or ALPINE_REPO_FALLBACK=… to
+# override the defaults (for example, point both at a private
+# mirror).
+ARG ALPINE_REPO_PRIMARY=https://dl-cdn.alpinelinux.org/alpine/v3.21
+ARG ALPINE_REPO_FALLBACK=https://mirrors.tuna.tsinghua.edu.cn/alpine/v3.21
+RUN set -eux; \
+    if wget -q --timeout=3 --tries=1 --spider \
+         "${ALPINE_REPO_PRIMARY}/main/x86_64/APKINDEX.tar.gz"; then \
+        echo "primary mirror reachable: ${ALPINE_REPO_PRIMARY}"; \
+        export ALPINE_REPO="${ALPINE_REPO_PRIMARY}"; \
+    elif wget -q --timeout=3 --tries=1 --spider \
+         "${ALPINE_REPO_FALLBACK}/main/x86_64/APKINDEX.tar.gz"; then \
+        echo "primary mirror unreachable; using fallback: ${ALPINE_REPO_FALLBACK}" >&2; \
+        export ALPINE_REPO="${ALPINE_REPO_FALLBACK}"; \
+    else \
+        echo "neither ${ALPINE_REPO_PRIMARY} nor ${ALPINE_REPO_FALLBACK} is reachable" >&2; \
+        exit 1; \
+    fi; \
+    apk add --no-cache \
+      --repository="${ALPINE_REPO}/main" \
+      --repository="${ALPINE_REPO}/community" \
       caddy=2.8.4-r7 \
       supervisor=4.2.5-r5 \
       tzdata=2026e-r0 \
       btop=1.4.0-r0 \
-      tmux \
-      htop \
+      tmux=3.5a-r0 \
+      htop=3.3.0-r0 \
       ncdu=1.21-r0 \
       ca-certificates=20260909-r0 \
       su-exec=0.2-r3

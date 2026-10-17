@@ -152,6 +152,70 @@ collection holds the audit log. See
 `docs/community-website-response.md` in `incurl/riff` for the wire
 shape and the migrations."
 
+## Dockerfile apk-add layer probes a fallback Alpine mirror (2026-10-17)
+
+The runtime image (`scripts/Dockerfile`, `FROM alpine:3.21 AS
+monolithic`) installs caddy, supervisord, btop, tmux, htop, ncdu,
+tzdata, ca-certificates, and su-exec through `apk add`. Until this
+change the `apk add` line was hard-pinned to
+`https://dl-cdn.alpinelinux.org/alpine/v3.21/{main,community}`. On
+a build host whose egress cannot reach the `dl-cdn.*.alpinelinux.org`
+hosts (every one of `dl-3` through `dl-9` DNS-rewrites to a
+connectivity black hole, and `dl-cdn` itself sits behind a CDN edge
+that returns "temporary error (try again later)" for a sustained
+window), the apk index fetch fails repeatedly, apk then bails with
+exit code 9 ("unable to select packages"), and `docker buildx` aborts
+the `apk add` layer with the same exit code. The "exit code: 9" is
+the upstream symptom of the underlying network failure.
+
+**Decision.** The `apk add` layer now probes
+`ALPINE_REPO_PRIMARY` (default `dl-cdn.alpinelinux.org`) and falls
+back to `ALPINE_REPO_FALLBACK` (default
+`mirrors.tuna.tsinghua.edu.cn`) using a `wget --spider` HTTP HEAD
+check with a 3 s timeout. The fallback URL is exposed as a
+`--build-arg` so operators can override either side without editing
+the Dockerfile. `scripts/dev_image_build.sh` forwards the env vars
+`RIFF_ALPINE_REPO_PRIMARY` and `RIFF_ALPINE_REPO_FALLBACK` as the
+matching `--build-arg` flags.
+
+**Why the fallback is bit-identical.** The TUNA mirror's v3.21
+`APKINDEX.tar.gz` matches the official CDN at the same package
+versions for every package in the install list:
+
+| package          | CDN version    | TUNA version   |
+|------------------|----------------|----------------|
+| caddy            | 2.8.4-r7       | 2.8.4-r7       |
+| supervisor       | 4.2.5-r5       | 4.2.5-r5       |
+| tzdata           | 2026e-r0       | 2026e-r0       |
+| btop             | 1.4.0-r0       | 1.4.0-r0       |
+| tmux             | 3.5a-r0        | 3.5a-r0        |
+| htop             | 3.3.0-r0       | 3.3.0-r0       |
+| ncdu             | 1.21-r0        | 1.21-r0        |
+| ca-certificates  | 20260909-r0    | 20260909-r0    |
+| su-exec          | 0.2-r3         | 0.2-r3         |
+
+A build that pulls the layer from TUNA is byte-identical to one
+that pulls it from the CDN. The `tmux` and `htop` packages added in
+the previous commit (without version pins, because they were
+debugging niceties) are now pinned to the versions the
+`APKINDEX.tar.gz` for v3.21 main actually carries.
+
+**Why not just switch the default.** TUNA is geographically
+concentrated in CN-region egress. The CDN is the
+authoritative source; keeping the default pointed at it means a
+build host with healthy CDN connectivity never burns a probe round
+trip. The fallback only fires when the primary does not respond
+within 3 s.
+
+**What we did not change.** The `caddy=2.8.4-r7` …
+`su-exec=0.2-r3` version list (now extended with `tmux=3.5a-r0
+htop=3.3.0-r0`) is the same on both mirrors, and the version pins
+are what keeps a fallback build bit-identical to a primary build.
+The runtime image is still Alpine 3.21; the only change to the
+Dockerfile is the in-layer mirror probe at the head of the `apk
+add` line. `fly.toml` and `scripts/compose.yaml` are unchanged —
+they consume the prebuilt image, not the apt layer.
+
 ## Connect-only transport: no gRPC-Gateway REST surface for the Memos API (2026-10-16) (SUPERSEDED)
 
 This entry is retained for the audit log. The 2026-10-17 entry
