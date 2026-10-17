@@ -11,6 +11,17 @@ import (
 	"github.com/incurl/riff/internal/ratelimit"
 )
 
+// packageLimiter is the rate limiter the REST
+// routes in this file consult for per-route
+// policy. Set once at OnServe time by
+// Register; nil when the operator has not
+// configured RIFF_RATE_LIMIT. The Connect
+// service registration in pb/connect/connect.go
+// owns its own per-procedure rate-limit table;
+// the REST routes share this package-level
+// limiter and apply per-route scopes.
+var packageLimiter ratelimit.Limiter
+
 // Register binds all riff custom routes on the given app. Call
 // from main.go via app.OnServe().BindFunc.
 //
@@ -27,6 +38,15 @@ import (
 // throttling on the REST surface is a
 // future-slice hardening.
 func Register(app core.App, limiter ratelimit.Limiter) {
+	// Capture the limiter at the package level
+	// so handlers (which receive only the
+	// RequestEvent) can consult it. The
+	// Connect service in pb/connect/connect.go
+	// does the same with its own procedureScope
+	// table; the REST side does not have a
+	// equivalent table, so a single package
+	// variable is the simplest path.
+	packageLimiter = limiter
 	app.OnServe().BindFunc(func(e *core.ServeEvent) error {
 		// Auth: PocketBase's built-in middleware handles
 		// /api/* auth. Our routes live under /api/po33/* and
@@ -48,6 +68,35 @@ func Register(app core.App, limiter ratelimit.Limiter) {
 		e.Router.GET("/api/po33/pair/{code}/qrcode", pairQRCoreHandler)
 		e.Router.POST("/api/po33/pair/finish", pairFinishHandler)
 		e.Router.DELETE("/api/po33/pair/{id}", pairRevokeHandler)
+
+		// PO-33 device sketch upload. The route is
+		// not authenticated; the Ed25519 signature
+		// in the multipart body is the bearer
+		// credential, exactly the pattern the
+		// /pair/finish route uses. The handler
+		// creates a memo (source='sketch',
+		// state='DRAFT') plus the patches / samples
+		// / BACKUP_FILE rows, and inserts a
+		// sketch_versions row. See
+		// po33_device_upload.go for the full
+		// contract.
+		e.Router.POST("/api/po33/sketches/upload", uploadSketchHandler)
+
+		// Upstream-Memos REST surface at /memos/api/...
+		// 97 routes (84 proto-annotated + 3 file server
+		// + 1 SSE). The connect_proxy flavor dispatches
+		// through the same connect.Server the public
+		// /memos.api.v1.* routes use, so the two
+		// surfaces produce byte-identical responses
+		// without duplicating any business logic. The
+		// pb_records_crud flavor rewrites the path to
+		// PocketBase's native collection REST endpoints
+		// (/api/collections/{name}/records) so the
+		// built-in record handlers do the work. The
+		// file_server flavor reads the record's file
+		// blob and streams it. The sse flavor
+		// subscribes to the realtime broker.
+		mountUpstreamMemosRoutes(e.Router, app, limiter)
 
 		_ = limiter // see the comment on Register
 

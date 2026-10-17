@@ -5,6 +5,164 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## Upstream-Memos REST surface at `/memos/api/...`: thin transport adapter, not a new business layer (2026-10-17)
+
+**Supersedes the 2026-10-16 Connect-only decision below.** The
+reason for the supersession: the riff community needs a Memos REST
+compatibility surface for the SPA, the webclipper extension, and
+third-party clients (mobile apps, scripts) that have not been
+rewritten to speak Connect. Adding `runtime.NewServeMux` and the
+generated `RegisterXxxServiceHandlerServer` would have brought
+grpc-gateway into the binary along with a hand-maintained
+gRPC-client dependency in `pb/`, neither of which fits the riff
+layering rules. The transport adapter the design lands instead is
+three handler shapes in `pb/api/upstream_memos_rest.go`:
+
+* **`connect_proxy`** (84 routes) — re-targets the request at
+  the in-process `*http.ServeMux` that `pb/connect` already
+  mounted via `connecthttp.Mount`, with the same `withAuth`
+  interceptor and the same per-procedure rate-limit table. Zero
+  new business logic. The connect handler is the only authority
+  for the rule engine and the validation chain.
+* **`pb_records_crud`** (4 routes) — proxies straight to the
+  PocketBase record-fetch / save / delete APIs. The `users`,
+  `user_settings`, `memo_views`, `notifications`,
+  `user_webhooks`, `space_invitations`, `patches`,
+  `linked_identities`, `personal_access_tokens` collections are
+  CRUD-shaped and need no Memos-specific join logic; PocketBase's
+  record layer with the existing access rules is enough. The
+  wire shape is the same Memos envelope
+  (`{items, page, per_page, total_items}` for list,
+  `{...record}` for get).
+* **`file_server`** (3 routes) and **`sse`** (1 route) — the
+  file-download and realtime-streaming surface that grpc-gateway
+  does not provide. The file routes resolve the path parameter
+  to a record, then read the file blob from the PocketBase
+  filesystem at `<collectionId>/<recordId>/<filename>`. The SSE
+  route subscribes to PocketBase's `SubscriptionsBroker()` and
+  forwards the realtime messages as Server-Sent Events.
+
+**Three things we deliberately do not change:**
+
+1. **The proto `option (google.api.http)` annotations stay at
+   `/api/v1/...`.** They are OpenAPI-only today (the MCP service
+   in `server/mcp/` reads `proto/gen/openapi.yaml` to build its
+   tool catalog). Re-basing them to `/memos/api/...` would
+   invalidate the MCP tool names and the upstream
+   `Mcp-Api-Resource` shim the OpenAPI consumer relies on. The
+   new REST surface reads the generated procedure paths (e.g.
+   `memos.api.v1.MemoService/ListMemos`) directly from
+   `apiv1connect/`, so the proto and the adapter are decoupled
+   at the path level.
+2. **The connect mux at `/memos.api.v1.<Service>/<Method>`
+   keeps serving traffic.** The REST adapter does not redirect
+   or proxy the connect surface; both answer through the same
+   `*http.ServeMux` for the connect procedures, so the two
+   produce byte-identical responses (the connect handler is the
+   single source of truth).
+3. **The upstream Memos URL shape is preserved modulo
+   `:verb`-vs-`/verb`.** Google AIP-136 custom verbs
+   (`/api/v1/{name=users/*}:getStats`) become `/memos/api/users/
+   {name}/getStats` because Go's `http.ServeMux` pattern
+   grammar (which PocketBase uses) does not accept `}` followed
+   by `:`. The `design doc <docs/design/upstream-memos-rest.md>`_
+   enumerates the 13 routes that are remapped this way; clients
+   that hard-code the colon form need a one-line path rewrite.
+
+
+
+The firmware team's v0.1 sketch-resource brief (the
+"sketch-resource-brief") recommended a parallel `sketch` table that
+would carry the device's metadata, lifecycle state, and audit log, with
+forked `sketch_comment` / `sketch_reaction` / `sketch_tag` tables
+mirroring the existing `memos` / `memo_relations` / `memo_reactions`
+shape. **We reject the table fork and add the lifecycle on top of the
+existing schema instead.** The reasoning:
+
+1. **The schema already has the discriminator.** Migration
+   `1840000003_add_memo_source.go` adds a `memos.source` select with
+   `text | sketch`. Every `sketch` row already has a
+   `MemoPayload.sketch` oneof case carrying the device metadata
+   (`model`, `slot_count`, `bpm`, `device_fingerprint`,
+   `uploaded_at_unix`). The brief's "sketch table" recommendation
+   duplicates this discriminator.
+2. **The proto already has the lifecycle field.** `Memo.state` is
+   a wire-level field the existing `common.proto::State` enum
+   populates. The existing enum is `STATE_UNSPECIFIED | NORMAL |
+   ARCHIVED`. We extend it by adding `DRAFT = 3` (the device upload
+   landing state) and `HIDDEN = 4` (admin-only side-state). The
+   brief's `DRAFT | PUBLISHED | HIDDEN | ARCHIVED` is a *replacement*
+   of the existing wire-level enum; we keep `PUBLISHED` as a wire
+   alias for the existing `NORMAL` so the SPA, the export pipeline,
+   and the upstream Memos Connect clients in the wild keep working
+   unchanged. Migration `1840000006_add_memo_state.go` aligns the
+   PocketBase column with the proto.
+3. **The site renders one feed.** The SPA, the device, and the
+   user-facing APIs all hit the same `memos` collection. Forking
+   `sketch_comment` / `sketch_reaction` / `sketch_tag` would either
+   (a) leave sketches comment-less (bad: a sketch the user comments
+   on falls out of the unified feed) or (b) duplicate the index
+   strategy across two parallel tables (bad: every existing query
+   path needs a `WHERE source='sketch'` predicate to keep rendering
+   the unified feed, defeating the fork's purpose).
+4. **The brief's §3 "wire into the existing REST gateway" is
+   not implementable in riff** (see the 2026-10-16 entry above). The
+   device-side upload lives in `pb/api/po33_device_routes.go`
+   (HTTP/1.1 + Ed25519 bearer) and the user-facing RPCs in
+   `pb/connect/sketch_service.go` (Connect). Two surfaces, one
+   design.
+5. **The brief's §6 "never silently modify the original blob" is
+   implemented as a new `sketch_versions` table**, not as
+   column-level versioning on the `sketch` table that does not
+   exist. The `sketch_versions` collection is append-only: every
+   device upload inserts one row keyed on `(memo_id, version_no)`,
+   and the unique index on that pair is the mechanical
+   implementation of the brief's invariant. The collection's
+   `*Rule` fields are all `nil` and no `OnRecordUpdate` /
+   `OnRecordDelete` hooks bind to it — the absence of those hooks
+   is what makes the append-only invariant data-layer mechanical,
+   not just policy.
+
+**Wire surface delta.** `proto/api/v1/po33_sketch_service.proto`
+adds `PublishSketch`, `ArchiveSketch`, `ListSketchVersions`,
+`GetSketchVersion`, the `SketchVersion` message, and a re-export
+of the existing `State` enum with two new values
+(`DRAFT`, `HIDDEN`). The device-side `UploadSketch` is **not** a
+Connect RPC; it is a REST handler in
+`pb/api/po33_device_upload.go` mounted at
+`POST /api/po33/sketches/upload`. The full
+multipart shape (metadata + signature + patch_file +
+backup_file + sample_wav_0..N) is in
+`docs/community-website-response.md` §3.
+
+**Rate-limit delta.** The brief's §10 says
+"10 req / hour / device". A new scope
+`ratelimit.ScopeUploadSketchDevice` is added in
+`internal/ratelimit/ratelimit.go::DefaultPolicy` with that exact
+number. The bucket key is the `po33_devices.id`, not the client
+IP — a device moving between networks keeps the same budget.
+
+**The single line that has to change in the firmware team's brief.**
+Replace "The website stores sketches in a new `sketch` table" with
+"The website stores sketches in the existing `memos` table with
+`source='sketch'` and a new `state` enum value `DRAFT`. The
+lifecycle is DRAFT → NORMAL → ARCHIVED, with HIDDEN as an
+admin-only side-state. The append-only `sketch_versions`
+collection holds the audit log. See
+`docs/community-website-response.md` in `incurl/riff` for the wire
+shape and the migrations."
+
+## Connect-only transport: no gRPC-Gateway REST surface for the Memos API (2026-10-16) (SUPERSEDED)
+
+This entry is retained for the audit log. The 2026-10-17 entry
+above supersedes it. The original reasoning (no gRPC-gateway,
+no `runtime.NewServeMux`, no `RegisterXxxServiceHandlerServer`)
+is still true: the connect handler is the only authority for
+Memos-shaped business logic, and the connect mux is the only
+public transport for the Memos API. The new transport adapter
+at `/memos/api/...` does not change that: it re-targets the
+*same connect mux* the public Connect surface uses, so the
+adapter adds zero new business logic.
 
 ## Connect-only transport: no gRPC-Gateway REST surface for the Memos API (2026-10-16)
 

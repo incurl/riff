@@ -26,6 +26,14 @@
 // decide which Connect procedures get the middleware; the rest fall
 // through to the catch-all that the authorizer (a future wave) will
 // layer on top.
+//
+// The package-level connectMux variable holds the in-process
+// http.ServeMux that Mount installs on Register. pb/api reads
+// it through ConnectMux() to dispatch the /memos/api/... REST
+// surface through the same connect.Server that answers the
+// public /memos.api.v1.* Connect procedures. Sharing the
+// server keeps the two surfaces byte-identical without
+// duplicating any business logic.
 package connect
 
 import (
@@ -92,6 +100,11 @@ func Register(app core.App, limiter ratelimit.Limiter) error {
 	// Mount the connect-go HTTP handlers on a stdlib mux.
 	mux := http.NewServeMux()
 	connecthttp.Mount(mux, srv)
+	// Publish the mux so the upstream-memos REST surface in
+	// pb/api/upstream_memos_rest_proxy.go can dispatch through
+	// the same connect.Server without rebuilding the handlers
+	// (and re-running every Register call's hook chain).
+	connectMux = mux
 
 	app.OnServe().BindFunc(func(e *core.ServeEvent) error {
 		// Start the import-session sweeper so staged
@@ -183,4 +196,39 @@ func CurrentUser(ctx context.Context) *core.Record {
 		return nil
 	}
 	return v.(*core.Record)
+}
+
+// connectMux is the in-process http.ServeMux that Mount
+// installs at Register time. The upstream-memos REST surface
+// in pb/api/upstream_memos_rest_proxy.go reads it through
+// ConnectMux and dispatches /memos/api/... requests through
+// the same connect.Server, so the two surfaces share
+// withAuth, the rate-limit middleware, and the per-service
+// rule engine. nil until Register runs.
+var connectMux *http.ServeMux
+
+// ConnectMux returns the in-process http.ServeMux that the
+// connect package mounted its procedures on at Register
+// time. The mux is nil before Register runs and after the
+// process exits; callers that read it at request time (i.e.
+// the upstream-memos REST handlers) should treat a nil mux
+// as "proxy not installed" and return 503.
+//
+// The mux is safe to call ServeHTTP on from any goroutine
+// because http.ServeMux is concurrency-safe. It is shared
+// between the public /memos.api.v1.* surface and the
+// /memos/api/... REST surface, so the two answer through
+// the same handler instances.
+func ConnectMux() *http.ServeMux {
+	return connectMux
+}
+
+// SetConnectMux overrides the in-process http.ServeMux
+// for tests. Production code never calls this; it is
+// here so the upstream-memos REST tests can inject a
+// stub mux without spinning up the full Register
+// path. Pass nil to restore the default (which is the
+// real mux installed at Register time, or nil).
+func SetConnectMux(m *http.ServeMux) {
+	connectMux = m
 }
