@@ -4,10 +4,25 @@ package memos.api.v1;
 
 option go_package = "gen/api/v1";
 
+// State is the lifecycle state of a memo. The brief's
+// "PUBLISHED" is an alias for NORMAL — the upstream Memos
+// vocabulary uses NORMAL, and the riff SPA renders one feed
+// where NORMAL is the default visible state. DRAFT is a
+// net-new value introduced in migration 1840000006 for the
+// PO-33 sketch upload flow: a device upload lands in DRAFT
+// and the owner invokes PublishSketch to make it NORMAL.
+// HIDDEN is a net-new admin-only side-state: the memo is
+// preserved on disk but excluded from feed and search.
+//
+// The values are append-only. Reordering or renaming an
+// existing value is a wire-breaking change; adding a new
+// value at the end is backward-compatible.
 enum State {
   STATE_UNSPECIFIED = 0;
   NORMAL = 1;
   ARCHIVED = 2;
+  DRAFT = 3;
+  HIDDEN = 4;
 }
 
 // Used internally for obfuscating the page token.

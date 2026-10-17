@@ -4,17 +4,21 @@
 
 import type { GenFile, GenMessage, GenService } from "@bufbuild/protobuf/codegenv2";
 import { fileDesc, messageDesc, serviceDesc } from "@bufbuild/protobuf/codegenv2";
-import type { Memo } from "./memo_service_pb";
+import type { Memo, MemoSchema } from "./memo_service_pb";
 import { file_api_v1_memo_service } from "./memo_service_pb";
 import { file_google_api_annotations } from "../../google/api/annotations_pb";
+import { file_google_api_client } from "../../google/api/client_pb";
 import { file_google_api_field_behavior } from "../../google/api/field_behavior_pb";
+import { file_google_api_resource } from "../../google/api/resource_pb";
+import type { Timestamp } from "@bufbuild/protobuf/wkt";
+import { file_google_protobuf_timestamp } from "@bufbuild/protobuf/wkt";
 import type { Message } from "@bufbuild/protobuf";
 
 /**
  * Describes the file api/v1/po33_sketch_service.proto.
  */
 export const file_api_v1_po33_sketch_service: GenFile = /*@__PURE__*/
-  fileDesc("CiBhcGkvdjEvcG8zM19za2V0Y2hfc2VydmljZS5wcm90bxIMbWVtb3MuYXBpLnYxIkgKFUxpc3RNeVNrZXRjaGVzUmVxdWVzdBIWCglwYWdlX3NpemUYASABKAVCA+BBARIXCgpwYWdlX3Rva2VuGAIgASgJQgPgQQEiVAoWTGlzdE15U2tldGNoZXNSZXNwb25zZRIhCgVtZW1vcxgBIAMoCzISLm1lbW9zLmFwaS52MS5NZW1vEhcKD25leHRfcGFnZV90b2tlbhgCIAEoCTKLAQoNU2tldGNoU2VydmljZRJ6Cg5MaXN0TXlTa2V0Y2hlcxIjLm1lbW9zLmFwaS52MS5MaXN0TXlTa2V0Y2hlc1JlcXVlc3QaJC5tZW1vcy5hcGkudjEuTGlzdE15U2tldGNoZXNSZXNwb25zZSIdgtPkkwIXEhUvYXBpL3YxL3BvMzMvc2tldGNoZXNCqwEKEGNvbS5tZW1vcy5hcGkudjFCFlBvMzNTa2V0Y2hTZXJ2aWNlUHJvdG9QAVotZ2l0aHViLmNvbS9pbmN1cmwvcmlmZi9wcm90by9nZW4vYXBpL3YxO2FwaXYxogIDTUFYqgIMTWVtb3MuQXBpLlYxygIMTWVtb3NcQXBpXFYx4gIYTWVtb3NcQXBpXFYxXEdQQk1ldGFkYXRh6gIOTWVtb3M6OkFwaTo6VjFiBnByb3RvMw", [file_api_v1_memo_service, file_google_api_annotations, file_google_api_field_behavior]);
+  fileDesc("CiBhcGkvdjEvcG8zM19za2V0Y2hfc2VydmljZS5wcm90bxIMbWVtb3MuYXBpLnYxIkgKFUxpc3RNeVNrZXRjaGVzUmVxdWVzdBIWCglwYWdlX3NpemUYASABKAVCA+BBARIXCgpwYWdlX3Rva2VuGAIgASgJQgPgQQEiVAoWTGlzdE15U2tldGNoZXNSZXNwb25zZRIhCgVtZW1vcxgBIAMoCzISLm1lbW9zLmFwaS52MS5NZW1vEhcKD25leHRfcGFnZV90b2tlbhgCIAEoCSI/ChRQdWJsaXNoU2tldGNoUmVxdWVzdBInCgRuYW1lGAEgASgJQhngQQL6QRMKEW1lbW9zLmFwaS52MS9NZW1vIj8KFEFyY2hpdmVTa2V0Y2hSZXF1ZXN0EicKBG5hbWUYASABKAlCGeBBAvpBEwoRbWVtb3MuYXBpLnYxL01lbW8idwoZTGlzdFNrZXRjaFZlcnNpb25zUmVxdWVzdBIpCgZwYXJlbnQYASABKAlCGeBBAvpBEwoRbWVtb3MuYXBpLnYxL01lbW8SFgoJcGFnZV9zaXplGAIgASgFQgPgQQESFwoKcGFnZV90b2tlbhgDIAEoCUID4EEBImQKGkxpc3RTa2V0Y2hWZXJzaW9uc1Jlc3BvbnNlEi0KCHZlcnNpb25zGAEgAygLMhsubWVtb3MuYXBpLnYxLlNrZXRjaFZlcnNpb24SFwoPbmV4dF9wYWdlX3Rva2VuGAIgASgJIksKF0dldFNrZXRjaFZlcnNpb25SZXF1ZXN0EjAKBG5hbWUYASABKAlCIuBBAvpBHAoabWVtb3MuYXBpLnYxL1NrZXRjaFZlcnNpb24isAMKDVNrZXRjaFZlcnNpb24SEQoEbmFtZRgBIAEoCUID4EEIEicKBG1lbW8YAiABKAlCGeBBA/pBEwoRbWVtb3MuYXBpLnYxL01lbW8SFwoKdmVyc2lvbl9ubxgDIAEoBUID4EEDEh8KEmRldmljZV9maW5nZXJwcmludBgEIAEoCUID4EEDEh0KEHVwbG9hZGVkX2F0X3VuaXgYBSABKANCA+BBAxI0CgtyZWNlaXZlZF9hdBgGIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXBCA+BBAxIWCglwYXRjaF9rZXkYByABKAlCA+BBAxIYCgtzYW1wbGVfa2V5cxgIIAMoCUID4EEDEhcKCmJhY2t1cF9rZXkYCSABKAlCA+BBAxIgChNzaWduYXR1cmVfYWxnb3JpdGhtGAogASgJQgPgQQM6Z+pBZAoabWVtb3MuYXBpLnYxL1NrZXRjaFZlcnNpb24SH21lbW9zL3ttZW1vfS92ZXJzaW9ucy97dmVyc2lvbn0aBG5hbWUqD3NrZXRjaF92ZXJzaW9uczIOc2tldGNoX3ZlcnNpb24yoQUKDVNrZXRjaFNlcnZpY2USegoOTGlzdE15U2tldGNoZXMSIy5tZW1vcy5hcGkudjEuTGlzdE15U2tldGNoZXNSZXF1ZXN0GiQubWVtb3MuYXBpLnYxLkxpc3RNeVNrZXRjaGVzUmVzcG9uc2UiHYLT5JMCFxIVL2FwaS92MS9wbzMzL3NrZXRjaGVzEnkKDVB1Ymxpc2hTa2V0Y2gSIi5tZW1vcy5hcGkudjEuUHVibGlzaFNrZXRjaFJlcXVlc3QaEi5tZW1vcy5hcGkudjEuTWVtbyIw2kEEbmFtZYLT5JMCIzoBKiIeL2FwaS92MS97bmFtZT1tZW1vcy8qfTpwdWJsaXNoEnkKDUFyY2hpdmVTa2V0Y2gSIi5tZW1vcy5hcGkudjEuQXJjaGl2ZVNrZXRjaFJlcXVlc3QaEi5tZW1vcy5hcGkudjEuTWVtbyIw2kEEbmFtZYLT5JMCIzoBKiIeL2FwaS92MS97bmFtZT1tZW1vcy8qfTphcmNoaXZlEpIBChJMaXN0U2tldGNoVmVyc2lvbnMSJy5tZW1vcy5hcGkudjEuTGlzdFNrZXRjaFZlcnNpb25zUmVxdWVzdBooLm1lbW9zLmFwaS52MS5MaXN0U2tldGNoVmVyc2lvbnNSZXNwb25zZSIpgtPkkwIjEiEvYXBpL3YxL3twYXJlbnQ9bWVtb3MvKn0vdmVyc2lvbnMSiAEKEEdldFNrZXRjaFZlcnNpb24SJS5tZW1vcy5hcGkudjEuR2V0U2tldGNoVmVyc2lvblJlcXVlc3QaGy5tZW1vcy5hcGkudjEuU2tldGNoVmVyc2lvbiIw2kEEbmFtZYLT5JMCIxIhL2FwaS92MS97bmFtZT1tZW1vcy8qL3ZlcnNpb25zLyp9QqsBChBjb20ubWVtb3MuYXBpLnYxQhZQbzMzU2tldGNoU2VydmljZVByb3RvUAFaLWdpdGh1Yi5jb20vaW5jdXJsL3JpZmYvcHJvdG8vZ2VuL2FwaS92MTthcGl2MaICA01BWKoCDE1lbW9zLkFwaS5WMcoCDE1lbW9zXEFwaVxWMeICGE1lbW9zXEFwaVxWMVxHUEJNZXRhZGF0YeoCDk1lbW9zOjpBcGk6OlYxYgZwcm90bzM", [file_api_v1_memo_service, file_google_api_annotations, file_google_api_client, file_google_api_field_behavior, file_google_api_resource, file_google_protobuf_timestamp]);
 
 /**
  * @generated from message memos.api.v1.ListMySketchesRequest
@@ -61,14 +65,230 @@ export const ListMySketchesResponseSchema: GenMessage<ListMySketchesResponse> = 
   messageDesc(file_api_v1_po33_sketch_service, 1);
 
 /**
- * SketchService is the SPA-facing read side of the
- * PO-33 sketch upload flow. The two endpoints
- * today are ListMySketches and (in a future slice)
- * GetSketch / DeleteSketch. The actual device
- * download path (/api/po33/sketches/download) is a
- * REST route rather than a Connect RPC because the
- * device runs an HTTP/1.1 client with a one-shot
- * signature header rather than a Connect library.
+ * @generated from message memos.api.v1.PublishSketchRequest
+ */
+export type PublishSketchRequest = Message<"memos.api.v1.PublishSketchRequest"> & {
+  /**
+   * The resource name of the memo to publish.
+   * Format: memos/{memo}
+   *
+   * @generated from field: string name = 1;
+   */
+  name: string;
+};
+
+/**
+ * Describes the message memos.api.v1.PublishSketchRequest.
+ * Use `create(PublishSketchRequestSchema)` to create a new message.
+ */
+export const PublishSketchRequestSchema: GenMessage<PublishSketchRequest> = /*@__PURE__*/
+  messageDesc(file_api_v1_po33_sketch_service, 2);
+
+/**
+ * @generated from message memos.api.v1.ArchiveSketchRequest
+ */
+export type ArchiveSketchRequest = Message<"memos.api.v1.ArchiveSketchRequest"> & {
+  /**
+   * The resource name of the memo to archive.
+   * Format: memos/{memo}
+   *
+   * @generated from field: string name = 1;
+   */
+  name: string;
+};
+
+/**
+ * Describes the message memos.api.v1.ArchiveSketchRequest.
+ * Use `create(ArchiveSketchRequestSchema)` to create a new message.
+ */
+export const ArchiveSketchRequestSchema: GenMessage<ArchiveSketchRequest> = /*@__PURE__*/
+  messageDesc(file_api_v1_po33_sketch_service, 3);
+
+/**
+ * @generated from message memos.api.v1.ListSketchVersionsRequest
+ */
+export type ListSketchVersionsRequest = Message<"memos.api.v1.ListSketchVersionsRequest"> & {
+  /**
+   * The parent memo resource name.
+   * Format: memos/{memo}
+   *
+   * @generated from field: string parent = 1;
+   */
+  parent: string;
+
+  /**
+   * @generated from field: int32 page_size = 2;
+   */
+  pageSize: number;
+
+  /**
+   * @generated from field: string page_token = 3;
+   */
+  pageToken: string;
+};
+
+/**
+ * Describes the message memos.api.v1.ListSketchVersionsRequest.
+ * Use `create(ListSketchVersionsRequestSchema)` to create a new message.
+ */
+export const ListSketchVersionsRequestSchema: GenMessage<ListSketchVersionsRequest> = /*@__PURE__*/
+  messageDesc(file_api_v1_po33_sketch_service, 4);
+
+/**
+ * @generated from message memos.api.v1.ListSketchVersionsResponse
+ */
+export type ListSketchVersionsResponse = Message<"memos.api.v1.ListSketchVersionsResponse"> & {
+  /**
+   * @generated from field: repeated memos.api.v1.SketchVersion versions = 1;
+   */
+  versions: SketchVersion[];
+
+  /**
+   * @generated from field: string next_page_token = 2;
+   */
+  nextPageToken: string;
+};
+
+/**
+ * Describes the message memos.api.v1.ListSketchVersionsResponse.
+ * Use `create(ListSketchVersionsResponseSchema)` to create a new message.
+ */
+export const ListSketchVersionsResponseSchema: GenMessage<ListSketchVersionsResponse> = /*@__PURE__*/
+  messageDesc(file_api_v1_po33_sketch_service, 5);
+
+/**
+ * @generated from message memos.api.v1.GetSketchVersionRequest
+ */
+export type GetSketchVersionRequest = Message<"memos.api.v1.GetSketchVersionRequest"> & {
+  /**
+   * The resource name of the version to fetch.
+   * Format: memos/{memo}/versions/{version_no}
+   *
+   * @generated from field: string name = 1;
+   */
+  name: string;
+};
+
+/**
+ * Describes the message memos.api.v1.GetSketchVersionRequest.
+ * Use `create(GetSketchVersionRequestSchema)` to create a new message.
+ */
+export const GetSketchVersionRequestSchema: GenMessage<GetSketchVersionRequest> = /*@__PURE__*/
+  messageDesc(file_api_v1_po33_sketch_service, 6);
+
+/**
+ * SketchVersion is one row of the append-only
+ * audit log a sketch memo accumulates. Every
+ * device upload inserts one row. The log never
+ * updates and never deletes; the "current"
+ * version is the row with the largest
+ * version_no.
+ *
+ * Format: memos/{memo}/versions/{version_no}
+ *
+ * @generated from message memos.api.v1.SketchVersion
+ */
+export type SketchVersion = Message<"memos.api.v1.SketchVersion"> & {
+  /**
+   * @generated from field: string name = 1;
+   */
+  name: string;
+
+  /**
+   * The parent memo resource name.
+   * Format: memos/{memo}
+   *
+   * @generated from field: string memo = 2;
+   */
+  memo: string;
+
+  /**
+   * The monotonic per-memo version number, starting at 1.
+   *
+   * @generated from field: int32 version_no = 3;
+   */
+  versionNo: number;
+
+  /**
+   * The hex SHA-256 of the device's Ed25519 public key,
+   * exactly the value the device's pairing screen showed
+   * at pairing time. The same fingerprint is also
+   * copied onto the patches and samples rows for fast
+   * joins; the value here is the upload-time snapshot.
+   *
+   * @generated from field: string device_fingerprint = 4;
+   */
+  deviceFingerprint: string;
+
+  /**
+   * The unix-second timestamp the device recorded at
+   * upload time. Distinct from received_at, which is
+   * the server's clock.
+   *
+   * @generated from field: int64 uploaded_at_unix = 5;
+   */
+  uploadedAtUnix: bigint;
+
+  /**
+   * The server-side timestamp the row was inserted.
+   *
+   * @generated from field: google.protobuf.Timestamp received_at = 6;
+   */
+  receivedAt?: Timestamp | undefined;
+
+  /**
+   * The PocketBase `patches` row id holding the .p33 patch blob.
+   *
+   * @generated from field: string patch_key = 7;
+   */
+  patchKey: string;
+
+  /**
+   * The PocketBase `samples` row ids holding the per-slot .wav blobs.
+   * Empty when the device uploaded a patch-only sketch.
+   *
+   * @generated from field: repeated string sample_keys = 8;
+   */
+  sampleKeys: string[];
+
+  /**
+   * The PocketBase `patches` row id holding the .bkp
+   * tarball, when the device emitted one. Empty when
+   * the upload was tarball-less.
+   *
+   * @generated from field: string backup_key = 9;
+   */
+  backupKey: string;
+
+  /**
+   * The signature algorithm pinned for this row. Today
+   * always "ed25519"; the field is forward-compatibility
+   * for a future post-quantum migration.
+   *
+   * @generated from field: string signature_algorithm = 10;
+   */
+  signatureAlgorithm: string;
+};
+
+/**
+ * Describes the message memos.api.v1.SketchVersion.
+ * Use `create(SketchVersionSchema)` to create a new message.
+ */
+export const SketchVersionSchema: GenMessage<SketchVersion> = /*@__PURE__*/
+  messageDesc(file_api_v1_po33_sketch_service, 7);
+
+/**
+ * SketchService is the SPA-facing side of the
+ * PO-33 sketch upload flow. The lifecycle RPCs
+ * (PublishSketch, ArchiveSketch) and the
+ * append-only version log (ListSketchVersions,
+ * GetSketchVersion) live in this file. The
+ * device-side upload itself is a REST route
+ * (POST /api/po33/sketches/upload) in
+ * pb/api/po33_device_routes.go because the
+ * device runs an HTTP/1.1 client with a
+ * one-shot Ed25519 signature header rather
+ * than a Connect library.
  *
  * @generated from service memos.api.v1.SketchService
  */
@@ -88,6 +308,77 @@ export const SketchService: GenService<{
     methodKind: "unary";
     input: typeof ListMySketchesRequestSchema;
     output: typeof ListMySketchesResponseSchema;
+  },
+  /**
+   * PublishSketch flips a sketch memo from DRAFT to
+   * NORMAL. The caller must be the memo's author. A
+   * memo that is not in DRAFT is rejected with
+   * FAILED_PRECONDITION. After publish the memo
+   * appears in the SPA feed and the public search
+   * index. The HTTP annotation is the
+   * google.api.method_signature "name" so the
+   * google-api-rust / connect-web clients can
+   * build a typed binding.
+   *
+   * @generated from rpc memos.api.v1.SketchService.PublishSketch
+   */
+  publishSketch: {
+    methodKind: "unary";
+    input: typeof PublishSketchRequestSchema;
+    output: typeof MemoSchema;
+  },
+  /**
+   * ArchiveSketch flips a sketch memo from NORMAL
+   * to ARCHIVED. The caller must be the memo's
+   * author. The memo is removed from the SPA feed
+   * and the public search index but the row, the
+   * patches, the samples, and the sketch_versions
+   * log are preserved on disk. A re-publish is not
+   * possible; archive is one-way. Re-uploads of the
+   * same sketch create new sketch_versions rows but
+   * do not change the ARCHIVED state.
+   *
+   * @generated from rpc memos.api.v1.SketchService.ArchiveSketch
+   */
+  archiveSketch: {
+    methodKind: "unary";
+    input: typeof ArchiveSketchRequestSchema;
+    output: typeof MemoSchema;
+  },
+  /**
+   * ListSketchVersions returns the append-only
+   * version log for a sketch memo. The log is
+   * immutable; the response includes every
+   * upload ever made against the memo, in
+   * received_at order. The most recent row is
+   * the version the device currently calls
+   * "current" but the server does not flag
+   * one as authoritative — the owner decides
+   * via PublishSketch which version is visible
+   * (publishing a re-upload is a separate
+   * operation in a future slice).
+   *
+   * @generated from rpc memos.api.v1.SketchService.ListSketchVersions
+   */
+  listSketchVersions: {
+    methodKind: "unary";
+    input: typeof ListSketchVersionsRequestSchema;
+    output: typeof ListSketchVersionsResponseSchema;
+  },
+  /**
+   * GetSketchVersion returns a single immutable
+   * version row by resource name. The resource
+   * name is "memos/{memo}/versions/{version_no}".
+   * GetSketchVersion returns a single immutable
+   * version row by resource name. The resource
+   * name is "memos/{memo}/versions/{version_no}".
+   *
+   * @generated from rpc memos.api.v1.SketchService.GetSketchVersion
+   */
+  getSketchVersion: {
+    methodKind: "unary";
+    input: typeof GetSketchVersionRequestSchema;
+    output: typeof SketchVersionSchema;
   },
 }> = /*@__PURE__*/
   serviceDesc(file_api_v1_po33_sketch_service, 0);

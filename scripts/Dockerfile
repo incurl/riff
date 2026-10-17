@@ -96,6 +96,8 @@ RUN apk add --no-cache \
       supervisor=4.2.5-r5 \
       tzdata=2026e-r0 \
       btop=1.4.0-r0 \
+      tmux \
+      htop \
       ncdu=1.21-r0 \
       ca-certificates=20260909-r0 \
       su-exec=0.2-r3

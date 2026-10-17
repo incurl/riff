@@ -43,7 +43,7 @@ func recordToMemo(app core.App, rec *core.Record) *v1.Memo {
 
 	memo := &v1.Memo{
 		Name:        "memos/" + rec.Id,
-		State:       v1.State_NORMAL,
+		State:       stateToProto(rec.GetString("state")),
 		Creator:     "users/" + username,
 		CreateTime:  timestampToProto(rec.GetDateTime("created")),
 		UpdateTime:  timestampToProto(rec.GetDateTime("updated")),
@@ -319,6 +319,48 @@ func visibilityFromProto(v v1.Visibility) string {
 		return "SPACE"
 	default:
 		return ""
+	}
+}
+
+// stateToProto maps a PocketBase state string to the
+// proto enum. The empty string (pre-migration-1840000006
+// rows) maps to NORMAL so the proto keeps the existing
+// "every memo is NORMAL" invariant for back-compat
+// reads. Unknown future values map to UNSPECIFIED so a
+// new state added to the column does not silently look
+// like NORMAL to a client that has not been updated.
+func stateToProto(s string) v1.State {
+	switch s {
+	case "", "NORMAL":
+		return v1.State_NORMAL
+	case "ARCHIVED":
+		return v1.State_ARCHIVED
+	case "DRAFT":
+		return v1.State_DRAFT
+	case "HIDDEN":
+		return v1.State_HIDDEN
+	default:
+		return v1.State_STATE_UNSPECIFIED
+	}
+}
+
+// stateFromProto is the reverse map. UNSPECIFIED maps to
+// NORMAL so a request that omits the state on update
+// does not blank the column. Used by the lifecycle
+// RPCs (PublishSketch, ArchiveSketch) which set the
+// state explicitly.
+func stateFromProto(s v1.State) string {
+	switch s {
+	case v1.State_NORMAL:
+		return "NORMAL"
+	case v1.State_ARCHIVED:
+		return "ARCHIVED"
+	case v1.State_DRAFT:
+		return "DRAFT"
+	case v1.State_HIDDEN:
+		return "HIDDEN"
+	default:
+		return "NORMAL"
 	}
 }
 

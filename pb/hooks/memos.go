@@ -70,6 +70,23 @@ func registerMemos(app core.App) {
 
 		e.Record.Set("tags", extractHashtags(mdSvc, e.Record.GetString("content")))
 		e.Record.Set("payload", materialisePayload(mdSvc, e.Record.GetString("content")))
+
+		// Lifecycle / visibility interaction: a
+		// sketch memo in DRAFT cannot be PUBLIC.
+		// The publish path (PublishSketch RPC in
+		// pb/connect/sketch_service_lifecycle.go)
+		// flips DRAFT to NORMAL; a public draft
+		// would skip the owner's review. The
+		// check runs after the source / state
+		// defaulting so a DRAFT sketch the
+		// caller explicitly created lands in
+		// the gated path even if the state
+		// was not yet defaulted.
+		if e.Record.GetString("state") == "DRAFT" &&
+			e.Record.GetString("visibility") == "PUBLIC" {
+			return errors.New("a DRAFT sketch cannot be PUBLIC; publish first")
+		}
+
 		// Default the `source` discriminator to "text"
 		// when the caller did not set it. Every
 		// existing memo (pre-PO-33 binding) is a
@@ -80,6 +97,22 @@ func registerMemos(app core.App) {
 		// to text memos.
 		if e.Record.GetString("source") == "" {
 			e.Record.Set("source", "text")
+		}
+		// Default the `state` lifecycle field to
+		// "NORMAL" when the caller did not set it.
+		// The existing record (the migration that
+		// added the column) backfills the value at
+		// migration time; this defaulting rule
+		// covers the pre-migration rows that the
+		// migration's filter might miss (e.g. a
+		// row created in the same transaction as
+		// the migration) and any future caller
+		// that forgets to set the column. The
+		// PO-33 device upload handler always sets
+		// "DRAFT" explicitly, so this default
+		// only applies to text memos.
+		if e.Record.GetString("state") == "" {
+			e.Record.Set("state", "NORMAL")
 		}
 		return e.Next()
 	})
@@ -115,6 +148,21 @@ func registerMemos(app core.App) {
 		if newContent != oldContent {
 			e.Record.Set("tags", extractHashtags(mdSvc, newContent))
 			e.Record.Set("payload", materialisePayload(mdSvc, newContent))
+		}
+
+		// Lifecycle / visibility interaction on
+		// update: a memo that transitions into
+		// DRAFT (rare, but possible if a future
+		// admin tool un-archives) cannot be
+		// PUBLIC. A memo that is currently
+		// DRAFT and is being made PUBLIC is the
+		// realistic case and is the one the
+		// brief's lifecycle assumes: the
+		// publish step must run first.
+		newState := e.Record.GetString("state")
+		if newState == "DRAFT" &&
+			e.Record.GetString("visibility") == "PUBLIC" {
+			return errors.New("a DRAFT sketch cannot be PUBLIC; publish first")
 		}
 		return e.Next()
 	})

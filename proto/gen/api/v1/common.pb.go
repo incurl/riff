@@ -21,12 +21,27 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// State is the lifecycle state of a memo. The brief's
+// "PUBLISHED" is an alias for NORMAL — the upstream Memos
+// vocabulary uses NORMAL, and the riff SPA renders one feed
+// where NORMAL is the default visible state. DRAFT is a
+// net-new value introduced in migration 1840000006 for the
+// PO-33 sketch upload flow: a device upload lands in DRAFT
+// and the owner invokes PublishSketch to make it NORMAL.
+// HIDDEN is a net-new admin-only side-state: the memo is
+// preserved on disk but excluded from feed and search.
+//
+// The values are append-only. Reordering or renaming an
+// existing value is a wire-breaking change; adding a new
+// value at the end is backward-compatible.
 type State int32
 
 const (
 	State_STATE_UNSPECIFIED State = 0
 	State_NORMAL            State = 1
 	State_ARCHIVED          State = 2
+	State_DRAFT             State = 3
+	State_HIDDEN            State = 4
 )
 
 // Enum value maps for State.
@@ -35,11 +50,15 @@ var (
 		0: "STATE_UNSPECIFIED",
 		1: "NORMAL",
 		2: "ARCHIVED",
+		3: "DRAFT",
+		4: "HIDDEN",
 	}
 	State_value = map[string]int32{
 		"STATE_UNSPECIFIED": 0,
 		"NORMAL":            1,
 		"ARCHIVED":          2,
+		"DRAFT":             3,
+		"HIDDEN":            4,
 	}
 )
 
@@ -179,12 +198,15 @@ const file_api_v1_common_proto_rawDesc = "" +
 	"\x13api/v1/common.proto\x12\fmemos.api.v1\"9\n" +
 	"\tPageToken\x12\x14\n" +
 	"\x05limit\x18\x01 \x01(\x05R\x05limit\x12\x16\n" +
-	"\x06offset\x18\x02 \x01(\x05R\x06offset*8\n" +
+	"\x06offset\x18\x02 \x01(\x05R\x06offset*O\n" +
 	"\x05State\x12\x15\n" +
 	"\x11STATE_UNSPECIFIED\x10\x00\x12\n" +
 	"\n" +
 	"\x06NORMAL\x10\x01\x12\f\n" +
-	"\bARCHIVED\x10\x02*9\n" +
+	"\bARCHIVED\x10\x02\x12\t\n" +
+	"\x05DRAFT\x10\x03\x12\n" +
+	"\n" +
+	"\x06HIDDEN\x10\x04*9\n" +
 	"\tDirection\x12\x19\n" +
 	"\x15DIRECTION_UNSPECIFIED\x10\x00\x12\a\n" +
 	"\x03ASC\x10\x01\x12\b\n" +

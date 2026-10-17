@@ -36,6 +36,14 @@ const (
 	ScopeLinkMetadata Scope = "link_metadata"
 	// ScopeUploadUser counts upload starts per user.
 	ScopeUploadUser Scope = "upload_user"
+	// ScopeUploadSketchDevice counts PO-33 device sketch
+	// uploads per device. The device is identified by
+	// its `po33_devices.id`, not by the client IP, so a
+	// device moving between networks (home, studio,
+	// mobile) keeps the same bucket. The brief's §10
+	// says 10 req / hour / device; the default rule
+	// below pins that exact number.
+	ScopeUploadSketchDevice Scope = "upload_sketch_device"
 	// ScopeTranscribeUser counts transcription calls per user.
 	ScopeTranscribeUser Scope = "transcribe_user"
 	// ScopeWriteUser counts content creation per user.
@@ -74,6 +82,7 @@ func DefaultPolicy() Policy {
 		ScopePasswordResetEmail: {Limit: 3, Window: time.Hour},
 		ScopeLinkMetadata:       {Limit: 60, Window: time.Minute},
 		ScopeUploadUser:         {Limit: 120, Window: time.Minute},
+		ScopeUploadSketchDevice: {Limit: 10, Window: time.Hour},
 		ScopeTranscribeUser:     {Limit: 20, Window: time.Hour},
 		ScopeWriteUser:          {Limit: 120, Window: time.Minute},
 		ScopeArchiveUser:        {Limit: 10, Window: time.Hour},

@@ -10,7 +10,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file api/v1/common.proto.
  */
 export const file_api_v1_common: GenFile = /*@__PURE__*/
-  fileDesc("ChNhcGkvdjEvY29tbW9uLnByb3RvEgxtZW1vcy5hcGkudjEiKgoJUGFnZVRva2VuEg0KBWxpbWl0GAEgASgFEg4KBm9mZnNldBgCIAEoBSo4CgVTdGF0ZRIVChFTVEFURV9VTlNQRUNJRklFRBAAEgoKBk5PUk1BTBABEgwKCEFSQ0hJVkVEEAIqOQoJRGlyZWN0aW9uEhkKFURJUkVDVElPTl9VTlNQRUNJRklFRBAAEgcKA0FTQxABEggKBERFU0MQAkKgAQoQY29tLm1lbW9zLmFwaS52MUILQ29tbW9uUHJvdG9QAVotZ2l0aHViLmNvbS9pbmN1cmwvcmlmZi9wcm90by9nZW4vYXBpL3YxO2FwaXYxogIDTUFYqgIMTWVtb3MuQXBpLlYxygIMTWVtb3NcQXBpXFYx4gIYTWVtb3NcQXBpXFYxXEdQQk1ldGFkYXRh6gIOTWVtb3M6OkFwaTo6VjFiBnByb3RvMw");
+  fileDesc("ChNhcGkvdjEvY29tbW9uLnByb3RvEgxtZW1vcy5hcGkudjEiKgoJUGFnZVRva2VuEg0KBWxpbWl0GAEgASgFEg4KBm9mZnNldBgCIAEoBSpPCgVTdGF0ZRIVChFTVEFURV9VTlNQRUNJRklFRBAAEgoKBk5PUk1BTBABEgwKCEFSQ0hJVkVEEAISCQoFRFJBRlQQAxIKCgZISURERU4QBCo5CglEaXJlY3Rpb24SGQoVRElSRUNUSU9OX1VOU1BFQ0lGSUVEEAASBwoDQVNDEAESCAoEREVTQxACQqABChBjb20ubWVtb3MuYXBpLnYxQgtDb21tb25Qcm90b1ABWi1naXRodWIuY29tL2luY3VybC9yaWZmL3Byb3RvL2dlbi9hcGkvdjE7YXBpdjGiAgNNQViqAgxNZW1vcy5BcGkuVjHKAgxNZW1vc1xBcGlcVjHiAhhNZW1vc1xBcGlcVjFcR1BCTWV0YWRhdGHqAg5NZW1vczo6QXBpOjpWMWIGcHJvdG8z");
 
 /**
  * Used internally for obfuscating the page token.
@@ -37,6 +37,20 @@ export const PageTokenSchema: GenMessage<PageToken> = /*@__PURE__*/
   messageDesc(file_api_v1_common, 0);
 
 /**
+ * State is the lifecycle state of a memo. The brief's
+ * "PUBLISHED" is an alias for NORMAL — the upstream Memos
+ * vocabulary uses NORMAL, and the riff SPA renders one feed
+ * where NORMAL is the default visible state. DRAFT is a
+ * net-new value introduced in migration 1840000006 for the
+ * PO-33 sketch upload flow: a device upload lands in DRAFT
+ * and the owner invokes PublishSketch to make it NORMAL.
+ * HIDDEN is a net-new admin-only side-state: the memo is
+ * preserved on disk but excluded from feed and search.
+ *
+ * The values are append-only. Reordering or renaming an
+ * existing value is a wire-breaking change; adding a new
+ * value at the end is backward-compatible.
+ *
  * @generated from enum memos.api.v1.State
  */
 export enum State {
@@ -54,6 +68,16 @@ export enum State {
    * @generated from enum value: ARCHIVED = 2;
    */
   ARCHIVED = 2,
+
+  /**
+   * @generated from enum value: DRAFT = 3;
+   */
+  DRAFT = 3,
+
+  /**
+   * @generated from enum value: HIDDEN = 4;
+   */
+  HIDDEN = 4,
 }
 
 /**

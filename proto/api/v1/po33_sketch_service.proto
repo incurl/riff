@@ -19,18 +19,24 @@ package memos.api.v1;
 
 import "api/v1/memo_service.proto";
 import "google/api/annotations.proto";
+import "google/api/client.proto";
 import "google/api/field_behavior.proto";
+import "google/api/resource.proto";
+import "google/protobuf/timestamp.proto";
 
 option go_package = "gen/api/v1";
 
-// SketchService is the SPA-facing read side of the
-// PO-33 sketch upload flow. The two endpoints
-// today are ListMySketches and (in a future slice)
-// GetSketch / DeleteSketch. The actual device
-// download path (/api/po33/sketches/download) is a
-// REST route rather than a Connect RPC because the
-// device runs an HTTP/1.1 client with a one-shot
-// signature header rather than a Connect library.
+// SketchService is the SPA-facing side of the
+// PO-33 sketch upload flow. The lifecycle RPCs
+// (PublishSketch, ArchiveSketch) and the
+// append-only version log (ListSketchVersions,
+// GetSketchVersion) live in this file. The
+// device-side upload itself is a REST route
+// (POST /api/po33/sketches/upload) in
+// pb/api/po33_device_routes.go because the
+// device runs an HTTP/1.1 client with a
+// one-shot Ed25519 signature header rather
+// than a Connect library.
 service SketchService {
   // ListMySketches returns every memo the caller
   // authored with source=sketch. The response
@@ -42,6 +48,66 @@ service SketchService {
   rpc ListMySketches(ListMySketchesRequest) returns (ListMySketchesResponse) {
     option (google.api.http) = {get: "/api/v1/po33/sketches"};
   }
+
+  // PublishSketch flips a sketch memo from DRAFT to
+  // NORMAL. The caller must be the memo's author. A
+  // memo that is not in DRAFT is rejected with
+  // FAILED_PRECONDITION. After publish the memo
+  // appears in the SPA feed and the public search
+  // index. The HTTP annotation is the
+  // google.api.method_signature "name" so the
+  // google-api-rust / connect-web clients can
+  // build a typed binding.
+  rpc PublishSketch(PublishSketchRequest) returns (Memo) {
+    option (google.api.http) = {
+      post: "/api/v1/{name=memos/*}:publish"
+      body: "*"
+    };
+    option (google.api.method_signature) = "name";
+  }
+
+  // ArchiveSketch flips a sketch memo from NORMAL
+  // to ARCHIVED. The caller must be the memo's
+  // author. The memo is removed from the SPA feed
+  // and the public search index but the row, the
+  // patches, the samples, and the sketch_versions
+  // log are preserved on disk. A re-publish is not
+  // possible; archive is one-way. Re-uploads of the
+  // same sketch create new sketch_versions rows but
+  // do not change the ARCHIVED state.
+  rpc ArchiveSketch(ArchiveSketchRequest) returns (Memo) {
+    option (google.api.http) = {
+      post: "/api/v1/{name=memos/*}:archive"
+      body: "*"
+    };
+    option (google.api.method_signature) = "name";
+  }
+
+  // ListSketchVersions returns the append-only
+  // version log for a sketch memo. The log is
+  // immutable; the response includes every
+  // upload ever made against the memo, in
+  // received_at order. The most recent row is
+  // the version the device currently calls
+  // "current" but the server does not flag
+  // one as authoritative — the owner decides
+  // via PublishSketch which version is visible
+  // (publishing a re-upload is a separate
+  // operation in a future slice).
+  rpc ListSketchVersions(ListSketchVersionsRequest) returns (ListSketchVersionsResponse) {
+    option (google.api.http) = {get: "/api/v1/{parent=memos/*}/versions"};
+  }
+
+  // GetSketchVersion returns a single immutable
+  // version row by resource name. The resource
+  // name is "memos/{memo}/versions/{version_no}".
+  // GetSketchVersion returns a single immutable
+  // version row by resource name. The resource
+  // name is "memos/{memo}/versions/{version_no}".
+  rpc GetSketchVersion(GetSketchVersionRequest) returns (SketchVersion) {
+    option (google.api.http) = {get: "/api/v1/{name=memos/*/versions/*}"};
+    option (google.api.method_signature) = "name";
+  }
 }
 
 message ListMySketchesRequest {
@@ -52,4 +118,110 @@ message ListMySketchesRequest {
 message ListMySketchesResponse {
   repeated Memo memos = 1;
   string next_page_token = 2;
+}
+
+message PublishSketchRequest {
+  // The resource name of the memo to publish.
+  // Format: memos/{memo}
+  string name = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.resource_reference) = {type: "memos.api.v1/Memo"}
+  ];
+}
+
+message ArchiveSketchRequest {
+  // The resource name of the memo to archive.
+  // Format: memos/{memo}
+  string name = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.resource_reference) = {type: "memos.api.v1/Memo"}
+  ];
+}
+
+message ListSketchVersionsRequest {
+  // The parent memo resource name.
+  // Format: memos/{memo}
+  string parent = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.resource_reference) = {type: "memos.api.v1/Memo"}
+  ];
+
+  int32 page_size = 2 [(google.api.field_behavior) = OPTIONAL];
+  string page_token = 3 [(google.api.field_behavior) = OPTIONAL];
+}
+
+message ListSketchVersionsResponse {
+  repeated SketchVersion versions = 1;
+  string next_page_token = 2;
+}
+
+message GetSketchVersionRequest {
+  // The resource name of the version to fetch.
+  // Format: memos/{memo}/versions/{version_no}
+  string name = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.resource_reference) = {type: "memos.api.v1/SketchVersion"}
+  ];
+}
+
+// SketchVersion is one row of the append-only
+// audit log a sketch memo accumulates. Every
+// device upload inserts one row. The log never
+// updates and never deletes; the "current"
+// version is the row with the largest
+// version_no.
+//
+// Format: memos/{memo}/versions/{version_no}
+message SketchVersion {
+  option (google.api.resource) = {
+    type: "memos.api.v1/SketchVersion"
+    pattern: "memos/{memo}/versions/{version}"
+    name_field: "name"
+    singular: "sketch_version"
+    plural: "sketch_versions"
+  };
+
+  string name = 1 [(google.api.field_behavior) = IDENTIFIER];
+
+  // The parent memo resource name.
+  // Format: memos/{memo}
+  string memo = 2 [
+    (google.api.field_behavior) = OUTPUT_ONLY,
+    (google.api.resource_reference) = {type: "memos.api.v1/Memo"}
+  ];
+
+  // The monotonic per-memo version number, starting at 1.
+  int32 version_no = 3 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // The hex SHA-256 of the device's Ed25519 public key,
+  // exactly the value the device's pairing screen showed
+  // at pairing time. The same fingerprint is also
+  // copied onto the patches and samples rows for fast
+  // joins; the value here is the upload-time snapshot.
+  string device_fingerprint = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // The unix-second timestamp the device recorded at
+  // upload time. Distinct from received_at, which is
+  // the server's clock.
+  int64 uploaded_at_unix = 5 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // The server-side timestamp the row was inserted.
+  google.protobuf.Timestamp received_at = 6 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // The PocketBase `patches` row id holding the .p33 patch blob.
+  string patch_key = 7 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // The PocketBase `samples` row ids holding the per-slot .wav blobs.
+  // Empty when the device uploaded a patch-only sketch.
+  repeated string sample_keys = 8 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // The PocketBase `patches` row id holding the .bkp
+  // tarball, when the device emitted one. Empty when
+  // the upload was tarball-less.
+  string backup_key = 9 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // The signature algorithm pinned for this row. Today
+  // always "ed25519"; the field is forward-compatibility
+  // for a future post-quantum migration.
+  string signature_algorithm = 10 [(google.api.field_behavior) = OUTPUT_ONLY];
 }

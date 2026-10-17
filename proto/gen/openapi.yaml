@@ -710,6 +710,8 @@ paths:
                         - STATE_UNSPECIFIED
                         - NORMAL
                         - ARCHIVED
+                        - DRAFT
+                        - HIDDEN
                     type: string
                     format: enum
                 - name: orderBy
@@ -1338,6 +1340,172 @@ paths:
                 "200":
                     description: OK
                     content: {}
+                default:
+                    description: Default error response
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Status'
+    /api/v1/memos/{memo}/versions:
+        get:
+            tags:
+                - SketchService
+            description: |-
+                ListSketchVersions returns the append-only
+                 version log for a sketch memo. The log is
+                 immutable; the response includes every
+                 upload ever made against the memo, in
+                 received_at order. The most recent row is
+                 the version the device currently calls
+                 "current" but the server does not flag
+                 one as authoritative — the owner decides
+                 via PublishSketch which version is visible
+                 (publishing a re-upload is a separate
+                 operation in a future slice).
+            operationId: SketchService_ListSketchVersions
+            parameters:
+                - name: memo
+                  in: path
+                  description: The memo id.
+                  required: true
+                  schema:
+                    type: string
+                - name: pageSize
+                  in: query
+                  schema:
+                    type: integer
+                    format: int32
+                - name: pageToken
+                  in: query
+                  schema:
+                    type: string
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ListSketchVersionsResponse'
+                default:
+                    description: Default error response
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Status'
+    /api/v1/memos/{memo}/versions/{version}:
+        get:
+            tags:
+                - SketchService
+            description: |-
+                GetSketchVersion returns a single immutable
+                 version row by resource name. The resource
+                 name is "memos/{memo}/versions/{version_no}".
+                 GetSketchVersion returns a single immutable
+                 version row by resource name. The resource
+                 name is "memos/{memo}/versions/{version_no}".
+            operationId: SketchService_GetSketchVersion
+            parameters:
+                - name: memo
+                  in: path
+                  description: The memo id.
+                  required: true
+                  schema:
+                    type: string
+                - name: version
+                  in: path
+                  description: The version id.
+                  required: true
+                  schema:
+                    type: string
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/SketchVersion'
+                default:
+                    description: Default error response
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Status'
+    /api/v1/memos/{memo}:archive:
+        post:
+            tags:
+                - SketchService
+            description: |-
+                ArchiveSketch flips a sketch memo from NORMAL
+                 to ARCHIVED. The caller must be the memo's
+                 author. The memo is removed from the SPA feed
+                 and the public search index but the row, the
+                 patches, the samples, and the sketch_versions
+                 log are preserved on disk. A re-publish is not
+                 possible; archive is one-way. Re-uploads of the
+                 same sketch create new sketch_versions rows but
+                 do not change the ARCHIVED state.
+            operationId: SketchService_ArchiveSketch
+            parameters:
+                - name: memo
+                  in: path
+                  description: The memo id.
+                  required: true
+                  schema:
+                    type: string
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/ArchiveSketchRequest'
+                required: true
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Memo'
+                default:
+                    description: Default error response
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Status'
+    /api/v1/memos/{memo}:publish:
+        post:
+            tags:
+                - SketchService
+            description: |-
+                PublishSketch flips a sketch memo from DRAFT to
+                 NORMAL. The caller must be the memo's author. A
+                 memo that is not in DRAFT is rejected with
+                 FAILED_PRECONDITION. After publish the memo
+                 appears in the SPA feed and the public search
+                 index. The HTTP annotation is the
+                 google.api.method_signature "name" so the
+                 google-api-rust / connect-web clients can
+                 build a typed binding.
+            operationId: SketchService_PublishSketch
+            parameters:
+                - name: memo
+                  in: path
+                  description: The memo id.
+                  required: true
+                  schema:
+                    type: string
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/PublishSketchRequest'
+                required: true
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Memo'
                 default:
                     description: Default error response
                     content:
@@ -3146,6 +3314,8 @@ paths:
                         - STATE_UNSPECIFIED
                         - NORMAL
                         - ARCHIVED
+                        - DRAFT
+                        - HIDDEN
                     type: string
                     format: enum
                 - name: filter
@@ -3178,6 +3348,16 @@ components:
                 name:
                     type: string
                     description: 'Required. Format: spaces/{space}/invitations/{username}.'
+        ArchiveSketchRequest:
+            required:
+                - name
+            type: object
+            properties:
+                name:
+                    type: string
+                    description: |-
+                        The resource name of the memo to archive.
+                         Format: memos/{memo}
         Attachment:
             required:
                 - filename
@@ -4204,6 +4384,15 @@ components:
                 nextPageToken:
                     type: string
                     description: A token for the next page of results.
+        ListSketchVersionsResponse:
+            type: object
+            properties:
+                versions:
+                    type: array
+                    items:
+                        $ref: '#/components/schemas/SketchVersion'
+                nextPageToken:
+                    type: string
         ListSpaceInvitationsResponse:
             type: object
             properties:
@@ -4357,6 +4546,8 @@ components:
                         - STATE_UNSPECIFIED
                         - NORMAL
                         - ARCHIVED
+                        - DRAFT
+                        - HIDDEN
                     type: string
                     description: The state of the memo.
                     format: enum
@@ -4822,6 +5013,16 @@ components:
                 focalLengthMm:
                     type: number
                     format: double
+        PublishSketchRequest:
+            required:
+                - name
+            type: object
+            properties:
+                name:
+                    type: string
+                    description: |-
+                        The resource name of the memo to publish.
+                         Format: memos/{memo}
         Reaction:
             required:
                 - reactionType
@@ -5016,6 +5217,78 @@ components:
                                         time. Distinct from the
                                         memo's create_time which is
                                         the server's clock.
+        SketchVersion:
+            type: object
+            properties:
+                name:
+                    type: string
+                memo:
+                    readOnly: true
+                    type: string
+                    description: |-
+                        The parent memo resource name.
+                         Format: memos/{memo}
+                versionNo:
+                    readOnly: true
+                    type: integer
+                    description: The monotonic per-memo version number, starting at 1.
+                    format: int32
+                deviceFingerprint:
+                    readOnly: true
+                    type: string
+                    description: |-
+                        The hex SHA-256 of the device's Ed25519 public key,
+                         exactly the value the device's pairing screen showed
+                         at pairing time. The same fingerprint is also
+                         copied onto the patches and samples rows for fast
+                         joins; the value here is the upload-time snapshot.
+                uploadedAtUnix:
+                    readOnly: true
+                    type: string
+                    description: |-
+                        The unix-second timestamp the device recorded at
+                         upload time. Distinct from received_at, which is
+                         the server's clock.
+                receivedAt:
+                    readOnly: true
+                    type: string
+                    description: The server-side timestamp the row was inserted.
+                    format: date-time
+                patchKey:
+                    readOnly: true
+                    type: string
+                    description: The PocketBase `patches` row id holding the .p33 patch blob.
+                sampleKeys:
+                    readOnly: true
+                    type: array
+                    items:
+                        type: string
+                    description: |-
+                        The PocketBase `samples` row ids holding the per-slot .wav blobs.
+                         Empty when the device uploaded a patch-only sketch.
+                backupKey:
+                    readOnly: true
+                    type: string
+                    description: |-
+                        The PocketBase `patches` row id holding the .bkp
+                         tarball, when the device emitted one. Empty when
+                         the upload was tarball-less.
+                signatureAlgorithm:
+                    readOnly: true
+                    type: string
+                    description: |-
+                        The signature algorithm pinned for this row. Today
+                         always "ed25519"; the field is forward-compatibility
+                         for a future post-quantum migration.
+            description: |-
+                SketchVersion is one row of the append-only
+                 audit log a sketch memo accumulates. Every
+                 device upload inserts one row. The log never
+                 updates and never deletes; the "current"
+                 version is the row with the largest
+                 version_no.
+
+                 Format: memos/{memo}/versions/{version_no}
         Space:
             required:
                 - title
@@ -5354,6 +5627,8 @@ components:
                         - STATE_UNSPECIFIED
                         - NORMAL
                         - ARCHIVED
+                        - DRAFT
+                        - HIDDEN
                     type: string
                     description: The state of the user.
                     format: enum
@@ -5687,14 +5962,17 @@ tags:
     - name: MemoService
     - name: SketchService
       description: |-
-        SketchService is the SPA-facing read side of the
-         PO-33 sketch upload flow. The two endpoints
-         today are ListMySketches and (in a future slice)
-         GetSketch / DeleteSketch. The actual device
-         download path (/api/po33/sketches/download) is a
-         REST route rather than a Connect RPC because the
-         device runs an HTTP/1.1 client with a one-shot
-         signature header rather than a Connect library.
+        SketchService is the SPA-facing side of the
+         PO-33 sketch upload flow. The lifecycle RPCs
+         (PublishSketch, ArchiveSketch) and the
+         append-only version log (ListSketchVersions,
+         GetSketchVersion) live in this file. The
+         device-side upload itself is a REST route
+         (POST /api/po33/sketches/upload) in
+         pb/api/po33_device_routes.go because the
+         device runs an HTTP/1.1 client with a
+         one-shot Ed25519 signature header rather
+         than a Connect library.
     - name: SpaceService
       description: SpaceService manages collaborative spaces and their memberships.
     - name: UserService
