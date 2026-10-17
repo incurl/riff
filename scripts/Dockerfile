@@ -108,17 +108,27 @@ FROM alpine:3.21 AS monolithic
 # version), so a build pulled from TUNA is byte-identical to one
 # pulled from dl-cdn.
 #
+# The probe sends a User-Agent of "libfetch/2.0" rather than busybox
+# wget's default. TUNA's CDN edge enforces a UA allow-list that
+# accepts canonical `Name/Version` strings (libfetch, curl, Wget,
+# libwww-perl) but 403s the bare `Wget` that busybox sends by default.
+# libfetch/2.0 is exactly the User-Agent alpine apk's own libfetch
+# fetcher sends (apk-tools/libfetch/http.c, _LIBFETCH_VER), so a
+# URL the probe can reach is one apk can reach. dl-cdn accepts any
+# UA, so the primary probe works without the override; the fallback
+# probe only needs it because TUNA enforces it.
+#
 # Set ALPINE_REPO_PRIMARY=… and/or ALPINE_REPO_FALLBACK=… to
 # override the defaults (for example, point both at a private
 # mirror).
 ARG ALPINE_REPO_PRIMARY=https://dl-cdn.alpinelinux.org/alpine/v3.21
 ARG ALPINE_REPO_FALLBACK=https://mirrors.tuna.tsinghua.edu.cn/alpine/v3.21
 RUN set -eux; \
-    if wget -q --timeout=3 --tries=1 --spider \
+    if wget -q -T 3 --tries=1 -U "libfetch/2.0" --spider \
          "${ALPINE_REPO_PRIMARY}/main/x86_64/APKINDEX.tar.gz"; then \
         echo "primary mirror reachable: ${ALPINE_REPO_PRIMARY}"; \
         export ALPINE_REPO="${ALPINE_REPO_PRIMARY}"; \
-    elif wget -q --timeout=3 --tries=1 --spider \
+    elif wget -q -T 3 --tries=1 -U "libfetch/2.0" --spider \
          "${ALPINE_REPO_FALLBACK}/main/x86_64/APKINDEX.tar.gz"; then \
         echo "primary mirror unreachable; using fallback: ${ALPINE_REPO_FALLBACK}" >&2; \
         export ALPINE_REPO="${ALPINE_REPO_FALLBACK}"; \

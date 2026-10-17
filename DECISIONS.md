@@ -5,6 +5,97 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## Dockerfile apk-add probe sends `User-Agent: libfetch/2.0` to satisfy TUNA's WAF (2026-10-17)
+
+The first iteration of the apk-add mirror probe (entry immediately
+below this one) used the busybox wget default `User-Agent`, which
+silently broke every build that landed on the TUNA fallback: the
+probe returned exit 1, the layer bailed, and the `docker buildx`
+error message masked the actual cause (the network was healthy —
+TUNA's CDN was rejecting the request). The fix is a single flag
+(`-U "libfetch/2.0"`) on both `wget --spider` calls, and a paragraph
+in the Dockerfile comment that documents why it is required.
+
+**What busybox wget was sending.** `alpine:3.21`'s busybox 1.37
+`wget` is hard-coded to send `User-Agent: Wget` (no version
+suffix). Verified with `wget --help` (the usage line lists `-U
+STR` for the User-Agent header but no default value is shown) and
+by sniffing an in-Dockerfile `wget` request: the upstream
+connection was `User-Agent: Wget`.
+
+**Why TUNA's WAF 403s that.** `mirrors.tuna.tsinghua.edu.cn` is
+fronted by a CDN edge that enforces an allow-list on
+`User-Agent`. Empirical results from a host that can reach TUNA:
+
+| User-Agent              | HTTP status |
+|-------------------------|-------------|
+| `Wget`                  | 403         |
+| `wget`                  | 403         |
+| `Wget/1.21.4`           | 200         |
+| `curl/7.88.1`           | 200         |
+| `libfetch/2.0`          | 200         |
+| `libwww-perl/6.36`      | 200         |
+| `Mozilla/5.0 (...)`     | 403         |
+| `okhttp/4.9.3`          | 403         |
+| `Go-http-client/1.1`    | 403         |
+
+The allow-list accepts canonical `<tool>/<version>` strings and
+rejects bare tool names. TUNA's UA check is heuristic but
+consistent: the same UA returns the same status on repeat
+requests, and `libfetch/2.0` (the same UA apk itself sends) is
+accepted.
+
+**Why `-U "libfetch/2.0"` is the right UA, not a generic string.**
+The probe's job is to predict whether the *real* apk fetch will
+succeed. apk-tools uses libfetch as its URL backend
+(`-Durl_backend=libfetch` is the apk-tools meson default; verified
+in `apk-tools/meson_options.txt` upstream). libfetch's
+`common.h` defines `#define _LIBFETCH_VER "libfetch/2.0"`, and
+`libfetch/http.c` sends `User-Agent: %s\r\n` formatted with that
+string. So `wget -U "libfetch/2.0" --spider` exercises the
+*exact* UA apk will use on the same URL. A URL the probe can
+reach is one apk can reach; a URL the probe cannot reach is one
+apk will fail on.
+
+**Why dl-cdn does not need the override.** dl-cdn's CDN edge does
+not appear to enforce a UA allow-list (every probed UA returned
+200). The probe therefore works on dl-cdn regardless of the `-U`
+flag, but setting it on the primary probe anyway keeps both
+probes symmetric and means a future mirror swap that *does*
+enforce a UA allow-list works without a code change.
+
+**What we did not change.** The probe-then-`apk add` shape is
+unchanged. The 3 s timeout (`-T 3`) and `--tries=1` are
+unchanged. The `ALPINE_REPO_PRIMARY` / `ALPINE_REPO_FALLBACK`
+`--build-arg` plumbing is unchanged. `scripts/dev_image_build.sh`
+does not need a UA flag because the UA is baked into the
+Dockerfile. CI workflows (`.github/workflows/build-canary-image.yml`,
+`release.yml`) do not pass the mirror args and inherit the same
+`libfetch/2.0` UA, which is correct.
+
+**Verification.** Three smoke tests against `alpine:3.21` running
+the same probe logic with `--network host` on the CN-egress
+host that motivated the original probe:
+
+1. **Both bad (`example.invalid` for both):** exits 1, prints
+   `BOTH_BAD`. (Regression: confirm the else branch still fires
+   when neither URL resolves.)
+2. **Primary ok (TUNA primary, `example.invalid` fallback):
+   prints `PRIMARY`, exits 0. (Regression: confirm a healthy
+   primary still wins without contacting the fallback.)
+3. **Primary fails, fallback ok (dl-cdn primary times out from
+   this host, TUNA fallback reachable):** prints `FALLBACK`,
+   exits 0. (The actual reproducer for the regression this
+   entry fixes.)
+
+A full end-to-end smoke test ran `apk add` against the chosen
+TUNA repository after the probe and successfully installed
+`tmux=3.5a-r0` (the same package the runtime layer pins). Total
+time 28 s, dominated by the 3 s primary timeout. The Dockerfile
+parses cleanly under `docker buildx build --check` (the only
+error reported is the unrelated `COPY --from=ravine` line that
+needs the out-of-repo build context).
+
 ## Upstream-Memos REST surface at `/memos/api/...`: thin transport adapter, not a new business layer (2026-10-17)
 
 **Supersedes the 2026-10-16 Connect-only decision below.** The
