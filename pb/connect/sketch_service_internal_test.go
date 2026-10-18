@@ -7,16 +7,21 @@ import (
 
 	"connectrpc.com/connect/v2"
 	"github.com/pocketbase/pocketbase/core"
-	"github.com/pocketbase/pocketbase/tools/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	v1 "github.com/incurl/riff/proto/gen/api/v1"
 )
 
-// newSketchMemo creates a memo with source=sketch
-// and a payload.sketch sub-object. The memo is
+// newSketchMemo creates a memo with the new
+// `sketch` JSON column populated. The memo is
 // authored by the given user.
+//
+// The 1860xxx series moved the sketch payload
+// out of `payload.sketch` and into a dedicated
+// `memos.sketch` JSON column. The test mirrors
+// the production save-hook shape: a top-level
+// `sketch` object on the row.
 func newSketchMemo(t *testing.T, app core.App, userID, content string) *core.Record {
 	t.Helper()
 	col, err := app.FindCollectionByNameOrId("memos")
@@ -25,13 +30,10 @@ func newSketchMemo(t *testing.T, app core.App, userID, content string) *core.Rec
 	rec.Set("author", userID)
 	rec.Set("content", content)
 	rec.Set("visibility", "PRIVATE")
-	rec.Set("type", "note")
-	rec.Set("source", "sketch")
-	// payload as a struct so the path mirrors
-	// what the save hook writes.
-	payload, err := types.JSONRaw(`{"property":{"title":"Sketch"},"location":{},"sketch":{"model":"PO-33","slot_count":16,"device_fingerprint":"abc","uploaded_at_unix":1730000000}}`).MarshalJSON()
-	require.NoError(t, err)
-	rec.Set("payload", json.RawMessage(payload))
+	rec.Set("sketch", json.RawMessage(
+		`{"model":"PO-33","slot_count":16,`+
+			`"device_fingerprint":"abc",`+
+			`"uploaded_at_unix":1730000000}`))
 	require.NoError(t, app.Save(rec))
 	return rec
 }
@@ -70,8 +72,6 @@ func TestListMySketches_OnlyMineWithSourceSketch(t *testing.T) {
 		note.Set("author", alice.Id)
 		note.Set("content", "regular note")
 		note.Set("visibility", "PRIVATE")
-		note.Set("type", "note")
-		note.Set("source", "text")
 		require.NoError(t, app.Save(note))
 	}
 	// Bob has a sketch that should not surface.

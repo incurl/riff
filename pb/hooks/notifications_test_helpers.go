@@ -121,9 +121,6 @@ func mustInsertMemo(t *testing.T, app core.App, memos *core.Collection, content,
 	rec.Set("content", content)
 	rec.Set("visibility", visibility)
 	rec.Set("author", authorID)
-	// `type` is required (memos.type select field). The Connect
-	// CreateMemo handler always sets it; we mirror that here.
-	rec.Set("type", "note")
 	if spaceID != "" {
 		rec.Set("space", spaceID)
 	}

@@ -117,7 +117,6 @@ func TestExportMemos_RoundtripWithMemo(t *testing.T) {
 	rec.Set("author", u.Id)
 	rec.Set("content", "hello world")
 	rec.Set("visibility", "PRIVATE")
-	rec.Set("type", "note")
 	require.NoError(t, app.Save(rec))
 
 	srv := NewUserServer(app)

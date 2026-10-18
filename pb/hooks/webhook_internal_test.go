@@ -99,7 +99,6 @@ func TestWebhookOutbox_EnqueuesOnMemoCreate(t *testing.T) {
 	memo.Set("author", alice.Id)
 	memo.Set("content", "hello world")
 	memo.Set("visibility", "PUBLIC")
-	memo.Set("type", "note")
 	require.NoError(t, app.Save(memo))
 
 	rows, err := app.FindRecordsByFilter("webhook_deliveries", "", "", 0, 0, nil)
@@ -128,7 +127,6 @@ func TestWebhookOutbox_HandlesNoWebhooks(t *testing.T) {
 	memo.Set("author", alice.Id)
 	memo.Set("content", "no webhooks here")
 	memo.Set("visibility", "PUBLIC")
-	memo.Set("type", "note")
 	require.NoError(t, app.Save(memo))
 
 	rows, err := app.FindRecordsByFilter("webhook_deliveries", "", "", 0, 0, nil)

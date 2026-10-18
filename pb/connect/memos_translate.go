@@ -22,8 +22,8 @@ import (
 //	              already pressed.
 //	relations   — the editor (fromMemo) round-trips REFERENCE
 //	              relations through the composer.
-//	attachments — the editor round-trips the memo's patches and
-//	              samples the same way.
+//	attachments — the editor round-trips the memo's
+//	              attachments the same way.
 //	parent      — the reaction view refetches a comment's parent
 //	              when a comment reaction changes.
 //	space       — the editor decides whether it is posting into a
@@ -51,6 +51,7 @@ func recordToMemo(app core.App, rec *core.Record) *v1.Memo {
 		Visibility:  visibilityToProto(rec.GetString("visibility")),
 		Tags:        rec.GetStringSlice("tags"),
 		Snippet:     snippetOf(rec.GetString("content"), 120),
+		Pinned:      rec.GetBool("pinned"),
 		Reactions:   memoReactions(app, rec.Id),
 		Relations:   memoReferenceRelations(app, rec.Id),
 		Attachments: memoAttachments(app, rec.Id),
@@ -66,8 +67,27 @@ func recordToMemo(app core.App, rec *core.Record) *v1.Memo {
 		parent := "memos/" + parentID
 		memo.Parent = &parent
 	}
+	// payload is the union of two columns: the
+	// pre-existing `payload` JSON column carries
+	// the property/location envelope; the new
+	// `sketch` JSON column carries the PO-33
+	// sketch sub-object. The proto path always
+	// returns a populated envelope when the
+	// memo carries any of those shapes — even
+	// when the `payload` column is null and
+	// only `sketch` is set.
+	//
+	// `memoPayloadFromRecord` already overlays
+	// the sketch sub-object from the new column
+	// when the `payload` column is non-null, so
+	// the union case is a single read. The
+	// else branch synthesises a fresh envelope
+	// from just the sketch for the path where
+	// `payload` is null and `sketch` is set.
 	if payload := memoPayloadFromRecord(rec); payload != nil {
 		memo.Payload = payload
+	} else if sketch := memoSketchFromRecord(rec); sketch != nil {
+		memo.Payload = &v1.MemoPayload{Sketch: sketch}
 	}
 	return memo
 }
@@ -83,6 +103,15 @@ func recordToMemo(app core.App, rec *core.Record) *v1.Memo {
 // an empty shell, and riff has no geo feature to populate it with.
 // The shape still matches the upstream proto so a future geo
 // migration only has to populate the existing object.
+//
+// The PO-33 `SketchPayload` sub-object used to live in
+// `payload.sketch`. The 1860xxx series moved it to the
+// dedicated `memos.sketch` JSON column; the
+// `recordToMemo` path now populates `MemoPayload.sketch`
+// from there, and `payload.sketch` is a legacy read-
+// only fallback. New writes go to the new column;
+// the save hook and the PO-33 upload handler no
+// longer set the `payload.sketch` sub-object.
 func memoPayloadFromRecord(rec *core.Record) *v1.MemoPayload {
 	raw := rec.Get("payload")
 	if raw == nil {
@@ -106,11 +135,6 @@ func memoPayloadFromRecord(rec *core.Record) *v1.MemoPayload {
 			Latitude    float64 `json:"latitude"`
 			Longitude   float64 `json:"longitude"`
 		} `json:"location"`
-		// The PO-33 sketch sub-object is decoded
-		// when present; nil otherwise. The pointer
-		// lets json.Unmarshal leave the field alone
-		// when the key is absent.
-		Sketch *sketchShape `json:"sketch,omitempty"`
 	}
 	if err := decodePayload(raw, &asStruct); err != nil {
 		return nil
@@ -129,7 +153,7 @@ func memoPayloadFromRecord(rec *core.Record) *v1.MemoPayload {
 			Longitude:   asStruct.Location.Longitude,
 		},
 	}
-	if sk := sketchPayloadFromShape(asStruct.Sketch); sk != nil {
+	if sk := memoSketchFromRecord(rec); sk != nil {
 		out.Sketch = sk
 	}
 	return out
@@ -251,26 +275,20 @@ func memoParentID(app core.App, memoID string) string {
 	return rows[0].GetString("related_memo")
 }
 
-// memoAttachments loads the patch and sample rows hanging off a memo
-// and presents them as the flat Attachment list the proto expects.
+// memoAttachments loads the attachment rows hanging off a
+// memo and presents them as the flat Attachment list the
+// proto expects. The unified `attachments` collection
+// stores one row per file, so a single filter is enough;
+// the SPA sees a single ordered list regardless of the
+// underlying file kind.
 func memoAttachments(app core.App, memoID string) []*v1.Attachment {
 	out := []*v1.Attachment{}
 
-	patches, err := app.FindRecordsByFilter("patches",
+	rows, err := app.FindRecordsByFilter("attachments",
 		"memo={:id}", "-created", 0, 0, map[string]any{"id": memoID})
 	if err == nil {
-		for _, p := range patches {
-			if a := patchToAttachment(p); a != nil {
-				out = append(out, a)
-			}
-		}
-	}
-
-	samples, err := app.FindRecordsByFilter("samples",
-		"memo={:id}", "-created", 0, 0, map[string]any{"id": memoID})
-	if err == nil {
-		for _, sa := range samples {
-			if a := sampleToAttachment(sa); a != nil {
+		for _, r := range rows {
+			if a := resourceToAttachment(r); a != nil {
 				out = append(out, a)
 			}
 		}

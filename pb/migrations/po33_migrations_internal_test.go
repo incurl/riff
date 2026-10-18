@@ -79,18 +79,17 @@ func TestPo33SketchDownloadsCollectionCreated(t *testing.T) {
 	}
 }
 
-// TestMemosSourceColumnAdded pins the
-// `memos.source` extension.
-func TestMemosSourceColumnAdded(t *testing.T) {
+// TestMemosSourceColumnGone pins the
+// `memos.source` removal. The 1860xxx series
+// dropped the column: the "text" vs "sketch"
+// discriminator is now derived from the
+// presence of the `sketch` JSON column.
+func TestMemosSourceColumnGone(t *testing.T) {
 	app := freshApp(t)
 	c, err := app.FindCollectionByNameOrId("memos")
 	require.NoError(t, err)
-	src := c.Fields.GetByName("source")
-	require.NotNil(t, src, "memos.source must exist")
-	sel, ok := src.(*core.SelectField)
-	require.True(t, ok, "memos.source must be a SelectField")
-	assert.Contains(t, sel.Values, "text")
-	assert.Contains(t, sel.Values, "sketch")
+	assert.Nil(t, c.Fields.GetByName("source"),
+		"memos.source must be dropped (1860xxx series)")
 }
 
 // TestMemoRelationsTypeExtended pins that the
@@ -112,15 +111,15 @@ func TestMemoRelationsTypeExtended(t *testing.T) {
 
 // TestAttachmentDeviceFingerprintColumnAdded pins
 // the new `device_fingerprint_snapshot` text column
-// on patches and samples.
+// on the unified `attachments` collection (it used
+// to live on `patches` and `samples` before the
+// 1850xxx migration series collapsed the split).
 func TestAttachmentDeviceFingerprintColumnAdded(t *testing.T) {
 	app := freshApp(t)
-	for _, name := range []string{"patches", "samples"} {
-		c, err := app.FindCollectionByNameOrId(name)
-		require.NoErrorf(t, err, "collection %s", name)
-		fp := c.Fields.GetByName("device_fingerprint_snapshot")
-		assert.NotNilf(t, fp, "collection %s missing device_fingerprint_snapshot", name)
-	}
+	c, err := app.FindCollectionByNameOrId("attachments")
+	require.NoError(t, err)
+	fp := c.Fields.GetByName("device_fingerprint_snapshot")
+	assert.NotNil(t, fp, "attachments missing device_fingerprint_snapshot")
 }
 
 // TestMigrationsAreIdempotent pins the re-runnable

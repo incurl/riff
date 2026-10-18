@@ -77,27 +77,24 @@ func registerMemos(app core.App) {
 		// pb/connect/sketch_service_lifecycle.go)
 		// flips DRAFT to NORMAL; a public draft
 		// would skip the owner's review. The
-		// check runs after the source / state
-		// defaulting so a DRAFT sketch the
-		// caller explicitly created lands in
-		// the gated path even if the state
-		// was not yet defaulted.
+		// check runs after the state defaulting
+		// so a DRAFT sketch the caller explicitly
+		// created lands in the gated path even if
+		// the state was not yet defaulted.
 		if e.Record.GetString("state") == "DRAFT" &&
 			e.Record.GetString("visibility") == "PUBLIC" {
 			return errors.New("a DRAFT sketch cannot be PUBLIC; publish first")
 		}
 
-		// Default the `source` discriminator to "text"
-		// when the caller did not set it. Every
-		// existing memo (pre-PO-33 binding) is a
-		// text memo, and a missing value would fail
-		// the column's required check. The PO-33
-		// upload handler always sets "sketch"
-		// explicitly, so this default only applies
-		// to text memos.
-		if e.Record.GetString("source") == "" {
-			e.Record.Set("source", "text")
-		}
+		// The "text" vs "sketch" discriminator used
+		// to live in a `source` column (added by
+		// 1840000003_add_memo_source.go). The 1860xxx
+		// series dropped that column; the
+		// discriminator is now derived from the
+		// presence of the `sketch` JSON column.
+		// The save hook no longer needs to default
+		// `source`.
+		//
 		// Default the `state` lifecycle field to
 		// "NORMAL" when the caller did not set it.
 		// The existing record (the migration that

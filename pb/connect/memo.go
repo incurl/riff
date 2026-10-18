@@ -162,7 +162,6 @@ func (s *MemoServer) CreateMemo(ctx context.Context, req *v1.CreateMemoRequest) 
 	} else {
 		rec.Set("visibility", "PRIVATE")
 	}
-	rec.Set("type", "note")
 	if req.Memo.Space != nil {
 		spaceID, err := resolveSpaceNameToID(s.app, req.Memo.GetSpace())
 		if err != nil {
@@ -338,7 +337,6 @@ func (s *MemoServer) CreateMemoComment(ctx context.Context, req *v1.CreateMemoCo
 		rec := core.NewRecord(memos)
 		rec.Set("content", req.Comment.GetContent())
 		rec.Set("visibility", parent.GetString("visibility"))
-		rec.Set("type", "note")
 		if spaceID := parent.GetString("space"); spaceID != "" {
 			rec.Set("space", spaceID)
 		}

@@ -1,5 +1,5 @@
 // Tests for the Phase 2 collections: spaces, space_members, memos,
-// memo_relations, reactions, patches, samples.
+// memo_relations, reactions, attachments.
 //
 // The collection definitions live under pb/migrations. The import
 // below is for its side effect (each migration registers itself via
@@ -28,8 +28,7 @@ func TestCollections_AllPresent(t *testing.T) {
 		"memos",
 		"memo_relations",
 		"reactions",
-		"patches",
-		"samples",
+		"attachments",
 	}
 	for _, name := range want {
 		col, err := app.FindCollectionByNameOrId(name)
@@ -91,7 +90,6 @@ func TestMemos_VisibilityRule(t *testing.T) {
 		r.Set("author", alice.Id)
 		r.Set("content", "test memo: "+visibility)
 		r.Set("visibility", visibility)
-		r.Set("type", "note")
 		if setSpace {
 			r.Set("space", space.Id)
 		}
@@ -182,8 +180,7 @@ func TestCollections_SupportNewestFirstSorting(t *testing.T) {
 		"memos",
 		"memo_relations",
 		"reactions",
-		"patches",
-		"samples",
+		"attachments",
 		"notifications",
 	}
 	for _, name := range names {
@@ -203,7 +200,7 @@ func TestCollections_SupportNewestFirstSorting(t *testing.T) {
 func TestCollections_HaveUpdatedTimestamp(t *testing.T) {
 	app := newPhase2App(t)
 
-	for _, name := range []string{"spaces", "space_members", "memo_relations", "reactions", "patches", "samples"} {
+	for _, name := range []string{"spaces", "space_members", "memo_relations", "reactions", "attachments"} {
 		col, err := app.FindCollectionByNameOrId(name)
 		require.NoErrorf(t, err, "collection %q must exist", name)
 		assert.NotNilf(t, col.Fields.GetByName("updated"), "%s must expose an `updated` field", name)

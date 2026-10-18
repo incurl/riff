@@ -49,7 +49,7 @@ func (s *SketchServer) ListMySketches(ctx context.Context, req *v1.ListMySketche
 		return nil, connect.NewError(connect.CodeUnauthenticated, "authentication required")
 	}
 	rows, err := s.app.FindRecordsByFilter("memos",
-		"author = {:uid} && source = 'sketch'", "-created",
+		"author = {:uid} && sketch != null", "-created",
 		int(req.GetPageSize()), 0,
 		map[string]any{"uid": viewer.Id})
 	if err != nil {
