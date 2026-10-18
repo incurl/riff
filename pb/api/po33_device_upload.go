@@ -2,8 +2,6 @@ package api
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -102,8 +100,8 @@ type uploadSketchMetadata struct {
 	// The unix-second timestamp the device
 	// recorded at upload time. Distinct from the
 	// memo's create_time, which is the server's
-	// clock. Stored in sketch_versions and on
-	// the memo's payload.sketch envelope.
+	// clock. Mirrored onto the memo's payload.sketch
+	// envelope.
 	UploadedAtUnix int64 `json:"uploaded_at_unix"`
 
 	// A server-issued random 16-byte hex-encoded
@@ -120,12 +118,22 @@ type uploadSketchMetadata struct {
 }
 
 // uploadSketchResponse is the body of a
-// successful upload. The `memo` and `version`
-// fields are the resource names the SPA can
-// render in the "sketches" page.
+// successful upload. The `memo` field is the
+// resource name the SPA can render in the
+// "sketches" page. The `version` field is the
+// per-author monotonically increasing upload
+// counter; the SPA renders it as a "v3"
+// badge on the sketch card without needing
+// a separate `ListSketchVersions` RPC. The
+// same value is also stored on the memo's
+// `sketch` JSON column under `version_no` so
+// it persists alongside the rest of the
+// upload-time metadata. See DECISIONS.md,
+// "sketch version lives in sketch JSON
+// column (2026-10-19)".
 type uploadSketchResponse struct {
 	Memo    string `json:"memo"`    // "memos/{id}"
-	Version int32  `json:"version"` // the new sketch_versions.version_no
+	Version int32  `json:"version"` // 1-indexed per-author upload counter
 }
 
 // uploadSketchHandler serves
@@ -154,21 +162,35 @@ type uploadSketchResponse struct {
 //     REVOKED.
 //  4. Verify the Ed25519 signature against the
 //     stored public key. Reject on mismatch.
-//  5. Create the memos row (source='sketch',
-//     state='DRAFT', visibility=PRIVATE) and
-//     a patches row for the .p33 patch blob.
+//  5. Create the memos row (state='DRAFT',
+//     visibility=PRIVATE) and a patches row
+//     for the .p33 patch blob.
 //  6. Create one samples row per sample_wav
 //     part. Link via memo_relations (SAMPLE_FILE).
 //  7. If backup_file is present, create a
 //     second patches row for the .bkp blob.
 //     Link via memo_relations (BACKUP_FILE).
-//  8. Compute version_no = (existing
-//     sketch_versions count for this memo) + 1.
-//     Insert the sketch_versions row. The
-//     unique (memo_id, version_no) index makes
-//     a concurrent upload a 409.
-//  9. Return 201 with the new memo's resource
-//     name and the new version's number.
+//  8. Bump the device's last_seen_at so a
+//     replayed signature with an older
+//     uploaded_at_unix is rejected on the next
+//     attempt.
+//  9. Compute the per-author upload counter
+//     (version_no) — 1 on a fresh author, +1
+//     over the author's max so far. Stash it
+//     on the sketch JSON column.
+// 10. Return 201 with the new memo's resource
+//     name and the version number.
+//
+// The pre-2026-10-19 path inserted a row
+// into a parallel `sketch_versions` table
+// under a `(memo_id, version_no)` unique
+// index; the table is gone. The version
+// now lives in-band on the memo's `sketch`
+// JSON column (key `version_no`), so a
+// single `FindRecordById` returns both the
+// metadata and the version. See
+// DECISIONS.md, "sketch version lives in
+// sketch JSON column (2026-10-19)".
 //
 // The error mapping is in uploadSketchError.
 // The status codes match the brief's §10
@@ -338,61 +360,78 @@ func uploadSketchHandler(e *core.RequestEvent) error {
 	memoRec.Set("author", device.GetString("user"))
 	memoRec.Set("content", "Sketch uploaded from PO-33 device.")
 	memoRec.Set("visibility", "PRIVATE")
-	memoRec.Set("type", "note")
-	memoRec.Set("source", "sketch")
 	memoRec.Set("state", "DRAFT")
-	// payload envelope: the SketchPayload shape
-	// the existing pb/connect/memos_translate_sketch.go
-	// reads. A future slice will move this to
-	// the same extractor the save hook uses for
-	// text memos, but today the upload handler
-	// writes the envelope directly.
-	sketchPayload := map[string]any{
-		"property":           map[string]any{},
-		"location":           map[string]any{},
-		"sketch": map[string]any{
-			"model":              meta.Model,
-			"slot_count":         meta.SlotCount,
-			"device_fingerprint": meta.DeviceFingerprint,
-			"uploaded_at_unix":   meta.UploadedAtUnix,
-		},
+	// payload envelope: the MemoPayload shape
+	// the existing pb/connect/memos_translate.go
+	// reads (property + location). The pre-1860xxx
+	// shape also carried a `sketch` sub-object;
+	// the 1860xxx series moved the sketch data
+	// to a dedicated `memos.sketch` JSON column
+	// and the translator no longer reads the
+	// `payload.sketch` sub-object.
+	rawPayload, _ := json.Marshal(map[string]any{
+		"property": map[string]any{},
+		"location": map[string]any{},
+	})
+	memoRec.Set("payload", json.RawMessage(rawPayload))
+	// The `sketch` column is the PO-33 device
+	// metadata in the upstream Memos shape. The
+	// translator reads it directly; it is the
+	// source of truth for the proto's
+	// `MemoPayload.sketch` sub-message. The
+	// user-authored metadata (key, license,
+	// attribution, ...) is not populated yet at
+	// this stage of the upload; the device
+	// fields are the only data the device
+	// sends.
+	//
+	// The `version_no` is the per-author
+	// monotonically increasing upload counter.
+	// 1 on the first upload from this author,
+	// +1 on every subsequent upload. The pre-
+	// 2026-10-19 path used a parallel
+	// `sketch_versions` table; the version now
+	// lives in-band on this JSON column (see
+	// DECISIONS.md, "sketch version lives in
+	// sketch JSON column (2026-10-19)").
+	versionNo := nextSketchVersionNo(e.App, device.GetString("user"))
+	sketchJSON := map[string]any{
+		"model":              meta.Model,
+		"slot_count":         meta.SlotCount,
+		"device_fingerprint": meta.DeviceFingerprint,
+		"uploaded_at_unix":   meta.UploadedAtUnix,
+		"version_no":         versionNo,
 	}
 	if meta.BPM != nil {
-		sketchPayload["sketch"].(map[string]any)["bpm"] = *meta.BPM
+		sketchJSON["bpm"] = *meta.BPM
 	}
-	rawPayload, _ := json.Marshal(sketchPayload)
-	memoRec.Set("payload", json.RawMessage(rawPayload))
+	rawSketch, _ := json.Marshal(sketchJSON)
+	memoRec.Set("sketch", json.RawMessage(rawSketch))
 	if err := e.App.Save(memoRec); err != nil {
 		return err
 	}
 
-	// Write the .p33 patch.
-	// Write the .p33 patch. The patches
-	// collection accepts a single `file` field;
-	// the device's wire shape is a single
-	// `patch_file` part (the firmware team's
+	// Write the .p33 patch. The unified
+	// `attachments` collection accepts a single
+	// `blob` field; the device's wire shape is a
+	// single `patch_file` part (the firmware team's
 	// §3 call it that). We read it from a
 	// dedicated part name; if absent, the
 	// upload is patch-less (a future firmware
 	// feature for sample-only sketches) and we
-	// continue without writing a patches row.
-	var patchKey string
+	// continue without writing an attachment row.
 	if rawPatch, err := readCappedPart(mf, "patch_file", uploadBackupMaxBytes); err == nil {
-		key, err := writePatchRow(e.App, memoRec.Id,
-			"sketch.p33", rawPatch, meta.DeviceFingerprint)
-		if err != nil {
+		if _, err := writeAttachmentRow(e.App, memoRec.Id,
+			"sketch.p33", rawPatch, meta.DeviceFingerprint); err != nil {
 			return err
 		}
-		patchKey = key
 	}
 
 	// Write the per-sample rows. Each
-	// sample_wav_N part becomes one samples
-	// row, linked via a SAMPLE_FILE relation.
-	sampleKeys := make([]string, 0, len(sampleParts))
+	// sample_wav_N part becomes one row in the
+	// unified `attachments` collection.
 	for i, hdr := range sampleParts {
-		// A samples row is multi-file; a
-		// sketch upload is per-sample, so
+		// A sketch upload is per-sample, so
 		// each row gets exactly one file.
 		// The cap is per-row, not per-file.
 		if hdr.Size > uploadSampleMaxBytes {
@@ -410,13 +449,11 @@ func uploadSketchHandler(e *core.RequestEvent) error {
 			return err
 		}
 		_ = f.Close()
-		key, err := writeSampleRow(e.App, memoRec.Id,
+		if _, err := writeAttachmentRow(e.App, memoRec.Id,
 			fmt.Sprintf("sample_%02d.wav", i),
-			buf.Bytes(), meta.DeviceFingerprint)
-		if err != nil {
+			buf.Bytes(), meta.DeviceFingerprint); err != nil {
 			return err
 		}
-		sampleKeys = append(sampleKeys, key)
 	}
 
 	// Write the .bkp tarball. The
@@ -436,7 +473,6 @@ func uploadSketchHandler(e *core.RequestEvent) error {
 	// reference" workflow (a future
 	// slice) and is not the device
 	// upload's join.
-	var backupKey string
 	// A non-nil err is "the part is
 	// missing or over-cap" (the typed
 	// errors in readCappedPart). We
@@ -455,38 +491,10 @@ func uploadSketchHandler(e *core.RequestEvent) error {
 		// optional, so we silently skip.
 	}
 	if rawBackup != nil {
-		key, err := writePatchRow(e.App, memoRec.Id,
-			"sketch.bkp", rawBackup, meta.DeviceFingerprint)
-		if err != nil {
+		if _, err := writeAttachmentRow(e.App, memoRec.Id,
+			"sketch.bkp", rawBackup, meta.DeviceFingerprint); err != nil {
 			return err
 		}
-		backupKey = key
-	}
-
-	// Compute the new version number. The
-	// brief's "monotonic per-memo" invariant
-	// is enforced at the index level: a
-	// duplicate (memo_id, version_no) insert
-	// fails the unique constraint, which the
-	// handler surfaces as 409. The count +
-	// insert here is racy under concurrent
-	// uploads of the same memo, but the race
-	// is resolved by the unique index; the
-	// loser's insert fails and is reported
-	// as 409.
-	existing, err := e.App.FindRecordsByFilter("sketch_versions",
-		"memo_id = {:mid}", "-version_no", 1, 0,
-		map[string]any{"mid": memoRec.Id})
-	if err != nil {
-		return err
-	}
-	versionNo := int32(1)
-	if len(existing) > 0 {
-		versionNo = int32(existing[0].GetInt("version_no")) + 1
-	}
-	if err := writeSketchVersion(e.App, memoRec.Id, versionNo,
-		meta, patchKey, sampleKeys, backupKey, rawMeta, rawSig); err != nil {
-		return err
 	}
 
 	// Bump the device's last_seen_at so a
@@ -665,112 +673,44 @@ func findDeviceByFingerprint(app core.App, fpr string) (*core.Record, error) {
 	return row, nil
 }
 
-// writePatchRow inserts a `patches` row
-// pointing at the parent memo, then writes
-// the file bytes to PocketBase's filesystem
-// under the row's id. The on-disk layout
-// matches the existing chunked-upload
-// pipeline (`pb_data/storage/<col_id>/<rec_id>/<filename>`)
-// so the SPA's existing playback path works
-// unchanged.
-func writePatchRow(app core.App, memoID, filename string, body []byte, fpr string) (string, error) {
-	col, err := app.FindCollectionByNameOrId("patches")
+// writeAttachmentRow inserts a row in the unified
+// `attachments` collection pointing at the parent memo,
+// then writes the file bytes to PocketBase's filesystem
+// under the row's id. The on-disk layout matches the
+// existing chunked-upload pipeline
+// (`pb_data/storage/<col_id>/<rec_id>/<filename>`) so the
+// SPA's existing playback path works unchanged. A sketch
+// upload produces one row per `.p33` patch blob, one row
+// per `.wav` sample, and one row for the `.bkp` tarball;
+// the unified collection's single-file `blob` field is
+// the right shape for all three.
+func writeAttachmentRow(app core.App, memoID, filename string, body []byte, fpr string) (string, error) {
+	col, err := app.FindCollectionByNameOrId("attachments")
 	if err != nil {
 		return "", err
 	}
 	rec := core.NewRecord(col)
 	rec.Set("memo", memoID)
 	rec.Set("device_fingerprint_snapshot", fpr)
-	// SHA-256 of the bytes for a fast
-	// content-addressable sanity check; the
-	// column is unused today but mirrors
-	// the convention the rest of riff has
-	// adopted for media assets.
-	sum := sha256.Sum256(body)
-	rec.Set("description", "device upload sha256:"+hex.EncodeToString(sum[:]))
-	// Build a *filesystem.File the
-	// FileField interceptor can write to
-	// disk as part of the Save. The
-	// existing chunked upload pipeline
-	// (pb/connect/attachment_upload.go)
-	// uses the same pattern; the file is
-	// uploaded by the interceptor and the
-	// row's file column is populated
-	// transparently.
+	rec.Set("filename", filename)
+	rec.Set("size", int64(len(body)))
+	rec.Set("storage", "local")
+	// Build a *filesystem.File the FileField
+	// interceptor can write to disk as part of
+	// the Save. The existing chunked upload
+	// pipeline (pb/connect/attachment_upload.go)
+	// uses the same pattern; the file is uploaded
+	// by the interceptor and the row's blob column
+	// is populated transparently.
 	f, err := filesystem.NewFileFromBytes(body, filename)
 	if err != nil {
 		return "", err
 	}
-	rec.Set("file", f)
+	rec.Set("blob", f)
 	if err := app.Save(rec); err != nil {
 		return "", err
 	}
 	return rec.Id, nil
-}
-
-// writeSampleRow inserts a `samples` row
-// pointing at the parent memo and writes
-// the .wav bytes to the file field.
-func writeSampleRow(app core.App, memoID, filename string, body []byte, fpr string) (string, error) {
-	col, err := app.FindCollectionByNameOrId("samples")
-	if err != nil {
-		return "", err
-	}
-	rec := core.NewRecord(col)
-	rec.Set("memo", memoID)
-	rec.Set("device_fingerprint_snapshot", fpr)
-	rec.Set("description", "device upload")
-	// Build a *filesystem.File the
-	// FileField interceptor writes to disk
-	// during Save. samples.files is a
-	// multi-file field; the assignment
-	// shape is a single-element slice.
-	f, err := filesystem.NewFileFromBytes(body, filename)
-	if err != nil {
-		return "", err
-	}
-	rec.Set("files", []*filesystem.File{f})
-	if err := app.Save(rec); err != nil {
-		return "", err
-	}
-	return rec.Id, nil
-}
-
-// writeSketchVersion inserts a `sketch_versions`
-// row carrying the upload's metadata, signature,
-// and the keys of the patch / sample / backup
-// rows the upload created. The
-// (memo_id, version_no) unique index is the
-// invariant; a duplicate insert fails the
-// index and the handler maps to 409.
-func writeSketchVersion(app core.App, memoID string, versionNo int32,
-	meta uploadSketchMetadata,
-	patchKey string, sampleKeys []string, backupKey string,
-	rawMeta, rawSig []byte) error {
-	col, err := app.FindCollectionByNameOrId("sketch_versions")
-	if err != nil {
-		return err
-	}
-	rec := core.NewRecord(col)
-	rec.Set("memo_id", memoID)
-	rec.Set("version_no", versionNo)
-	rec.Set("device_fingerprint", meta.DeviceFingerprint)
-	rec.Set("uploaded_at_unix", meta.UploadedAtUnix)
-	rec.Set("received_at", types.NowDateTime())
-	if patchKey != "" {
-		rec.Set("patch_key", patchKey)
-	}
-	if len(sampleKeys) > 0 {
-		rawSamples, _ := json.Marshal(sampleKeys)
-		rec.Set("sample_keys", json.RawMessage(rawSamples))
-	}
-	if backupKey != "" {
-		rec.Set("backup_key", backupKey)
-	}
-	rec.Set("metadata", json.RawMessage(rawMeta))
-	rec.Set("signature", hex.EncodeToString(rawSig))
-	rec.Set("signature_algorithm", "ed25519")
-	return app.Save(rec)
 }
 
 // writeFileToRecord writes the bytes to
@@ -812,4 +752,87 @@ func writeFileToRecord(app core.App, coll, recID, filename string, body []byte) 
 // PocketBase backend (local, S3).
 func dirForFilenames(collectionID, recordID, filename string) string {
 	return filepath.ToSlash(filepath.Join(collectionID, recordID, filename))
+}
+
+// nextSketchVersionNo returns the per-author
+// monotonically increasing sketch upload
+// counter. 1 on a fresh author (no prior
+// sketch memos); (max version_no over the
+// author's prior sketch memos) + 1 on every
+// subsequent upload.
+//
+// The cap on the `FindRecordsByFilter` scan
+// is the most-recent 200 sketch memos. A
+// well-behaved author who has uploaded more
+// than 200 sketches is rare; the bound keeps
+// the read cost on the upload hot path
+// bounded even for a power user, and the
+// counter only ever increases so a
+// bounded-but-large scan picks up the
+// right max. A future backend admin tool
+// (out of scope for the upload handler) can
+// compact the counter after a bulk delete.
+//
+// The pre-2026-10-19 path used a parallel
+// `sketch_versions` table; the value is now
+// read from each row's `sketch` JSON column
+// (key `version_no`). See DECISIONS.md,
+// "sketch version lives in sketch JSON
+// column (2026-10-19)".
+func nextSketchVersionNo(app core.App, authorID string) int32 {
+	const scanCap = 200
+	rows, err := app.FindRecordsByFilter("memos",
+		"author = {:uid} && sketch != null",
+		"-created", scanCap, 0,
+		map[string]any{"uid": authorID})
+	if err != nil || len(rows) == 0 {
+		return 1
+	}
+	var maxNo int32
+	for _, r := range rows {
+		raw := r.Get("sketch")
+		if raw == nil {
+			continue
+		}
+		var shape struct {
+			VersionNo int32 `json:"version_no"`
+		}
+		// The column comes back as
+		// types.JSONRaw (a []byte) on
+		// PocketBase; json.Unmarshal
+		// handles it directly. A
+		// pre-2026-10-19 row that was
+		// back-filled by M186 carries
+		// no version_no key and
+		// decodes to 0 — which is the
+		// expected "no version" value
+		// and does not bump the max.
+		b, ok := raw.([]byte)
+		if !ok {
+			// PocketBase returns the
+			// `sketch` column as a
+			// `types.JSONRaw` (a
+			// named-type []byte). The
+			// plain `[]byte` assertion
+			// fails for that case;
+			// json.Marshal round-trips
+			// it through Go's
+			// reflection. The
+			// `payload` translator in
+			// pb/connect hits the same
+			// problem and solves it the
+			// same way.
+			b, _ = json.Marshal(raw)
+		}
+		if len(b) == 0 || string(b) == "null" {
+			continue
+		}
+		if err := json.Unmarshal(b, &shape); err != nil {
+			continue
+		}
+		if shape.VersionNo > maxNo {
+			maxNo = shape.VersionNo
+		}
+	}
+	return maxNo + 1
 }

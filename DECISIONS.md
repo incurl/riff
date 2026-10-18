@@ -96,6 +96,96 @@ parses cleanly under `docker buildx build --check` (the only
 error reported is the unrelated `COPY --from=ravine` line that
 needs the out-of-repo build context).
 
+## `sketch.version_no` + `SketchPayload.version_no` added (2026-10-19)
+
+The audit log that previously carried a per-upload
+`version_no` (`sketch_versions` table, the
+`ListSketchVersions` / `GetSketchVersion` RPCs) was
+removed because the SPA never shipped a viewer. We
+have since decided that the `version_no` is still
+useful — the SPA's sketch card wants a "v3" badge so
+the user can tell which upload they are looking at —
+but it does not need a separate RPC, a separate
+table, or a separate wire message. The version now
+lives **in-band on the memo's `sketch` JSON column**
+(key `version_no`) and surfaces on the proto's
+`SketchPayload.version_no` field. **Net added.** A
+new `int32 version_no = 6` field on the
+`SketchPayload` proto message; the `Version int32`
+field on `uploadSketchResponse`; the
+`nextSketchVersionNo` helper that reads the author's
+most-recent 200 sketch memos and returns
+`max + 1` (or 1 for a fresh author). The
+`pb/api/po33_device_upload_internal_test.go` happy
+path regains an `out.Version == 1` assertion; a new
+`TestUploadSketch_SecondUpload_BumpsVersion` test
+pins 1 → 2 → 3 across three consecutive uploads.
+The `pb/connect/memos_translate_sketch_internal_test.go`
+gets `TestMemoPayloadFromRecord_VersionNoRoundTrip`
+and `TestMemoPayloadFromRecord_NoVersionNoIsZero` to
+pin the round-trip and the legacy-row path.
+
+**Why a column instead of the dropped table.** The
+audit log's `(memo_id, version_no)` index served
+two questions — "which upload wrote which blob?"
+and "what was the Nth upload from this author?" —
+and the first question was the only one the SPA
+needed a viewer for. The second question can be
+answered in O(1) from the memo row's own `sketch`
+column without a join, which is the same shape the
+rest of the upload-time metadata already lives in
+(model, slot_count, device_fingerprint, etc.). The
+`sketch` JSON column is the natural place for any
+"metadata known at upload time" field; pushing
+`version_no` into it is the rule, not the exception.
+
+**Why a counter instead of a timestamp.** The audit
+log's `version_no` was a server-issued monotonic
+counter, not a device timestamp, and the SPA's
+"v3" badge is most useful as a stable, human-readable
+counter that does not change when the same memo is
+re-indexed or migrated. The device's
+`uploaded_at_unix` is already a separate field on
+`SketchPayload`; a counter adds the human-readable
+"which one of my uploads is this?" on top.
+
+**Wire delta.** Proto: `SketchPayload.version_no
+(int32, field 6)`; no other proto change. OpenAPI:
+the `SketchPayload` schema gains `version_no:
+{ type: integer, format: int32 }`. TypeScript:
+the generated `SketchPayload` type gains
+`versionNo: number` (plain numeric; no
+zod/validate layer is emitted by
+`@bufbuild/protoc-gen-es` v2.12.1, the local
+plugin pinned in `web/package.json`). The
+`POST /api/po33/sketches/upload` response body
+gains `version: <int32>` next to the existing
+`memo: "memos/<id>"` field.
+
+**DB delta.** No new column, no new index, no new
+table. The `memos.sketch` JSON column gains a
+`version_no` key on every fresh upload; pre-existing
+rows that predate this change do not have the key
+and decode to `version_no = 0` in the proto (the
+SPA's "no v-badge" discriminator). The M186
+back-fill migration that populated the `sketch`
+column for legacy rows does not need to be re-run
+because the absence of the key is the desired
+back-compat shape.
+
+**Counter semantics.** The counter is per-author
+(not per-device, not global). The reasoning: a
+multi-device author (a user with one PO-33 and one
+PO-33 K.O!) wants "v1, v2, v3" to be the order of
+*their* uploads, not a jumble of all users on the
+instance. The cap is the most-recent 200 sketch
+memos for the author; a power user who has
+uploaded more than 200 sketches is rare, and the
+counter only ever increases so a bounded-but-large
+scan always picks up the right max. A future
+admin-tool compaction (out of scope) can re-pack
+the counter after a bulk delete.
+
 ## Upstream-Memos REST surface at `/memos/api/...`: thin transport adapter, not a new business layer (2026-10-17)
 
 **Supersedes the 2026-10-16 Connect-only decision below.** The

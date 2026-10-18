@@ -526,6 +526,22 @@ func (x *MemoPayload) GetSketch() *SketchPayload {
 //     time. Distinct from the
 //     memo's create_time which is
 //     the server's clock.
+//   - version_no        — server-issued monotonically
+//     increasing per-author upload
+//     counter. The first upload
+//     from a given author is 1;
+//     every subsequent upload is
+//     (max-so-far) + 1. Replaces
+//     the (dropped) parallel
+//     `sketch_versions` collection
+//     row that used to carry this
+//     value; lives in-band on the
+//     memo's `sketch` JSON column
+//     now. The SPA can render a
+//     "v3" badge on the sketch
+//     page without needing a
+//     separate `ListSketchVersions`
+//     RPC.
 type SketchPayload struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The device model identifier, e.g. "PO-33".
@@ -544,8 +560,17 @@ type SketchPayload struct {
 	// is the device's clock, captured for forensic
 	// purposes.
 	UploadedAtUnix int64 `protobuf:"varint,5,opt,name=uploaded_at_unix,json=uploadedAtUnix,proto3" json:"uploaded_at_unix,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// The monotonically increasing per-author
+	// upload counter. 1 on the first upload, +1
+	// on every subsequent upload from the same
+	// author. The counter is read from the
+	// `sketch` JSON column of the author's most
+	// recent sketch memo at write time; on a
+	// fresh instance (no prior sketch memos for
+	// the author) it starts at 1.
+	VersionNo     int32 `protobuf:"varint,6,opt,name=version_no,json=versionNo,proto3" json:"version_no,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SketchPayload) Reset() {
@@ -609,6 +634,13 @@ func (x *SketchPayload) GetDeviceFingerprint() string {
 func (x *SketchPayload) GetUploadedAtUnix() int64 {
 	if x != nil {
 		return x.UploadedAtUnix
+	}
+	return 0
+}
+
+func (x *SketchPayload) GetVersionNo() int32 {
+	if x != nil {
+		return x.VersionNo
 	}
 	return 0
 }
@@ -2665,14 +2697,16 @@ const file_api_v1_memo_service_proto_rawDesc = "" +
 	"\rhas_task_list\x18\x02 \x01(\bR\vhasTaskList\x12\x19\n" +
 	"\bhas_code\x18\x03 \x01(\bR\ahasCode\x120\n" +
 	"\x14has_incomplete_tasks\x18\x04 \x01(\bR\x12hasIncompleteTasks\x12\x14\n" +
-	"\x05title\x18\x05 \x01(\tR\x05title\"\xbc\x01\n" +
+	"\x05title\x18\x05 \x01(\tR\x05title\"\xdb\x01\n" +
 	"\rSketchPayload\x12\x14\n" +
 	"\x05model\x18\x01 \x01(\tR\x05model\x12\x1d\n" +
 	"\n" +
 	"slot_count\x18\x02 \x01(\x05R\tslotCount\x12\x15\n" +
 	"\x03bpm\x18\x03 \x01(\x05H\x00R\x03bpm\x88\x01\x01\x12-\n" +
 	"\x12device_fingerprint\x18\x04 \x01(\tR\x11deviceFingerprint\x12(\n" +
-	"\x10uploaded_at_unix\x18\x05 \x01(\x03R\x0euploadedAtUnixB\x06\n" +
+	"\x10uploaded_at_unix\x18\x05 \x01(\x03R\x0euploadedAtUnix\x12\x1d\n" +
+	"\n" +
+	"version_no\x18\x06 \x01(\x05R\tversionNoB\x06\n" +
 	"\x04_bpm\"u\n" +
 	"\bLocation\x12%\n" +
 	"\vplaceholder\x18\x01 \x01(\tB\x03\xe0A\x01R\vplaceholder\x12\x1f\n" +

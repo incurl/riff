@@ -374,6 +374,22 @@ message MemoPayload {
 //                        time. Distinct from the
 //                        memo's create_time which is
 //                        the server's clock.
+//   - version_no        — server-issued monotonically
+//                        increasing per-author upload
+//                        counter. The first upload
+//                        from a given author is 1;
+//                        every subsequent upload is
+//                        (max-so-far) + 1. Replaces
+//                        the (dropped) parallel
+//                        `sketch_versions` collection
+//                        row that used to carry this
+//                        value; lives in-band on the
+//                        memo's `sketch` JSON column
+//                        now. The SPA can render a
+//                        "v3" badge on the sketch
+//                        page without needing a
+//                        separate `ListSketchVersions`
+//                        RPC.
 message SketchPayload {
   // The device model identifier, e.g. "PO-33".
   string model = 1;
@@ -395,6 +411,16 @@ message SketchPayload {
   // is the device's clock, captured for forensic
   // purposes.
   int64 uploaded_at_unix = 5;
+
+  // The monotonically increasing per-author
+  // upload counter. 1 on the first upload, +1
+  // on every subsequent upload from the same
+  // author. The counter is read from the
+  // `sketch` JSON column of the author's most
+  // recent sketch memo at write time; on a
+  // fresh instance (no prior sketch memos for
+  // the author) it starts at 1.
+  int32 version_no = 6;
 }
 
 message Location {

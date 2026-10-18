@@ -1346,90 +1346,6 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/Status'
-    /api/v1/memos/{memo}/versions:
-        get:
-            tags:
-                - SketchService
-            description: |-
-                ListSketchVersions returns the append-only
-                 version log for a sketch memo. The log is
-                 immutable; the response includes every
-                 upload ever made against the memo, in
-                 received_at order. The most recent row is
-                 the version the device currently calls
-                 "current" but the server does not flag
-                 one as authoritative — the owner decides
-                 via PublishSketch which version is visible
-                 (publishing a re-upload is a separate
-                 operation in a future slice).
-            operationId: SketchService_ListSketchVersions
-            parameters:
-                - name: memo
-                  in: path
-                  description: The memo id.
-                  required: true
-                  schema:
-                    type: string
-                - name: pageSize
-                  in: query
-                  schema:
-                    type: integer
-                    format: int32
-                - name: pageToken
-                  in: query
-                  schema:
-                    type: string
-            responses:
-                "200":
-                    description: OK
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/ListSketchVersionsResponse'
-                default:
-                    description: Default error response
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/Status'
-    /api/v1/memos/{memo}/versions/{version}:
-        get:
-            tags:
-                - SketchService
-            description: |-
-                GetSketchVersion returns a single immutable
-                 version row by resource name. The resource
-                 name is "memos/{memo}/versions/{version_no}".
-                 GetSketchVersion returns a single immutable
-                 version row by resource name. The resource
-                 name is "memos/{memo}/versions/{version_no}".
-            operationId: SketchService_GetSketchVersion
-            parameters:
-                - name: memo
-                  in: path
-                  description: The memo id.
-                  required: true
-                  schema:
-                    type: string
-                - name: version
-                  in: path
-                  description: The version id.
-                  required: true
-                  schema:
-                    type: string
-            responses:
-                "200":
-                    description: OK
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/SketchVersion'
-                default:
-                    description: Default error response
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/Status'
     /api/v1/memos/{memo}:archive:
         post:
             tags:
@@ -1438,12 +1354,12 @@ paths:
                 ArchiveSketch flips a sketch memo from NORMAL
                  to ARCHIVED. The caller must be the memo's
                  author. The memo is removed from the SPA feed
-                 and the public search index but the row, the
-                 patches, the samples, and the sketch_versions
-                 log are preserved on disk. A re-publish is not
-                 possible; archive is one-way. Re-uploads of the
-                 same sketch create new sketch_versions rows but
-                 do not change the ARCHIVED state.
+                 and the public search index but the row and
+                 its attachments are preserved on disk. A
+                 re-publish is not possible; archive is one-way.
+                 Re-uploads of the same sketch overwrite the
+                 previous attachment blobs but do not change
+                 the ARCHIVED state.
             operationId: SketchService_ArchiveSketch
             parameters:
                 - name: memo
@@ -4384,15 +4300,6 @@ components:
                 nextPageToken:
                     type: string
                     description: A token for the next page of results.
-        ListSketchVersionsResponse:
-            type: object
-            properties:
-                versions:
-                    type: array
-                    items:
-                        $ref: '#/components/schemas/SketchVersion'
-                nextPageToken:
-                    type: string
         ListSpaceInvitationsResponse:
             type: object
             properties:
@@ -5188,6 +5095,18 @@ components:
                          memo is the canonical timestamp; this field
                          is the device's clock, captured for forensic
                          purposes.
+                versionNo:
+                    type: integer
+                    description: |-
+                        The monotonically increasing per-author
+                         upload counter. 1 on the first upload, +1
+                         on every subsequent upload from the same
+                         author. The counter is read from the
+                         `sketch` JSON column of the author's most
+                         recent sketch memo at write time; on a
+                         fresh instance (no prior sketch memos for
+                         the author) it starts at 1.
+                    format: int32
             description: |-
                 SketchPayload is the PO-33 device metadata riding
                  inside `MemoPayload.sketch`. The fields mirror the
@@ -5217,78 +5136,22 @@ components:
                                         time. Distinct from the
                                         memo's create_time which is
                                         the server's clock.
-        SketchVersion:
-            type: object
-            properties:
-                name:
-                    type: string
-                memo:
-                    readOnly: true
-                    type: string
-                    description: |-
-                        The parent memo resource name.
-                         Format: memos/{memo}
-                versionNo:
-                    readOnly: true
-                    type: integer
-                    description: The monotonic per-memo version number, starting at 1.
-                    format: int32
-                deviceFingerprint:
-                    readOnly: true
-                    type: string
-                    description: |-
-                        The hex SHA-256 of the device's Ed25519 public key,
-                         exactly the value the device's pairing screen showed
-                         at pairing time. The same fingerprint is also
-                         copied onto the patches and samples rows for fast
-                         joins; the value here is the upload-time snapshot.
-                uploadedAtUnix:
-                    readOnly: true
-                    type: string
-                    description: |-
-                        The unix-second timestamp the device recorded at
-                         upload time. Distinct from received_at, which is
-                         the server's clock.
-                receivedAt:
-                    readOnly: true
-                    type: string
-                    description: The server-side timestamp the row was inserted.
-                    format: date-time
-                patchKey:
-                    readOnly: true
-                    type: string
-                    description: The PocketBase `patches` row id holding the .p33 patch blob.
-                sampleKeys:
-                    readOnly: true
-                    type: array
-                    items:
-                        type: string
-                    description: |-
-                        The PocketBase `samples` row ids holding the per-slot .wav blobs.
-                         Empty when the device uploaded a patch-only sketch.
-                backupKey:
-                    readOnly: true
-                    type: string
-                    description: |-
-                        The PocketBase `patches` row id holding the .bkp
-                         tarball, when the device emitted one. Empty when
-                         the upload was tarball-less.
-                signatureAlgorithm:
-                    readOnly: true
-                    type: string
-                    description: |-
-                        The signature algorithm pinned for this row. Today
-                         always "ed25519"; the field is forward-compatibility
-                         for a future post-quantum migration.
-            description: |-
-                SketchVersion is one row of the append-only
-                 audit log a sketch memo accumulates. Every
-                 device upload inserts one row. The log never
-                 updates and never deletes; the "current"
-                 version is the row with the largest
-                 version_no.
-
-                 Format: memos/{memo}/versions/{version_no}
+                   - version_no        — server-issued monotonically
+                                        increasing per-author upload
+                                        counter. The first upload
+                                        from a given author is 1;
+                                        every subsequent upload is
+                                        (max-so-far) + 1. Replaces
+                                        the (dropped) parallel
+                                        `sketch_versions` collection
+                                        row that used to carry this
+                                        value; lives in-band on the
+                                        memo's `sketch` JSON column
+                                        now. The SPA can render a
+                                        "v3" badge on the sketch
+                                        page without needing a
+                                        separate `ListSketchVersions`
+                                        RPC.
         Space:
             required:
                 - title
@@ -5964,15 +5827,21 @@ tags:
       description: |-
         SketchService is the SPA-facing side of the
          PO-33 sketch upload flow. The lifecycle RPCs
-         (PublishSketch, ArchiveSketch) and the
-         append-only version log (ListSketchVersions,
-         GetSketchVersion) live in this file. The
-         device-side upload itself is a REST route
-         (POST /api/po33/sketches/upload) in
+         (PublishSketch, ArchiveSketch) live in this
+         file. The device-side upload itself is a REST
+         route (POST /api/po33/sketches/upload) in
          pb/api/po33_device_routes.go because the
          device runs an HTTP/1.1 client with a
          one-shot Ed25519 signature header rather
-         than a Connect library.
+         than a Connect library. The previous
+         ListSketchVersions / GetSketchVersion RPCs
+         (an append-only `sketch_versions` audit log)
+         were dropped on 2026-10-19 because the SPA
+         never shipped a viewer for them; the device
+         upload is the only authority on "which patch
+         bytes live on disk" and the memo row's
+         `sketch` JSON column already records the
+         upload-time metadata.
     - name: SpaceService
       description: SpaceService manages collaborative spaces and their memberships.
     - name: UserService

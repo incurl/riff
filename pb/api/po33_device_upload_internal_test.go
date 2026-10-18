@@ -123,8 +123,9 @@ func newUploadRequest(app core.App, body []byte, contentType string) (*core.Requ
 // device upload success path: a signed
 // multipart body with a .p33 patch, a
 // .bkp backup, and one .wav sample lands
-// as a DRAFT memo with a sketch_versions
-// row at version_no=1.
+// as a DRAFT memo whose `sketch` JSON
+// column carries version_no=1 (the first
+// upload from this author).
 func TestUploadSketch_HappyPath(t *testing.T) {
 	app := newAPIApp(t)
 	alice := newAPIUser(t, app, "alice")
@@ -170,27 +171,57 @@ func TestUploadSketch_HappyPath(t *testing.T) {
 	var out uploadSketchResponse
 	readJSON(t, rec, &out)
 	require.NotEmpty(t, out.Memo)
-	assert.Equal(t, int32(1), out.Version)
+	// First upload from this author: the
+	// per-author counter is 1. The value is
+	// also persisted on the memo's `sketch`
+	// JSON column so the SPA can render it
+	// after the upload completes.
+	assert.Equal(t, int32(1), out.Version,
+		"first upload from a fresh author should be version=1")
 
-	// The memo row is in DRAFT, source=sketch,
-	// and authored by the device's user.
+	// The memo row is in DRAFT, the `sketch`
+	// JSON column is populated, and the memo
+	// is authored by the device's user. The
+	// pre-1860xxx schema used a `source`
+	// column (`source == "sketch"`); the
+	// 1860xxx series dropped that column and
+	// the presence of the `sketch` column is
+	// the new discriminator.
 	memoID := strings.TrimPrefix(out.Memo, "memos/")
 	memo, err := app.FindRecordById("memos", memoID)
 	require.NoError(t, err)
-	assert.Equal(t, "sketch", memo.GetString("source"))
+	require.NotNil(t, memo.Get("sketch"),
+		"uploaded memo must carry the sketch JSON column")
 	assert.Equal(t, "DRAFT", memo.GetString("state"))
 	assert.Equal(t, alice.Id, memo.GetString("author"))
-
-	// The sketch_versions row exists with
-	// version_no=1 and the device fingerprint.
-	versions, err := app.FindRecordsByFilter("sketch_versions",
-		"memo_id = {:mid}", "version_no", 0, 0,
-		map[string]any{"mid": memoID})
-	require.NoError(t, err)
-	require.Len(t, versions, 1)
-	assert.Equal(t, int64(1), int64(versions[0].GetInt("version_no")))
-	assert.Equal(t, ed25519verify.FingerprintFull(pub),
-		versions[0].GetString("device_fingerprint"))
+	// The version lives in-band on the
+	// `sketch` JSON column (key
+	// `version_no`). The pre-2026-10-19
+	// path used a parallel sketch_versions
+	// row for this value; the table is
+	// gone, the column is the new source
+	// of truth. See DECISIONS.md, "sketch
+	// version lives in sketch JSON column
+	// (2026-10-19)".
+	sketchRaw, _ := memo.Get("sketch").([]byte)
+	if len(sketchRaw) == 0 {
+		// PocketBase returns the column
+		// as `types.JSONRaw` (a named
+		// type); the plain `[]byte`
+		// assertion misses it. Re-marshal
+		// the value through the same
+		// path the production code uses
+		// (pb/api/po33_device_upload.go's
+		// `nextSketchVersionNo` helper).
+		marshaled, mErr := json.Marshal(memo.Get("sketch"))
+		require.NoError(t, mErr)
+		sketchRaw = marshaled
+	}
+	require.NotEmpty(t, sketchRaw)
+	var sketch map[string]any
+	require.NoError(t, json.Unmarshal(sketchRaw, &sketch))
+	assert.EqualValues(t, 1, sketch["version_no"],
+		"first upload from a fresh author should set sketch.version_no=1")
 }
 
 // TestUploadSketch_TamperedSignature_Unauthorized pins
@@ -285,4 +316,97 @@ func TestUploadSketch_TooManySamples_Unprocessable(t *testing.T) {
 	status, ok := apiErrorStatus(t, err)
 	require.True(t, ok)
 	assert.Equal(t, http.StatusUnprocessableEntity, status)
+}
+
+// TestUploadSketch_SecondUpload_BumpsVersion pins
+// the per-author counter behaviour: a
+// second upload from the same author
+// returns version=2 (and a third returns
+// version=3). The counter is read from
+// the prior upload's `sketch.version_no`
+// JSON column at write time; the
+// pre-2026-10-19 path used a parallel
+// `sketch_versions` table for this. The
+// upload is a fresh multipart each time
+// (a real device re-uploads fresh patch
+// bytes) and the handler still does the
+// device-fingerprint + signature verify
+// path so a replayed signature on a
+// future upload is caught by the
+// last_seen_at check (see the
+// `TestUploadSketch_ReplayStaleTimestamp`
+// test, when one exists; the timestamp
+// monotonicity is what blocks a real
+// replay).
+func TestUploadSketch_SecondUpload_BumpsVersion(t *testing.T) {
+	app := newAPIApp(t)
+	alice := newAPIUser(t, app, "alice")
+	_, pub, priv := newAPIDevice(t, app, alice.Id)
+	patch := []byte{0x00, 0x01, 0x02, 0x02, 0xff, 0xfe}
+	mkMeta := func(nonce string) uploadSketchMetadata {
+		return uploadSketchMetadata{
+			Model:             "PO-33",
+			SlotCount:         16,
+			DeviceFingerprint: ed25519verify.FingerprintFull(pub),
+			UploadedAtUnix:    time.Now().Unix(),
+			Nonce:             nonce,
+		}
+	}
+	// First upload. Use a fresh
+	// uploaded_at_unix that is +1s ahead
+	// of last_seen_at so the replay check
+	// (which compares against the
+	// device's last_seen_at, set by
+	// newAPIDevice to now-1h) does not
+	// trip on the second upload.
+	uploadOnce := func(nonce string) (string, int32) {
+		meta := mkMeta(nonce)
+		body, ct := buildSignedUploadMultipart(t, priv, meta, patch, nil, nil)
+		e, rec := newUploadRequest(app, body, ct)
+		err := uploadSketchHandler(e)
+		require.NoError(t, err, "expected upload to succeed; got error: %v", err)
+		require.Equal(t, http.StatusCreated, rec.Code)
+		var out uploadSketchResponse
+		readJSON(t, rec, &out)
+		require.NotEmpty(t, out.Memo)
+		return out.Memo, out.Version
+	}
+	// First upload. last_seen_at is
+	// now-1h from newAPIDevice, so any
+	// uploaded_at_unix at-or-after
+	// (now-1h) passes the replay check.
+	memo1, ver1 := uploadOnce("nonce-1")
+	assert.Equal(t, int32(1), ver1,
+		"first upload from a fresh author should be version=1")
+	require.NotEmpty(t, memo1)
+	// First upload wrote sketch.version_no=1
+	// on the memo row. The next upload
+	// reads it and increments.
+	rec1, err := app.FindRecordById("memos", strings.TrimPrefix(memo1, "memos/"))
+	require.NoError(t, err)
+	sketchRaw1, _ := rec1.Get("sketch").([]byte)
+	if len(sketchRaw1) == 0 {
+		marshaled, mErr := json.Marshal(rec1.Get("sketch"))
+		require.NoError(t, mErr)
+		sketchRaw1 = marshaled
+	}
+	require.NotEmpty(t, sketchRaw1)
+	var s1 map[string]any
+	require.NoError(t, json.Unmarshal(sketchRaw1, &s1))
+	assert.EqualValues(t, 1, s1["version_no"])
+
+	// Second upload. The device's
+	// last_seen_at is now set to "now"
+	// (the upload handler bumps it on
+	// every success); a new
+	// uploaded_at_unix at-or-after that
+	// passes the replay check.
+	_, ver2 := uploadOnce("nonce-2")
+	assert.Equal(t, int32(2), ver2,
+		"second upload from the same author should be version=2")
+
+	// Third upload.
+	_, ver3 := uploadOnce("nonce-3")
+	assert.Equal(t, int32(3), ver3,
+		"third upload from the same author should be version=3")
 }
