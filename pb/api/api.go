@@ -74,10 +74,16 @@ func Register(app core.App, limiter ratelimit.Limiter) {
 		// in the multipart body is the bearer
 		// credential, exactly the pattern the
 		// /pair/finish route uses. The handler
-		// creates a memo (source='sketch',
-		// state='DRAFT') plus the patches / samples
-		// / BACKUP_FILE rows, and inserts a
-		// sketch_versions row. See
+		// creates a memo (state='DRAFT', with
+		// the device metadata on the `sketch`
+		// JSON column) plus the unified
+		// `attachments` rows for the .p33 patch
+		// blob, the per-slot .wav samples, and
+		// the optional .bkp tarball. The 1840xxx
+		// `sketch_versions` audit log that used
+		// to be written here was dropped on
+		// 2026-10-19 (see DECISIONS.md, "sketch
+		// version log dropped"). See
 		// po33_device_upload.go for the full
 		// contract.
 		e.Router.POST("/api/po33/sketches/upload", uploadSketchHandler)
@@ -97,6 +103,20 @@ func Register(app core.App, limiter ratelimit.Limiter) {
 		// blob and streams it. The sse flavor
 		// subscribes to the realtime broker.
 		mountUpstreamMemosRoutes(e.Router, app, limiter)
+
+		// Legacy Memos REST surface at /api/v1/...
+		// (the path prefix current MoeMemos clients
+		// expect; no /memos/api/... prefix). The route
+		// table is the V1 (Memos 0.27-0.31) OpenAPI
+		// definition only; the V0 (Memos 0.21) dialect
+		// is no longer supported. The V1 routes are
+		// proto-shaped already and go through the
+		// connect_proxy flavor. The custom flavor
+		// covers the version-probe endpoints
+		// (`v1_status`, `v1_ping`) and the V1
+		// AIP-style custom-verb dispatcher
+		// (`v1_user_stats`).
+		mountUpstreamMemosV1Routes(e.Router, app, limiter)
 
 		_ = limiter // see the comment on Register
 

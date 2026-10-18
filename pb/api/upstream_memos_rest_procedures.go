@@ -22,7 +22,10 @@ const (
 // user_service
 const (
 	memosConnectUserCreateUserProcedure                  = apiv1connect.UserServiceCreateUserProcedure
+	memosConnectUserGetUserProcedure                     = apiv1connect.UserServiceGetUserProcedure
 	memosConnectUserBatchGetUsersProcedure               = apiv1connect.UserServiceBatchGetUsersProcedure
+	memosConnectUserGetUserSettingProcedure              = apiv1connect.UserServiceGetUserSettingProcedure
+	memosConnectUserUpdateUserSettingProcedure           = apiv1connect.UserServiceUpdateUserSettingProcedure
 	memosConnectUserGetUserStatsProcedure                = apiv1connect.UserServiceGetUserStatsProcedure
 	memosConnectUserListAllUserStatsProcedure            = apiv1connect.UserServiceListAllUserStatsProcedure
 	memosConnectUserExportMemosProcedure                 = apiv1connect.UserServiceExportMemosProcedure
@@ -76,6 +79,8 @@ const (
 // attachment_service
 const (
 	memosConnectAttachmentCreateAttachmentProcedure       = apiv1connect.AttachmentServiceCreateAttachmentProcedure
+	memosConnectAttachmentGetAttachmentProcedure          = apiv1connect.AttachmentServiceGetAttachmentProcedure
+	memosConnectAttachmentListAttachmentsProcedure        = apiv1connect.AttachmentServiceListAttachmentsProcedure
 	memosConnectAttachmentUpdateAttachmentProcedure       = apiv1connect.AttachmentServiceUpdateAttachmentProcedure
 	memosConnectAttachmentDeleteAttachmentProcedure       = apiv1connect.AttachmentServiceDeleteAttachmentProcedure
 	memosConnectAttachmentUploadAttachmentProcedure       = apiv1connect.AttachmentServiceUploadAttachmentProcedure

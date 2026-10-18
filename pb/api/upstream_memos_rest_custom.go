@@ -10,17 +10,23 @@ import (
 
 // customBuilder returns the hand-written handler
 // registered for the given builder key. The 2026-10-17
-// design has only one builder: "not_implemented",
-// which returns 501 for routes that upstream Memos
-// exposed but riff has not yet implemented (e.g.
-// /users/{name}/usage). Future builder keys
-// (webhook signing secret helper, avatar upload,
-// custom shape handlers) are added to the switch
-// below.
+// design has one builder: "not_implemented", which
+// returns 501 for routes that upstream Memos exposed
+// but riff has not yet implemented (e.g. /users/{name}/usage).
+// The 2026-10-18 addition added three keys for the
+// legacy /api/v1/... surface: the version-probe
+// handlers (`v1_status`, `v1_ping`) and the AIP-style
+// custom-verb dispatcher (`v1_user_stats`).
 func customBuilder(app core.App, builder string) func(*core.RequestEvent) error {
 	switch builder {
 	case "not_implemented":
 		return notImplementedHandler()
+	case "v1_status":
+		return v1StatusHandler(app)
+	case "v1_ping":
+		return v1PingHandler(app)
+	case "v1_user_stats":
+		return v1UserStatsHandler(app)
 	default:
 		return unknownFlavorHandler("custom:" + builder)
 	}
