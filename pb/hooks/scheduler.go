@@ -1,10 +1,18 @@
 package hooks
 
 import (
+	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/pocketbase/pocketbase/core"
 )
+
+// schedulerLog is the slog logger for the scheduler.
+// Pulled out so tests can substitute a discard
+// handler. The default is the package-level slog
+// default; pre-refactor this log path was inline.
+var schedulerLog = slog.Default()
 
 // registerScheduler starts a 1-minute ticker that
 // purges expired in-flight device authorizations.
@@ -58,7 +66,26 @@ func runSchedulerLoop(app core.App, shutdown <-chan struct{}) {
 		case <-shutdown:
 			return
 		case <-ticker.C:
-			purgeExpiredAuthorizations(app)
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						// The app may have shut down
+						// between the ticker firing
+						// and the next sweep call
+						// (a long test run that
+						// GC's the app while the
+						// goroutine is mid-tick).
+						// The shutdown channel is
+						// the only safe teardown;
+						// a closed-DB panic here
+						// would otherwise crash
+						// the host process.
+						schedulerLog.Warn("scheduler sweep panicked; app likely shutting down",
+							"err", fmt.Sprintf("%v", r))
+					}
+				}()
+				purgeExpiredAuthorizations(app)
+			}()
 		}
 	}
 }
