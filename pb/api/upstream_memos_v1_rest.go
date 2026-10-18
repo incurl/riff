@@ -89,7 +89,15 @@ func upstreamMemosV1Routes() []upstreamMemosV1RouteEntry {
 		// V1 instance / auth
 		// ============================================================
 		{Method: http.MethodGet, Path: "/api/v1/instance/profile", Flavor: "connect_proxy", Target: memosConnectInstanceGetInstanceProfileProcedure, Scope: ratelimit.ScopeAnonymous},
+		// `POST /api/v1/auth/signin` is the V1 client
+		// sign-in entry point. Without it, MoeMemos
+		// falls through to the SPA catch-all and the
+		// Connect codec surfaces the HTML body as
+		// `data couldn't be read`. Mirrors the modern
+		// SPA row at /memos/api/auth/signin.
+		{Method: http.MethodPost, Path: "/api/v1/auth/signin", Flavor: "connect_proxy", Target: memosConnectAuthSignInProcedure, Scope: ratelimit.ScopeSignInIP},
 		{Method: http.MethodGet, Path: "/api/v1/auth/me", Flavor: "connect_proxy", Target: memosConnectAuthGetCurrentUserProcedure, Scope: ratelimit.ScopeAuthenticated},
+		{Method: http.MethodPost, Path: "/api/v1/auth/refresh", Flavor: "connect_proxy", Target: memosConnectAuthRefreshProcedure, Scope: ratelimit.ScopeAuthenticated},
 		{Method: http.MethodPost, Path: "/api/v1/auth/signout", Flavor: "connect_proxy", Target: memosConnectAuthSignOutProcedure, Scope: ratelimit.ScopeAuthenticated},
 
 		// ============================================================

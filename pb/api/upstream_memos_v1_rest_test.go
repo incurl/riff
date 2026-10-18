@@ -7,12 +7,18 @@ import (
 	"net/url"
 	"testing"
 
+	connectrpc "connectrpc.com/connect/v2"
+	"connectrpc.com/connect/v2/connecthttp"
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/pocketbase/pocketbase/tools/router"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/bcrypt"
 
+	apiv1connect "github.com/incurl/riff/proto/gen/api/v1/apiv1connect"
+	"github.com/incurl/riff/internal/random"
 	"github.com/incurl/riff/pb/connect"
+	"github.com/incurl/riff/pb/hooks"
 )
 
 // makeEventFor builds a *core.RequestEvent with the
@@ -103,7 +109,7 @@ func TestUpstreamMemosV1Routes_MountsAndServesGet(t *testing.T) {
 	stubMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"profile":{"version":"","mode":"prod"}}`))
+		_, _ = w.Write([]byte(`{"profile":{"version":"0.21.0","mode":"prod"}}`))
 	})
 	connect.SetConnectMux(stubMux)
 	t.Cleanup(func() { connect.SetConnectMux(nil) })
@@ -123,13 +129,19 @@ func TestUpstreamMemosV1Routes_MountsAndServesGet(t *testing.T) {
 		"the stub response body should be present")
 }
 
-// TestV1StatusHandler_DefaultVersionIsEmpty confirms
-// the version-probe endpoint returns an empty
-// `profile.version`. The MoeMemos client uses this
-// signal to pick the V1 client; a non-empty value
-// would trigger the legacy V0 client which is no
-// longer supported.
-func TestV1StatusHandler_DefaultVersionIsEmpty(t *testing.T) {
+// TestV1StatusHandler_DefaultVersionIsV0 confirms
+// the version-probe endpoint returns the V0 (Memos
+// 0.21) version string `0.21.0`. The MoeMemos (iOS
+// + Android) boot path inspects `profile.version`:
+// a non-empty value routes the client to the V0
+// surface, an empty value routes it to the V1
+// surface. The V1 fallback path
+// (`/api/v1/workspace/profile`) is not served, so
+// the V0 contract is the only one that works on
+// the live deployment. See DECISIONS.md "V0
+// dispatch helper strips `Accept-Encoding: gzip`
+// ..." for the rationale.
+func TestV1StatusHandler_DefaultVersionIsV0(t *testing.T) {
 	app := newTestApp(t)
 	h := v1StatusHandler(app)
 
@@ -141,8 +153,10 @@ func TestV1StatusHandler_DefaultVersionIsEmpty(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
 	profile, ok := body["profile"].(map[string]any)
 	require.True(t, ok, "status body must contain profile")
-	assert.Equal(t, "", profile["version"],
-		"default version must be empty so the V1 client is selected")
+	assert.Equal(t, "0.21.0", profile["version"],
+		"status must report a non-empty V0 version so the MoeMemos client selects the V0 surface")
+	assert.Equal(t, "prod", profile["mode"],
+		"status mode must be one of prod/dev/demo")
 }
 
 // TestV1PingHandler_ReturnsOk covers the trivial
@@ -273,6 +287,155 @@ func TestPassthroughBody_PassesThrough(t *testing.T) {
 	out, err := passthroughBody(in, nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, in, out)
+}
+
+// TestV1PatPath_MoeMemosBoot is the regression test
+// for the MoeMemos "data couldn't be read" error
+// reported against the riff community deployment.
+//
+// MoeMemos's V1 client (MemosV1Api.kt in
+// github.com/mudkipme/MoeMemosAndroid) is PAT-only:
+// it never calls /api/v1/auth/signin and only reads
+// from `getCurrentUser`, `getProfile`, `listMemos`,
+// and friends. Each call carries
+// `Authorization: Bearer <pat>`. The first call after
+// the version probe is `GET /api/v1/auth/me`
+// (== getCurrentUser); if it returns anything other
+// than 200 application/json, or returns
+// `{"user": null}`, the kotlinx.serialization codec
+// that MemosV1Api uses can't decode it as a
+// non-nullable `User` and the client surfaces
+// "data couldn't be read".
+//
+// On the pre-ship-1 build:
+//
+//   * GET /api/v1/instance/profile was routed
+//     (the table already had the row) and answered
+//     200 application/json via the in-process connect
+//     proxy, so the V1 client could parse it.
+//   * GET /api/v1/auth/me was *also* routed, but
+//     the AuthService handler returned
+//     `{"user": <viewer>}`; if the PAT verification
+//     failed the response was `{"user": null}` and
+//     the codec failed.
+//
+// This test stands up a real PocketBase app, mounts
+// the V1 surface against the real Connect mux
+// (AuthService + InstanceService + UserService) with
+// the production withAuth interceptor, mints a real
+// PAT, and walks the exact boot sequence MoeMemos
+// uses. If it passes, the deployment is functionally
+// correct for the V1 client; if it fails, the failure
+// mode names the exact RPC the client chokes on so
+// the fix is local.
+func TestV1PatPath_MoeMemosBoot(t *testing.T) {
+	app := newTestApp(t)
+	hooks.Register(app)
+
+	// Stand up the real Connect mux with the
+	// production auth interceptor and the three
+	// services the V1 boot path touches.
+	srv := connectrpc.NewServer(connect.WithAuth(app))
+	apiv1connect.RegisterAuthServiceHandler(srv, connect.NewAuthServer(app, nil))
+	apiv1connect.RegisterInstanceServiceHandler(srv, connect.NewInstanceServer(app))
+	apiv1connect.RegisterUserServiceHandler(srv, connect.NewUserServer(app))
+
+	connectMux := http.NewServeMux()
+	connecthttp.Mount(connectMux, srv)
+	connect.SetConnectMux(connectMux)
+	t.Cleanup(func() { connect.SetConnectMux(nil) })
+
+	// Create a real user.
+	users, err := app.FindCollectionByNameOrId("users")
+	require.NoError(t, err)
+	rec := core.NewRecord(users)
+	rec.Set("username", "moe")
+	rec.Set("email", "moe@example.com")
+	rec.Set("password", "passw0rd!")
+	require.NoError(t, app.Save(rec))
+
+	// Mint a raw PAT and persist a bcrypt hash, the
+	// same shape the production lifecycle uses. The
+	// raw token is what a V1 client would paste into
+	// the MoeMemos server URL config.
+	patRaw, perr := random.String(24)
+	require.NoError(t, perr)
+	pat := "memos_pat_" + patRaw
+	patHash, perr := bcrypt.GenerateFromPassword([]byte(pat), bcrypt.MinCost)
+	require.NoError(t, perr)
+	pats, perr := app.FindCollectionByNameOrId("personal_access_tokens")
+	require.NoError(t, perr)
+	patRec := core.NewRecord(pats)
+	patRec.Set("user", rec.Id)
+	patRec.Set("description", "MoeMemos boot regression")
+	patRec.Set("token_hash", string(patHash))
+	require.NoError(t, app.Save(patRec))
+
+	// Mount the V1 routes on a real router.
+	r := router.NewRouter[*core.RequestEvent](eventFactoryFor(app))
+	mountUpstreamMemosV1Routes(r, app, nil)
+	mux, err := r.BuildMux()
+	require.NoError(t, err)
+
+	// 1. GET /api/v1/instance/profile (no auth) must
+	//    answer 200 application/json, not the SPA
+	//    catch-all 200 text/html that breaks the
+	//    V1 client codec. The V1 client decodes
+	//    the response into MemosProfile(val version:
+	//    String); `version` must be present and a
+	//    string so kotlinx.serialization accepts it.
+	req1 := httptest.NewRequest(http.MethodGet, "/api/v1/instance/profile", nil)
+	w1 := httptest.NewRecorder()
+	mux.ServeHTTP(w1, req1)
+	require.Equal(t, http.StatusOK, w1.Code,
+		"V1 instance/profile must answer 200")
+	require.Equal(t, "application/json", w1.Header().Get("Content-Type"),
+		"V1 instance/profile must answer application/json, not text/html")
+	var profileBody map[string]any
+	require.NoError(t, json.Unmarshal(w1.Body.Bytes(), &profileBody),
+		"V1 instance/profile body must be valid JSON: %s", w1.Body.String())
+	_, hasVersion := profileBody["version"]
+	assert.True(t, hasVersion,
+		"V1 instance/profile must include a 'version' field (MemosProfile.version): body=%v", profileBody)
+
+	// 2. GET /api/v1/instance/profile with the PAT.
+	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/instance/profile", nil)
+	req2.Header.Set("Authorization", "Bearer "+pat)
+	w2 := httptest.NewRecorder()
+	mux.ServeHTTP(w2, req2)
+	require.Equal(t, http.StatusOK, w2.Code,
+		"V1 instance/profile must answer 200 for a PAT-bearing client")
+	require.Equal(t, "application/json", w2.Header().Get("Content-Type"),
+		"V1 instance/profile must answer application/json for a PAT-bearing client")
+
+	// 3. GET /api/v1/auth/me with the PAT, the first
+	//    call MoeMemos issues after the version probe.
+	//    The V1 client decodes the response into
+	//    GetCurrentUserResponse(val user: MemosV1User?)
+	//    and bails if user is null. The proto handler
+	//    must resolve the PAT to the owner record.
+	req3 := httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
+	req3.Header.Set("Authorization", "Bearer "+pat)
+	w3 := httptest.NewRecorder()
+	mux.ServeHTTP(w3, req3)
+	require.Equal(t, http.StatusOK, w3.Code,
+		"V1 auth/me must answer 200 for a PAT-bearing client")
+	require.Equal(t, "application/json", w3.Header().Get("Content-Type"),
+		"V1 auth/me must answer application/json")
+	var meBody map[string]any
+	require.NoError(t, json.Unmarshal(w3.Body.Bytes(), &meBody),
+		"V1 auth/me body must be valid JSON: %s", w3.Body.String())
+	meUser, ok := meBody["user"].(map[string]any)
+	require.True(t, ok,
+		"auth/me must include a non-null 'user' object (MoeMemos treats null as a parse error): body=%v", meBody)
+	assert.Equal(t, "moe", meUser["username"],
+		"auth/me must return the PAT owner's username")
+	// MemosV1Api.getUser @GET("api/v1/users/{id}") reads
+	// `name`; the proto User is keyed on `name` and the
+	// converter must populate it for the V1 client to
+	// build follow-up request paths.
+	assert.NotEmpty(t, meUser["name"],
+		"auth/me user must include a 'name' field (MemosV1Api.getUser reads it): user=%v", meUser)
 }
 
 // TestCoerceIntToString, TestV0LookupUsername_CachesEmpty,

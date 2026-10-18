@@ -62,7 +62,7 @@ import (
 // ratelimit.go) and attaches a Route.BindFunc(RateLimit(...)) for every
 // procedure that has a row.
 func Register(app core.App, limiter ratelimit.Limiter) error {
-	srv := connect.NewServer(withAuth(app))
+	srv := connect.NewServer(WithAuth(app))
 
 	// Implemented services.
 	apiv1connect.RegisterAuthServiceHandler(srv, NewAuthServer(app, limiter))
@@ -144,7 +144,7 @@ func registerConnectRoutes(srv *connect.Server, mux *http.ServeMux, r *router.Ro
 	}
 }
 
-// withAuth is a server-side interceptor that authenticates the
+// WithAuth is a server-side interceptor that authenticates the
 // caller via a Bearer token and stashes the *core.Record in
 // the context. Handlers retrieve the current user via
 // CurrentUser(ctx).
@@ -175,7 +175,7 @@ func registerConnectRoutes(srv *connect.Server, mux *http.ServeMux, r *router.Ro
 // does. Errors from the PAT branch are swallowed: the contract is
 // "wrong/expired/revoked token == anonymous", so a 401 is
 // produced one layer up by the per-procedure CurrentUser guard.
-func withAuth(app core.App) connect.ServerInterceptor {
+func WithAuth(app core.App) connect.ServerInterceptor {
 	return func(next connect.ServerFunc) connect.ServerFunc {
 		return connect.ServerFunc(func(ctx context.Context, spec connect.Spec, stream connect.ServerStream) error {
 			if info, ok := connect.CallInfoForServerContext(ctx); ok {

@@ -36,7 +36,7 @@ import (
 func newAuthedConnectServer(t *testing.T, app core.App) *httptest.Server {
 	t.Helper()
 
-	srv := connect.NewServer(withAuth(app))
+	srv := connect.NewServer(WithAuth(app))
 	apiv1connect.RegisterAuthServiceHandler(srv, NewAuthServer(app, nil))
 
 	mux := http.NewServeMux()

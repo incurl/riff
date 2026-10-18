@@ -127,7 +127,7 @@ func TestWithAuth_ResolvesBearerToken(t *testing.T) {
 	token, err := alice.NewAuthToken()
 	require.NoError(t, err)
 
-	srv := connect.NewServer(withAuth(app))
+	srv := connect.NewServer(WithAuth(app))
 	apiv1connect.RegisterSpaceServiceHandler(srv, NewSpaceServer(app))
 
 	mux := http.NewServeMux()

@@ -36,7 +36,7 @@ import (
 // The returned mux is the stdlib http.Handler the registered routes
 // dispatch into.
 func connectRegisterForTest(app core.App, limiter ratelimit.Limiter) (http.Handler, error) {
-	srv := connect.NewServer(withAuth(app))
+	srv := connect.NewServer(WithAuth(app))
 	apiv1connect.RegisterAuthServiceHandler(srv, NewAuthServer(app, limiter))
 	apiv1connect.RegisterUserServiceHandler(srv, NewUserServer(app))
 	apiv1connect.RegisterSpaceServiceHandler(srv, NewSpaceServer(app))

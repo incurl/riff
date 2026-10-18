@@ -1,8 +1,12 @@
 # Legacy Memos REST surface at `/api/v1/...`
 
-Status: **implemented** (2026-10-18; V0 client
-support removed 2026-10-18 in the same slice —
-see DECISIONS.md).
+Status: **implemented** (V1 dialect 2026-10-18;
+V0 dialect restored 2026-10-19 after the
+2026-10-18 removal was observed to break the
+MoeMemos boot path on the community
+deployment — see DECISIONS.md, 2026-10-19
+"Restore the V0 (Memos 0.21) surface for the
+MoeMemos client").
 
 ## Problem
 
@@ -19,20 +23,39 @@ OpenAPI. Without the prefix, the mobile clients
 fall through to the SPA webview path; with it,
 they get the native client experience.
 
-The supported dialect is **V1 (Memos 0.27–0.31)**,
-which is the current MoeMemos build. Resource-name
-identity (e.g. `users/alice`, `memos/abc`,
-`attachments/xyz`), wrapped request bodies
-(`CreateMemoRequest{memo: Memo{...}}`), and the
-Google API HTTP wire format (path variables +
-`body: "memo"`-style unwraps). The V0 (Memos
-0.21) dialect is no longer supported; the singular
-`/memo`, `/resource`, `/user/me`, and `/tag` paths
-return 404. Legacy MoeMemos 0.21 builds (the
-"moememos" repo's `MemosV0Service`) are out of
-scope; the V0 MoeMemos builds have not been
-maintained since 2024 and the V1 client is the
-only one anyone is shipping.
+The supported dialects are **V1 (Memos 0.27–0.31)**
+and **V0 (Memos 0.21)**. MoeMemos is a
+**V0+V1 hybrid**: the same APK ships both
+`MemosV0Api.kt` and `MemosV1Api.kt`, and both
+sets of paths are used in the same boot. The
+2026-10-18 commit (`cc6faa5f`) removed the V0
+surface on the assumption that the V0 client
+"has not been maintained since 2024", which
+turned out to be false: the live
+`mudkipme/MoeMemosAndroid/main` branch
+(checked 2026-10-19) still ships V0. The
+2026-10-19 restoration re-mounts the V0 paths.
+
+* **V1 (Memos 0.27–0.31)** is the modern
+  resource-name dialect (`users/alice`,
+  `memos/abc`, `attachments/xyz`), wrapped
+  request bodies (`CreateMemoRequest{memo:
+  Memo{...}}`), and the Google API HTTP wire
+  format (path variables + `body: "memo"`-style
+  unwraps). Implemented in
+  `pb/api/upstream_memos_v1_rest.go`.
+* **V0 (Memos 0.21)** is the legacy
+  numeric-`Long`-id dialect, with top-level
+  array list responses, multipart upload,
+  `rowStatus` / `visibility` strings, and the
+  `MemosV0User` / `MemosV0Memo` /
+  `MemosV0Resource` flat shapes. Implemented
+  in `pb/api/upstream_memos_v0_rest.go`. The
+  V0 client makes these calls regardless of
+  the `GET /api/v1/status` probe result; the
+  version-probe response is only used by the
+  V0 client to decide whether to attempt the
+  V1 upgrade.
 
 The connect handler is the single source of truth
 for the business logic; the wire-shape
@@ -80,6 +103,106 @@ The full route table is 28 rows. Every row has a
 The route-table file documents the per-row
 Flavor and Builder; see
 `pb/api/upstream_memos_v1_rest.go`.
+
+## V0 (Memos 0.21) surface
+
+The V0 surface is registered by
+`mountUpstreamMemosV0Routes` immediately after
+the V1 mount in `pb/api/api.go::Register`. The
+two tables share the `/api/v1/...` path space
+but do not overlap (the V0 `/memo` is singular;
+the V1 `/memos` is plural). The V0 surface is
+**11 routes** (5 reads, 6 writes):
+
+| Method | Path                          | Builder             |
+| ------ | ----------------------------- | ------------------- |
+| GET    | `/api/v1/user/me`             | `v0_user_me`        |
+| GET    | `/api/v1/memo`                | `v0_memo_list`      |
+| GET    | `/api/v1/memo/all`            | `v0_memo_all_list`  |
+| POST   | `/api/v1/memo`                | `v0_memo_create`    |
+| POST   | `/api/v1/memo/{id}/organizer` | `v0_memo_organizer` |
+| PATCH  | `/api/v1/memo/{id}`           | `v0_memo_patch`     |
+| DELETE | `/api/v1/memo/{id}`           | `v0_memo_delete`    |
+| GET    | `/api/v1/resource`            | `v0_resource_list`  |
+| POST   | `/api/v1/resource/blob`       | `v0_resource_upload`|
+| DELETE | `/api/v1/resource/{id}`       | `v0_resource_delete`|
+| GET    | `/api/v1/tag`                 | `v0_tag_list`       |
+
+Every V0 path goes through the `custom` flavor
+and a per-handler shape converter in
+`upstream_memos_v0_convert.go`. The convert
+file is split into two halves:
+
+* **Request-side wrappers** —
+  `v0MemoListToV1ListMemos`,
+  `v0MemoCreateToV1CreateMemo`,
+  `v0MemoOrganizerToV1UpdateMemo`,
+  `v0MemoPatchToV1UpdateMemo`,
+  `v0MemoDeleteToV1DeleteMemo`,
+  `v0ResourceListToV1ListAttachments`. Each
+  takes the V0 body / query / path and produces
+  a V1 connect request body. The shapers
+  translate V0 visibility strings to the V1
+  enum, rename V0 `rowStatus` to V1 `state`,
+  inject the V1 resource name from the URL
+  path, and compute the V1 `update_mask` from
+  the V0 PATCH body fields.
+* **Response-side shapers** — `v0ShapeUser`,
+  `v0ShapeMemoList`, `v0ShapeMemo`,
+  `v0ShapeResource`, `v0ShapeResourceList`,
+  `v0ShapeTagList`. Each takes a V1 connect
+  response body and emits a V0 wire shape:
+  flat objects, numeric `Long` ids, top-level
+  array lists, `rowStatus` strings, and
+  flat seconds-since-epoch timestamps.
+
+### V0 id projection
+
+The V0 client uses numeric `Long` ids
+everywhere; the V1 connect handler uses
+15-char PocketBase `memos.id` strings. The V0
+id is **derived from** the V1 id, not stored:
+`v0IDFromV1` truncates the first 14 hex digits
+of the V1 id and parses them as `uint64`. A
+14-hex-digit number is at most
+`0xFFFFFFFFFFFF` (~2.8e13), which is well
+within `Long.MAX_VALUE` (9.2e18) and survives
+Kotlin's `Long` codec. For V1 ids that
+contain lowercase letters (PocketBase's
+default), the helper falls back to an FNV-1a
+hash of the full id — the projection is
+stable, and the birthday collision threshold
+is well beyond any single-instance memos
+collection.
+
+The V0 PATCH/DELETE/organizer handlers
+translate the V0 Long id in the URL path to a
+V1 resource name via `v0ResolveMemoName` (and
+`v0ResolveAttachmentName` for resources). The
+resolver lists the caller's memos / attachments
+and matches by V0 id; the cost is one
+`ListMemos` round trip per write. PocketBase's
+`http.Request.Context()` is per-request, so a
+per-request V0↔V1 id map stashed on the context
+(built by the V0 list handler) is best-effort;
+the resolver's list-and-match is the
+authoritative path.
+
+### Stub memos for V0 resource upload
+
+The V1 `UploadAttachment.spec.attachment.memo`
+field is required (the `attachments.memo`
+column is `NOT NULL`). The V0 client uploads
+without a memo, so the V0 upload handler
+creates a hidden stub memo first and uploads
+against it. The stub has the
+zero-width-space sentinel content `\u200b` and
+PRIVATE visibility. The V0 list shaper
+(`v0ShapeMemoList` → `isV0StubMemo`) filters
+stubs out, so the V0 client never sees them.
+The V1 client sees the stubs (they're real
+memos from its perspective); a future
+"delete stubs" sweep is a one-liner.
 
 ## Body wraps
 

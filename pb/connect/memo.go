@@ -219,6 +219,21 @@ func (s *MemoServer) UpdateMemo(ctx context.Context, req *v1.UpdateMemoRequest) 
 			rec.Set("visibility", v)
 		}
 	}
+	// `pinned` is in the V0 (Memos 0.21)
+	// organizer path; the V0 client
+	// toggles it via
+	// `POST /api/v1/memo/{id}/organizer`.
+	// The V1 connect handler used to drop
+	// it on the floor; the V0 surface
+	// (see `pb/api/upstream_memos_v0_rest.go`)
+	// relies on the field being honoured
+	// here. The `memos.pinned` column is
+	// a PocketBase bool; the setter
+	// coerces JSON booleans to a real
+	// bool (see `core.Record.Set`).
+	if targets("pinned") {
+		rec.Set("pinned", req.Memo.GetPinned())
+	}
 	if targets("space") && req.Memo.Space != nil {
 		spaceID, err := resolveSpaceNameToID(s.app, req.Memo.GetSpace())
 		if err != nil {

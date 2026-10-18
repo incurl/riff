@@ -118,6 +118,25 @@ func Register(app core.App, limiter ratelimit.Limiter) {
 		// (`v1_user_stats`).
 		mountUpstreamMemosV1Routes(e.Router, app, limiter)
 
+		// Legacy Memos REST surface at /api/v1/...:
+		// the V0 (Memos 0.21) dialect that the
+		// MoeMemos client (a V0+V1 hybrid) still
+		// uses for its primary memo + resource
+		// CRUD. The V0 path is registered AFTER
+		// the V1 table so V1 specific paths win
+		// any overlap (in practice they don't
+		// overlap — the V0 `/memo` is singular,
+		// the V1 `/memos` is plural). The V0
+		// handlers go through the `custom` flavor
+		// and shape the V1 connect response into
+		// the V0 wire format (numeric Long ids,
+		// top-level array lists, `rowStatus` /
+		// `visibility` strings). See
+		// upstream_memos_v0_rest.go for the
+		// table and upstream_memos_v0_convert.go
+		// for the shape helpers.
+		mountUpstreamMemosV0Routes(e.Router, app, limiter)
+
 		_ = limiter // see the comment on Register
 
 		return e.Next()

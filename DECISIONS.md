@@ -5,6 +5,209 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## `/api/v1/status` advertises V0 (`0.21.0`) so the MoeMemos V0 surface is selected, not the V1 fallback (2026-10-19)
+
+After the V0 dispatch-helper fix below shipped, the Android MoeMemos
+hybrid APK booted against the live deployment — but the iOS MoeMemos
+hybrid app (same `mudkipme` author, same `MemosV0Service` +
+`MemosV1Service` hybrid shape, the canonical 0.21.0 / 0.27.0-0.31.0
+client) still hit "data couldn't be read" on boot. The two apps read
+`GET /api/v1/status` differently, and the previous wire-format choice
+was wrong for the iOS one.
+
+**The version-probe contract.** `mudkipme/MoeMemos/Packages/MemoData/
+Sources/MemoData/AccountUtils.swift::detectMemosVersion` (and the
+matching Kotlin on Android) is the **first** call on every login:
+
+```swift
+let v0Status = try? await v0Service.getStatus()
+if let version = v0Status?.profile?.version, !version.isEmpty {
+    return .v0(version: version)   // non-empty → V0 client
+}
+// fall through to V1 probe
+let v1Profile = try await v1Service.getWorkspaceProfile()
+```
+
+`v1StatusHandler` was returning `version: ""` with a comment that
+claimed "We always return an empty version so the V1 client is
+selected." That comment was written when the V0 surface did not yet
+exist; once the V0 restore landed (entry below) the comment is stale
+and the behaviour is actively wrong for the iOS app — every
+iOS MoeMemos boot was being pushed into the V1 fallback path.
+
+**The V1 fallback path is not wired up.** The V1 fallback calls
+`GET /api/v1/workspace/profile` (V1 REST shape, not the connect path).
+The live probe at `ravine.fly.dev/community/api/v1/workspace/profile`
+returns the SPA HTML (200, `text/html`) because no V1 REST route for
+that path is registered. So an empty `version` does not just route the
+client to V1 — it routes the client to a V1 surface that does not
+answer, and `kotlinx.serialization` / `Codable` (Swift) surfaces the
+HTML as "data couldn't be read." The `memos.api.v1.WorkspaceService/
+GetWorkspaceProfile` connect path also returns the SPA HTML because
+no PocketBase route is mounted at that path; the V1 connect
+procedures are registered at their canonical path
+(`/memos.api.v1.WorkspaceService/GetWorkspaceProfile`) but a reverse
+proxy in front that strips path prefixes can break that — and our
+caddy does not strip. (See `pb/connect/connect.go::registerConnectRoutes`
+for the procedure path registration.)
+
+**The fix.** Change the version string to `"0.21.0"`. The iOS app now
+sees a non-empty version, picks `MemosV0Service`, and the V0 surface
+— the same one Android MoeMemos has been using successfully since the
+prior entry — answers the rest of the boot path. The 11 V0 routes
+in `pb/api/upstream_memos_v0_rest.go` (user/me, memo, memo/all,
+resource, tag, memo POST, memo PATCH, memo DELETE, memo/{id}/
+organizer, resource/blob, resource/{id} DELETE) cover the full
+MoeMemos V0 boot sequence and are verified end-to-end by
+`TestV0PatPath_MoeMemosBoot`. The `mode` field is kept at `"prod"`
+(per the iOS OpenAPI's `Profile.mode` enum: `prod | dev | demo`).
+
+**What is NOT fixed and may bite later.** The V1 REST surface
+(`/api/v1/workspace/profile`, `/api/v1/auth/signin`, etc.) is not
+implemented; only the V1 connect procedures and the 11 V0 REST
+routes are. If a future Memos version adds a V0-incompatible
+breaking change and MoeMemos bumps its minimum Memos version, the
+fallback path will not save us. The plan when that happens is to
+extend the V1 REST route table in `pb/api/upstream_memos_v1_rest.go`
+mirroring the V0 pattern (one `custom` builder per V0 shaper pair),
+not to add a V0 surface for the new version.
+
+## V0 dispatch helper strips `Accept-Encoding: gzip` and forwards upstream error bodies itself (2026-10-19)
+
+The first V0 surface restore (entry below) wired the V0 handlers to
+the in-process connect mux via a near-clone of `connectProxyHandler`.
+The V1 path worked in production; the V0 path failed every request
+with `500 {"code":13,"message":"connect response was not JSON:
+invalid character '\\x1f' looking for beginning of value"}`. The
+`0x1f` was not a connect+proto envelope — it was the **gzip magic
+byte**.
+
+**What was actually happening on the wire.** Caddy sits in front of
+riff (`/community/*` → `127.0.0.1:8090`). Every Android MoeMemos
+request comes in with `Accept-Encoding: gzip`; caddy forwards that
+header to riff verbatim. The V0 handler cloned the inbound headers
+onto the upstream in-process request to the connect server, so the
+connect server saw `Accept-Encoding: gzip` and honoured it: the
+response body it returned was a gzip-compressed JSON envelope. The
+V0 shaper then `json.Unmarshal`'d the gzipped bytes (whose first two
+bytes are `0x1f 0x8b`) and the decoder threw "invalid character
+`\x1f`". The V1 path did not exhibit the bug because it
+`io.Copy`'d the body verbatim and let caddy handle the
+decompression — caddy saw `Content-Encoding: gzip` from the V1
+upstream and decompressed before forwarding to MoeMemos.
+
+**The fix is one line in `v0DispatchConnect`.** The helper now
+unconditionally strips the inbound `Accept-Encoding` header from
+the upstream request before dispatch:
+
+```go
+upstream.Header.Del("Accept-Encoding")
+```
+
+The connect server responds with plain JSON, the V0 shaper
+unmarshals it, and the response goes back to MoeMemos uncompressed.
+MoeMemos' Retrofit/OkHttp client handles uncompressed JSON
+transparently. A 16-byte regression test (`TestV0Dispatch_AcceptEncodingGzip`)
+sends a V0 list with `Accept-Encoding: gzip`, asserts the body
+first byte is not `0x1f`, and pins the helper behaviour so the
+regression cannot recur.
+
+**A second, related bug surfaced once the gzip fix landed.** The
+helper originally returned `(body []byte, err error)`. On a
+non-2xx upstream status, the helper wrote the connect error body
+to `e.Response` and returned `(nil, nil)` — expecting the caller
+to do nothing. Most V0 callers did `if err != nil { return err }`
+and then proceeded to `json.Unmarshal(resp, ...)` on a `nil` slice
+when the upstream was 401. The result was a 401 with the body
+`{"code":"unauthenticated","message":"no valid session"}` followed
+by `{"code":13,"message":"connect response was not JSON: unexpected
+end of JSON input"}` glued onto the same response — a malformed
+MIME body that the Kotlin client could not parse.
+
+The helper now returns `(body []byte, status int, err error)`, and
+the body is the upstream error body (also written to `e.Response`)
+on 4xx/5xx. Every V0 caller is updated to `if status >= 400 {
+return nil }` after the `err` guard; the per-request resolver
+helpers (`v0ResolveMemoName`, `v0ResolveAttachmentName`) return a
+new `errV0UpstreamNotFound` sentinel so the list-and-match loop
+bails cleanly on auth errors. The live `user/me` response is now
+a single clean 401 JSON envelope.
+
+## Restore the V0 (Memos 0.21) surface for the MoeMemos client (2026-10-19)
+
+The 2026-10-18 `cc6faa5f` commit removed the V0 (Memos 0.21) REST
+surface from `/api/v1/...` on the assumption that the V0 MoeMemos
+builds "have not been maintained since 2024". That assumption was
+wrong: the live `mudkipme/MoeMemosAndroid/main` branch (checked
+2026-10-19) still ships V0 alongside V1 — the same APK includes both
+`MemosV0Api.kt` and `MemosV1Api.kt`, and the boot path issues V0 calls
+regardless of the `GET /api/v1/status` version-probe result. The
+removal caused the community deployment's MoeMemos clients to fall
+into the SPA catch-all (V0 paths returned the 3487-byte SPA shell),
+which the kotlinx.serialization codec surfaced as "data couldn't be
+read" via the sandwich `ApiResponse.Failure.Exception`.
+
+The 2026-10-19 restoration re-mounts the V0 surface (11 routes: 5
+reads, 6 writes) in `pb/api/upstream_memos_v0_rest.go`. The V0 wire
+format is materially different from the V1 connect-handler shape:
+
+* V0 uses numeric `Long` ids throughout; V1 uses 15-char resource
+  names (`memos/abc`, `users/moe`). The V0 id is **derived from** the
+  V1 id (`v0IDFromV1` truncates the first 14 hex digits; for
+  alphanumeric ids it falls back to an FNV-1a hash of the full id),
+  not stored, so no schema migration is needed.
+* V0 list responses are top-level JSON arrays; V1 wraps lists in a
+  `ListXResponse{...}` envelope. The V0 shaper walks the V1 list and
+  emits the V0 flat shape.
+* V0 `MemosV0User.name` is the *display name*, not a V1 resource
+  name. The shaper maps the V1 `User.display_name` field to V0
+  `name`, the V1 `User.username` to V0 `username`, and the V1
+  resource name to a derived numeric `id: Long`.
+* V0 PATCH bodies echo the numeric `id`; the V1 PATCH uses a
+  path-injected `name` and an `update_mask`. The V0 shaper strips
+  the redundant `id`, translates `rowStatus` to V1 `state`, and
+  computes the V1 `update_mask` from the populated fields.
+* V0 `POST /api/v1/resource/blob` is a `multipart/form-data` upload
+  with a single `file` part. The V1 chunked `UploadAttachment`
+  procedure is the only upload path the connect handler exposes; the
+  V0 handler drives it directly with a single
+  `spec + data + finish_write` call (the V1 handler supports this
+  for "tiny uploads" — see `attachment_upload.go`).
+* V0 uploads have no memo. The V1 `attachments.memo` column is
+  `NOT NULL`, so the V0 handler creates a hidden **stub memo**
+  (zero-width-space sentinel content + PRIVATE visibility) and
+  uploads against it. The V0 list shaper filters stubs out via
+  `isV0StubMemo`; the V1 client sees them as real memos (a future
+  sweep is a one-liner).
+* The V0 PATCH/DELETE/organizer handlers translate the V0 Long id in
+  the URL path to a V1 resource name via `v0ResolveMemoName` (and
+  `v0ResolveAttachmentName` for resources). The resolver lists the
+  caller's memos/attachments and matches by V0 id; the cost is one
+  `ListMemos` round trip per write. A per-request context-stashed
+  V0↔V1 id map (built by the V0 list handler) is best-effort
+  (PocketBase's `http.Request.Context()` is per-request, not
+  per-connection).
+
+The V0 restore also added a `pinned` field to the V1 connect
+`UpdateMemo` handler (`pb/connect/memo.go`). The V0 organizer verb
+is `POST /api/v1/memo/{id}/organizer?pinned=true`; the V1 handler
+previously dropped `pinned` on the floor (the `update_mask` branch
+only covered `content`, `visibility`, and `space`), so without the
+addition the V0 organizer was a silent no-op. The new branch is
+gated on `targets("pinned")`; the V1 client never sets a `pinned`
+field on the `update_mask`, so the V1 path is unchanged.
+
+The new test `TestV0PatPath_MoeMemosBoot` stands up the full V0
+surface against a real PocketBase app + a real `memos_pat_*` PAT
+and walks the exact boot sequence the live MoeMemos client uses
+(user/me → memo list → resource list → tag list → memo create →
+memo patch → memo organizer → resource upload → resource delete →
+memo delete). The test ends with a V1 `/api/v1/auth/me` call to
+pin the V0+V1 surface coexistence: a regression on the V1 side
+(e.g. a duplicate route pattern that 404s V1 paths) is the riskiest
+possible outcome of this change, and the regression test fails
+loudly on it.
+
 ## Dockerfile apk-add probe sends `User-Agent: libfetch/2.0` to satisfy TUNA's WAF (2026-10-17)
 
 The first iteration of the apk-add mirror probe (entry immediately

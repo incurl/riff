@@ -153,23 +153,34 @@ func connectProxyWrapHandler(app core.App, procedure string, wrap bodyWrapper) f
 // ============================================================
 
 // v1StatusHandler returns the V1-shape SystemStatus
-// body. The MoeMemos client calls
-// `GET /api/v1/status` first and inspects the
-// `profile.version` field: a non-empty value triggers
-// the V0 (Memos 0.21) client, an empty one triggers
-// the V1 client. We always return an empty version
-// so the V1 client is selected.
+// body. The MoeMemos (iOS + Android) boot path calls
+// `GET /api/v1/status` first and inspects
+// `profile.version`: a non-empty value routes the
+// client to the V0 (Memos 0.21) surface, an empty
+// value routes it to the V1 (Memos 0.27-0.31)
+// surface. We always return `0.21.0` so the V0
+// client is selected — the V0 surface is fully
+// implemented (`pb/api/upstream_memos_v0_rest.go`)
+// and the iOS-app-tested V1 fallback path
+// (`/api/v1/workspace/profile`) is NOT served
+// (a V1 REST route for that path would have to be
+// added before the V1 fallback would be viable; see
+// DECISIONS.md "V0 dispatch helper strips
+// `Accept-Encoding: gzip` ..." for the wire-format
+// rationale). The V0 surface answer is verified
+// end-to-end by `TestV0PatPath_MoeMemosBoot` and by
+// the live probe at `ravine.fly.dev/community/api/v1/...`.
 //
 // The shape is:
 //
-//	{ profile: { mode: "prod" | "dev" | "demo", version: "" } }
+//	{ profile: { mode: "prod" | "dev" | "demo", version: "0.21.0" } }
 func v1StatusHandler(app core.App) func(*core.RequestEvent) error {
 	return func(e *core.RequestEvent) error {
 		e.Response.Header().Set("Content-Type", "application/json")
 		return e.JSON(http.StatusOK, map[string]any{
 			"profile": map[string]any{
 				"mode":    "prod",
-				"version": "",
+				"version": "0.21.0",
 			},
 		})
 	}
