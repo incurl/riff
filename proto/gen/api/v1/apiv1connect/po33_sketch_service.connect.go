@@ -33,12 +33,6 @@ const (
 	// SketchServiceArchiveSketchProcedure is the procedure name of the SketchService's ArchiveSketch
 	// RPC.
 	SketchServiceArchiveSketchProcedure = "/memos.api.v1.SketchService/ArchiveSketch"
-	// SketchServiceListSketchVersionsProcedure is the procedure name of the SketchService's
-	// ListSketchVersions RPC.
-	SketchServiceListSketchVersionsProcedure = "/memos.api.v1.SketchService/ListSketchVersions"
-	// SketchServiceGetSketchVersionProcedure is the procedure name of the SketchService's
-	// GetSketchVersion RPC.
-	SketchServiceGetSketchVersionProcedure = "/memos.api.v1.SketchService/GetSketchVersion"
 )
 
 var (
@@ -61,20 +55,6 @@ var (
 			StreamType: connect.StreamTypeUnary,
 			Schema:     v1.File_api_v1_po33_sketch_service_proto.Services().ByName("SketchService").Methods().ByName("ArchiveSketch"),
 			Procedure:  SketchServiceArchiveSketchProcedure,
-		}
-	})
-	sketchServiceListSketchVersionsSpec = sync.OnceValue(func() connect.Spec {
-		return connect.Spec{
-			StreamType: connect.StreamTypeUnary,
-			Schema:     v1.File_api_v1_po33_sketch_service_proto.Services().ByName("SketchService").Methods().ByName("ListSketchVersions"),
-			Procedure:  SketchServiceListSketchVersionsProcedure,
-		}
-	})
-	sketchServiceGetSketchVersionSpec = sync.OnceValue(func() connect.Spec {
-		return connect.Spec{
-			StreamType: connect.StreamTypeUnary,
-			Schema:     v1.File_api_v1_po33_sketch_service_proto.Services().ByName("SketchService").Methods().ByName("GetSketchVersion"),
-			Procedure:  SketchServiceGetSketchVersionProcedure,
 		}
 	})
 )
@@ -102,32 +82,13 @@ type SketchServiceClient interface {
 	// ArchiveSketch flips a sketch memo from NORMAL
 	// to ARCHIVED. The caller must be the memo's
 	// author. The memo is removed from the SPA feed
-	// and the public search index but the row, the
-	// patches, the samples, and the sketch_versions
-	// log are preserved on disk. A re-publish is not
-	// possible; archive is one-way. Re-uploads of the
-	// same sketch create new sketch_versions rows but
-	// do not change the ARCHIVED state.
+	// and the public search index but the row and
+	// its attachments are preserved on disk. A
+	// re-publish is not possible; archive is one-way.
+	// Re-uploads of the same sketch overwrite the
+	// previous attachment blobs but do not change
+	// the ARCHIVED state.
 	ArchiveSketch(context.Context, *v1.ArchiveSketchRequest) (*v1.Memo, error)
-	// ListSketchVersions returns the append-only
-	// version log for a sketch memo. The log is
-	// immutable; the response includes every
-	// upload ever made against the memo, in
-	// received_at order. The most recent row is
-	// the version the device currently calls
-	// "current" but the server does not flag
-	// one as authoritative — the owner decides
-	// via PublishSketch which version is visible
-	// (publishing a re-upload is a separate
-	// operation in a future slice).
-	ListSketchVersions(context.Context, *v1.ListSketchVersionsRequest) (*v1.ListSketchVersionsResponse, error)
-	// GetSketchVersion returns a single immutable
-	// version row by resource name. The resource
-	// name is "memos/{memo}/versions/{version_no}".
-	// GetSketchVersion returns a single immutable
-	// version row by resource name. The resource
-	// name is "memos/{memo}/versions/{version_no}".
-	GetSketchVersion(context.Context, *v1.GetSketchVersionRequest) (*v1.SketchVersion, error)
 }
 
 // NewSketchServiceClient constructs a client for the memos.api.v1.SketchService service. Multiple
@@ -159,32 +120,13 @@ type SketchServiceHandler interface {
 	// ArchiveSketch flips a sketch memo from NORMAL
 	// to ARCHIVED. The caller must be the memo's
 	// author. The memo is removed from the SPA feed
-	// and the public search index but the row, the
-	// patches, the samples, and the sketch_versions
-	// log are preserved on disk. A re-publish is not
-	// possible; archive is one-way. Re-uploads of the
-	// same sketch create new sketch_versions rows but
-	// do not change the ARCHIVED state.
+	// and the public search index but the row and
+	// its attachments are preserved on disk. A
+	// re-publish is not possible; archive is one-way.
+	// Re-uploads of the same sketch overwrite the
+	// previous attachment blobs but do not change
+	// the ARCHIVED state.
 	ArchiveSketch(context.Context, *v1.ArchiveSketchRequest) (*v1.Memo, error)
-	// ListSketchVersions returns the append-only
-	// version log for a sketch memo. The log is
-	// immutable; the response includes every
-	// upload ever made against the memo, in
-	// received_at order. The most recent row is
-	// the version the device currently calls
-	// "current" but the server does not flag
-	// one as authoritative — the owner decides
-	// via PublishSketch which version is visible
-	// (publishing a re-upload is a separate
-	// operation in a future slice).
-	ListSketchVersions(context.Context, *v1.ListSketchVersionsRequest) (*v1.ListSketchVersionsResponse, error)
-	// GetSketchVersion returns a single immutable
-	// version row by resource name. The resource
-	// name is "memos/{memo}/versions/{version_no}".
-	// GetSketchVersion returns a single immutable
-	// version row by resource name. The resource
-	// name is "memos/{memo}/versions/{version_no}".
-	GetSketchVersion(context.Context, *v1.GetSketchVersionRequest) (*v1.SketchVersion, error)
 }
 
 // RegisterSketchServiceHandler registers svc as the memos.api.v1.SketchService implementation on
@@ -195,8 +137,6 @@ func RegisterSketchServiceHandler(server *connect.Server, svc SketchServiceHandl
 		connect.Method{Spec: sketchServiceListMySketchesSpec(), Handler: adapter.listMySketches},
 		connect.Method{Spec: sketchServicePublishSketchSpec(), Handler: adapter.publishSketch},
 		connect.Method{Spec: sketchServiceArchiveSketchSpec(), Handler: adapter.archiveSketch},
-		connect.Method{Spec: sketchServiceListSketchVersionsSpec(), Handler: adapter.listSketchVersions},
-		connect.Method{Spec: sketchServiceGetSketchVersionSpec(), Handler: adapter.getSketchVersion},
 	)
 }
 
@@ -213,14 +153,6 @@ func (UnimplementedSketchServiceHandler) PublishSketch(context.Context, *v1.Publ
 
 func (UnimplementedSketchServiceHandler) ArchiveSketch(context.Context, *v1.ArchiveSketchRequest) (*v1.Memo, error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, "memos.api.v1.SketchService.ArchiveSketch is not implemented")
-}
-
-func (UnimplementedSketchServiceHandler) ListSketchVersions(context.Context, *v1.ListSketchVersionsRequest) (*v1.ListSketchVersionsResponse, error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, "memos.api.v1.SketchService.ListSketchVersions is not implemented")
-}
-
-func (UnimplementedSketchServiceHandler) GetSketchVersion(context.Context, *v1.GetSketchVersionRequest) (*v1.SketchVersion, error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, "memos.api.v1.SketchService.GetSketchVersion is not implemented")
 }
 
 type sketchServiceClient struct {
@@ -246,22 +178,6 @@ func (c *sketchServiceClient) PublishSketch(ctx context.Context, req *v1.Publish
 func (c *sketchServiceClient) ArchiveSketch(ctx context.Context, req *v1.ArchiveSketchRequest) (*v1.Memo, error) {
 	var res v1.Memo
 	if err := c.client.CallUnary(ctx, sketchServiceArchiveSketchSpec(), req, &res); err != nil {
-		return nil, err
-	}
-	return &res, nil
-}
-
-func (c *sketchServiceClient) ListSketchVersions(ctx context.Context, req *v1.ListSketchVersionsRequest) (*v1.ListSketchVersionsResponse, error) {
-	var res v1.ListSketchVersionsResponse
-	if err := c.client.CallUnary(ctx, sketchServiceListSketchVersionsSpec(), req, &res); err != nil {
-		return nil, err
-	}
-	return &res, nil
-}
-
-func (c *sketchServiceClient) GetSketchVersion(ctx context.Context, req *v1.GetSketchVersionRequest) (*v1.SketchVersion, error) {
-	var res v1.SketchVersion
-	if err := c.client.CallUnary(ctx, sketchServiceGetSketchVersionSpec(), req, &res); err != nil {
 		return nil, err
 	}
 	return &res, nil
@@ -299,30 +215,6 @@ func (h sketchServiceHandler) archiveSketch(ctx context.Context, _ connect.Spec,
 		return err
 	}
 	res, err := h.svc.ArchiveSketch(ctx, &req)
-	if err != nil {
-		return err
-	}
-	return stream.Send(res)
-}
-
-func (h sketchServiceHandler) listSketchVersions(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
-	var req v1.ListSketchVersionsRequest
-	if err := stream.Receive(&req); err != nil {
-		return err
-	}
-	res, err := h.svc.ListSketchVersions(ctx, &req)
-	if err != nil {
-		return err
-	}
-	return stream.Send(res)
-}
-
-func (h sketchServiceHandler) getSketchVersion(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
-	var req v1.GetSketchVersionRequest
-	if err := stream.Receive(&req); err != nil {
-		return err
-	}
-	res, err := h.svc.GetSketchVersion(ctx, &req)
 	if err != nil {
 		return err
 	}

@@ -72,8 +72,6 @@ var procedureScope = map[string]ratelimit.Scope{
 	apiv1connect.SketchServiceListMySketchesProcedure:                            ratelimit.ScopeAuthenticated,
 	apiv1connect.SketchServicePublishSketchProcedure:                             ratelimit.ScopeWriteUser,
 	apiv1connect.SketchServiceArchiveSketchProcedure:                            ratelimit.ScopeWriteUser,
-	apiv1connect.SketchServiceListSketchVersionsProcedure:                       ratelimit.ScopeAuthenticated,
-	apiv1connect.SketchServiceGetSketchVersionProcedure:                         ratelimit.ScopeAuthenticated,
 	apiv1connect.AttachmentServiceCreateAttachmentProcedure:                      ratelimit.ScopeUploadUser,
 	apiv1connect.AttachmentServiceUploadAttachmentProcedure:                      ratelimit.ScopeUploadUser,
 	apiv1connect.AttachmentServiceUpdateAttachmentProcedure:                      ratelimit.ScopeUploadUser,

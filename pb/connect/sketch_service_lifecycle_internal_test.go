@@ -2,8 +2,8 @@ package connect
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
-	"time"
 
 	"connectrpc.com/connect/v2"
 	"github.com/pocketbase/pocketbase/core"
@@ -14,13 +14,19 @@ import (
 )
 
 // newDraftSketchMemo creates a memo with
-// source=sketch and state=DRAFT. The
+// `sketch` populated and state=DRAFT. The
 // sketch_service_lifecycle tests need a
 // deterministic DRAFT row to publish; the
 // production path (the device-side upload
 // handler) creates the same shape, but
 // hand-rolling it here keeps the tests
 // independent of the upload route.
+//
+// The pre-1860xxx schema used a `source` column
+// to mark a memo as a sketch; the 1860xxx
+// series dropped that column and uses the
+// presence of the `sketch` JSON column as the
+// discriminator instead.
 func newDraftSketchMemo(t *testing.T, app core.App, userID string) *core.Record {
 	t.Helper()
 	col, err := app.FindCollectionByNameOrId("memos")
@@ -29,9 +35,9 @@ func newDraftSketchMemo(t *testing.T, app core.App, userID string) *core.Record 
 	rec.Set("author", userID)
 	rec.Set("content", "sketch content")
 	rec.Set("visibility", "PRIVATE")
-	rec.Set("type", "note")
-	rec.Set("source", "sketch")
 	rec.Set("state", "DRAFT")
+	rec.Set("sketch", json.RawMessage(
+		`{"model":"PO-33","slot_count":16}`))
 	require.NoError(t, app.Save(rec))
 	return rec
 }
@@ -49,34 +55,12 @@ func newPublishedSketchMemo(t *testing.T, app core.App, userID string) *core.Rec
 	rec.Set("author", userID)
 	rec.Set("content", "sketch content")
 	rec.Set("visibility", "PRIVATE")
-	rec.Set("type", "note")
-	rec.Set("source", "sketch")
 	rec.Set("state", "NORMAL")
+	rec.Set("sketch", json.RawMessage(
+		`{"model":"PO-33","slot_count":16}`))
 	require.NoError(t, app.Save(rec))
 	return rec
 }
-
-// seedSketchVersion inserts one row into the
-// sketch_versions table directly, so the
-// ListSketchVersions tests do not depend on
-// the device upload route.
-func seedSketchVersion(t *testing.T, app core.App, memoID string, versionNo int) *core.Record {
-	t.Helper()
-	col, err := app.FindCollectionByNameOrId("sketch_versions")
-	require.NoError(t, err)
-	rec := core.NewRecord(col)
-	rec.Set("memo_id", memoID)
-	rec.Set("version_no", versionNo)
-	rec.Set("device_fingerprint", "deadbeef0000000000000000000000000000000000000000000000000000beef")
-	rec.Set("uploaded_at_unix", time.Now().Unix())
-	rec.Set("received_at", time.Now())
-	rec.Set("metadata", []byte(`{"model":"PO-33","slot_count":16,"device_fingerprint":"deadbeef"}`))
-	rec.Set("signature", "00")
-	rec.Set("signature_algorithm", "ed25519")
-	require.NoError(t, app.Save(rec))
-	return rec
-}
-
 
 // TestPublishSketch_NotInDraft_Fails pins the
 // "only DRAFT can be published" rule.
@@ -142,9 +126,10 @@ func TestPublishSketch_NotASketch_Fails(t *testing.T) {
 	rec.Set("author", alice.Id)
 	rec.Set("content", "regular note")
 	rec.Set("visibility", "PRIVATE")
-	rec.Set("type", "note")
-	rec.Set("source", "text")
 	rec.Set("state", "DRAFT")
+	// A text memo carries no `sketch` column,
+	// which is the 1860xxx-era sketch
+	// discriminator.
 	require.NoError(t, app.Save(rec))
 
 	_, err = srv.PublishSketch(withViewer(context.Background(), alice),
@@ -193,77 +178,4 @@ func TestArchiveSketch_AlreadyArchived_Idempotent(t *testing.T) {
 		&v1.ArchiveSketchRequest{Name: "memos/" + memo.Id})
 	require.NoError(t, err)
 	assert.Equal(t, v1.State_ARCHIVED, out.GetState())
-}
-
-// TestListSketchVersions_AppendOnly pins the
-// "the log never shrinks" invariant.
-// Even after the memo is archived, the
-// ListSketchVersions response still
-// includes every version row that ever
-// existed for the memo. The audit log is
-// independent of the memo's lifecycle.
-func TestListSketchVersions_AppendOnly(t *testing.T) {
-	app := newHookedApp(t)
-	srv := NewSketchServer(app)
-	alice := newUser(t, app, "alice")
-	// Use a NORMAL memo because the brief's
-	// archive path requires state=NORMAL.
-	// The "append-only" invariant is about
-	// the version log, not the memo state,
-	// so this test's choice of source state
-	// does not weaken what it pins.
-	memo := newPublishedSketchMemo(t, app, alice.Id)
-
-	// Three versions.
-	for i := 1; i <= 3; i++ {
-		seedSketchVersion(t, app, memo.Id, i)
-	}
-	// Archive the memo. The list response
-	// must still include all three versions.
-	_, err := srv.ArchiveSketch(withViewer(context.Background(), alice),
-		&v1.ArchiveSketchRequest{Name: "memos/" + memo.Id})
-	require.NoError(t, err)
-
-	out, err := srv.ListSketchVersions(withViewer(context.Background(), alice),
-		&v1.ListSketchVersionsRequest{Parent: "memos/" + memo.Id})
-	require.NoError(t, err)
-	require.Len(t, out.Versions, 3)
-	assert.Equal(t, int32(1), out.Versions[0].GetVersionNo())
-	assert.Equal(t, int32(2), out.Versions[1].GetVersionNo())
-	assert.Equal(t, int32(3), out.Versions[2].GetVersionNo())
-	for i, v := range out.Versions {
-		assert.Equal(t, "memos/"+memo.Id, v.GetMemo())
-		assert.Equal(t,
-			"memos/"+memo.Id+"/versions/"+itoaForTest(int32(i+1)),
-			v.GetName())
-	}
-}
-
-// itoaForTest is a local forwarder of the
-// resource-name version renderer. The
-// production helper is in
-// sketch_service_lifecycle.go; the test
-// file uses the same name so the
-// expected resource names are
-// byte-identical to what the handler
-// emits.
-func itoaForTest(n int32) string {
-	return itoa(n)
-}
-
-// TestGetSketchVersion_NotFound pins the
-// "version row that does not exist gets
-// NotFound" rule. A non-existent
-// (memo_id, version_no) pair returns
-// 404 even when the parent memo is real.
-func TestGetSketchVersion_NotFound(t *testing.T) {
-	app := newHookedApp(t)
-	srv := NewSketchServer(app)
-	alice := newUser(t, app, "alice")
-	memo := newDraftSketchMemo(t, app, alice.Id)
-
-	_, err := srv.GetSketchVersion(withViewer(context.Background(), alice),
-		&v1.GetSketchVersionRequest{Name: "memos/" + memo.Id + "/versions/999"})
-	require.Error(t, err)
-	assert.Equal(t, connect.CodeNotFound, connect.CodeOf(err))
 }

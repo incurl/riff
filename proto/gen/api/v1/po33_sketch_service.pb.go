@@ -10,7 +10,6 @@ import (
 	_ "google.golang.org/genproto/googleapis/api/annotations"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
-	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
@@ -219,316 +218,11 @@ func (x *ArchiveSketchRequest) GetName() string {
 	return ""
 }
 
-type ListSketchVersionsRequest struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// The parent memo resource name.
-	// Format: memos/{memo}
-	Parent        string `protobuf:"bytes,1,opt,name=parent,proto3" json:"parent,omitempty"`
-	PageSize      int32  `protobuf:"varint,2,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
-	PageToken     string `protobuf:"bytes,3,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ListSketchVersionsRequest) Reset() {
-	*x = ListSketchVersionsRequest{}
-	mi := &file_api_v1_po33_sketch_service_proto_msgTypes[4]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ListSketchVersionsRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ListSketchVersionsRequest) ProtoMessage() {}
-
-func (x *ListSketchVersionsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_v1_po33_sketch_service_proto_msgTypes[4]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ListSketchVersionsRequest.ProtoReflect.Descriptor instead.
-func (*ListSketchVersionsRequest) Descriptor() ([]byte, []int) {
-	return file_api_v1_po33_sketch_service_proto_rawDescGZIP(), []int{4}
-}
-
-func (x *ListSketchVersionsRequest) GetParent() string {
-	if x != nil {
-		return x.Parent
-	}
-	return ""
-}
-
-func (x *ListSketchVersionsRequest) GetPageSize() int32 {
-	if x != nil {
-		return x.PageSize
-	}
-	return 0
-}
-
-func (x *ListSketchVersionsRequest) GetPageToken() string {
-	if x != nil {
-		return x.PageToken
-	}
-	return ""
-}
-
-type ListSketchVersionsResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Versions      []*SketchVersion       `protobuf:"bytes,1,rep,name=versions,proto3" json:"versions,omitempty"`
-	NextPageToken string                 `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ListSketchVersionsResponse) Reset() {
-	*x = ListSketchVersionsResponse{}
-	mi := &file_api_v1_po33_sketch_service_proto_msgTypes[5]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ListSketchVersionsResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ListSketchVersionsResponse) ProtoMessage() {}
-
-func (x *ListSketchVersionsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_v1_po33_sketch_service_proto_msgTypes[5]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ListSketchVersionsResponse.ProtoReflect.Descriptor instead.
-func (*ListSketchVersionsResponse) Descriptor() ([]byte, []int) {
-	return file_api_v1_po33_sketch_service_proto_rawDescGZIP(), []int{5}
-}
-
-func (x *ListSketchVersionsResponse) GetVersions() []*SketchVersion {
-	if x != nil {
-		return x.Versions
-	}
-	return nil
-}
-
-func (x *ListSketchVersionsResponse) GetNextPageToken() string {
-	if x != nil {
-		return x.NextPageToken
-	}
-	return ""
-}
-
-type GetSketchVersionRequest struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// The resource name of the version to fetch.
-	// Format: memos/{memo}/versions/{version_no}
-	Name          string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *GetSketchVersionRequest) Reset() {
-	*x = GetSketchVersionRequest{}
-	mi := &file_api_v1_po33_sketch_service_proto_msgTypes[6]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *GetSketchVersionRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*GetSketchVersionRequest) ProtoMessage() {}
-
-func (x *GetSketchVersionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_v1_po33_sketch_service_proto_msgTypes[6]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use GetSketchVersionRequest.ProtoReflect.Descriptor instead.
-func (*GetSketchVersionRequest) Descriptor() ([]byte, []int) {
-	return file_api_v1_po33_sketch_service_proto_rawDescGZIP(), []int{6}
-}
-
-func (x *GetSketchVersionRequest) GetName() string {
-	if x != nil {
-		return x.Name
-	}
-	return ""
-}
-
-// SketchVersion is one row of the append-only
-// audit log a sketch memo accumulates. Every
-// device upload inserts one row. The log never
-// updates and never deletes; the "current"
-// version is the row with the largest
-// version_no.
-//
-// Format: memos/{memo}/versions/{version_no}
-type SketchVersion struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	Name  string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	// The parent memo resource name.
-	// Format: memos/{memo}
-	Memo string `protobuf:"bytes,2,opt,name=memo,proto3" json:"memo,omitempty"`
-	// The monotonic per-memo version number, starting at 1.
-	VersionNo int32 `protobuf:"varint,3,opt,name=version_no,json=versionNo,proto3" json:"version_no,omitempty"`
-	// The hex SHA-256 of the device's Ed25519 public key,
-	// exactly the value the device's pairing screen showed
-	// at pairing time. The same fingerprint is also
-	// copied onto the patches and samples rows for fast
-	// joins; the value here is the upload-time snapshot.
-	DeviceFingerprint string `protobuf:"bytes,4,opt,name=device_fingerprint,json=deviceFingerprint,proto3" json:"device_fingerprint,omitempty"`
-	// The unix-second timestamp the device recorded at
-	// upload time. Distinct from received_at, which is
-	// the server's clock.
-	UploadedAtUnix int64 `protobuf:"varint,5,opt,name=uploaded_at_unix,json=uploadedAtUnix,proto3" json:"uploaded_at_unix,omitempty"`
-	// The server-side timestamp the row was inserted.
-	ReceivedAt *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=received_at,json=receivedAt,proto3" json:"received_at,omitempty"`
-	// The PocketBase `patches` row id holding the .p33 patch blob.
-	PatchKey string `protobuf:"bytes,7,opt,name=patch_key,json=patchKey,proto3" json:"patch_key,omitempty"`
-	// The PocketBase `samples` row ids holding the per-slot .wav blobs.
-	// Empty when the device uploaded a patch-only sketch.
-	SampleKeys []string `protobuf:"bytes,8,rep,name=sample_keys,json=sampleKeys,proto3" json:"sample_keys,omitempty"`
-	// The PocketBase `patches` row id holding the .bkp
-	// tarball, when the device emitted one. Empty when
-	// the upload was tarball-less.
-	BackupKey string `protobuf:"bytes,9,opt,name=backup_key,json=backupKey,proto3" json:"backup_key,omitempty"`
-	// The signature algorithm pinned for this row. Today
-	// always "ed25519"; the field is forward-compatibility
-	// for a future post-quantum migration.
-	SignatureAlgorithm string `protobuf:"bytes,10,opt,name=signature_algorithm,json=signatureAlgorithm,proto3" json:"signature_algorithm,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
-}
-
-func (x *SketchVersion) Reset() {
-	*x = SketchVersion{}
-	mi := &file_api_v1_po33_sketch_service_proto_msgTypes[7]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *SketchVersion) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*SketchVersion) ProtoMessage() {}
-
-func (x *SketchVersion) ProtoReflect() protoreflect.Message {
-	mi := &file_api_v1_po33_sketch_service_proto_msgTypes[7]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use SketchVersion.ProtoReflect.Descriptor instead.
-func (*SketchVersion) Descriptor() ([]byte, []int) {
-	return file_api_v1_po33_sketch_service_proto_rawDescGZIP(), []int{7}
-}
-
-func (x *SketchVersion) GetName() string {
-	if x != nil {
-		return x.Name
-	}
-	return ""
-}
-
-func (x *SketchVersion) GetMemo() string {
-	if x != nil {
-		return x.Memo
-	}
-	return ""
-}
-
-func (x *SketchVersion) GetVersionNo() int32 {
-	if x != nil {
-		return x.VersionNo
-	}
-	return 0
-}
-
-func (x *SketchVersion) GetDeviceFingerprint() string {
-	if x != nil {
-		return x.DeviceFingerprint
-	}
-	return ""
-}
-
-func (x *SketchVersion) GetUploadedAtUnix() int64 {
-	if x != nil {
-		return x.UploadedAtUnix
-	}
-	return 0
-}
-
-func (x *SketchVersion) GetReceivedAt() *timestamppb.Timestamp {
-	if x != nil {
-		return x.ReceivedAt
-	}
-	return nil
-}
-
-func (x *SketchVersion) GetPatchKey() string {
-	if x != nil {
-		return x.PatchKey
-	}
-	return ""
-}
-
-func (x *SketchVersion) GetSampleKeys() []string {
-	if x != nil {
-		return x.SampleKeys
-	}
-	return nil
-}
-
-func (x *SketchVersion) GetBackupKey() string {
-	if x != nil {
-		return x.BackupKey
-	}
-	return ""
-}
-
-func (x *SketchVersion) GetSignatureAlgorithm() string {
-	if x != nil {
-		return x.SignatureAlgorithm
-	}
-	return ""
-}
-
 var File_api_v1_po33_sketch_service_proto protoreflect.FileDescriptor
 
 const file_api_v1_po33_sketch_service_proto_rawDesc = "" +
 	"\n" +
-	" api/v1/po33_sketch_service.proto\x12\fmemos.api.v1\x1a\x19api/v1/memo_service.proto\x1a\x1cgoogle/api/annotations.proto\x1a\x17google/api/client.proto\x1a\x1fgoogle/api/field_behavior.proto\x1a\x19google/api/resource.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"]\n" +
+	" api/v1/po33_sketch_service.proto\x12\fmemos.api.v1\x1a\x19api/v1/memo_service.proto\x1a\x1cgoogle/api/annotations.proto\x1a\x17google/api/client.proto\x1a\x1fgoogle/api/field_behavior.proto\x1a\x19google/api/resource.proto\"]\n" +
 	"\x15ListMySketchesRequest\x12 \n" +
 	"\tpage_size\x18\x01 \x01(\x05B\x03\xe0A\x01R\bpageSize\x12\"\n" +
 	"\n" +
@@ -541,43 +235,11 @@ const file_api_v1_po33_sketch_service_proto_rawDesc = "" +
 	"\x11memos.api.v1/MemoR\x04name\"E\n" +
 	"\x14ArchiveSketchRequest\x12-\n" +
 	"\x04name\x18\x01 \x01(\tB\x19\xe0A\x02\xfaA\x13\n" +
-	"\x11memos.api.v1/MemoR\x04name\"\x94\x01\n" +
-	"\x19ListSketchVersionsRequest\x121\n" +
-	"\x06parent\x18\x01 \x01(\tB\x19\xe0A\x02\xfaA\x13\n" +
-	"\x11memos.api.v1/MemoR\x06parent\x12 \n" +
-	"\tpage_size\x18\x02 \x01(\x05B\x03\xe0A\x01R\bpageSize\x12\"\n" +
-	"\n" +
-	"page_token\x18\x03 \x01(\tB\x03\xe0A\x01R\tpageToken\"}\n" +
-	"\x1aListSketchVersionsResponse\x127\n" +
-	"\bversions\x18\x01 \x03(\v2\x1b.memos.api.v1.SketchVersionR\bversions\x12&\n" +
-	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"Q\n" +
-	"\x17GetSketchVersionRequest\x126\n" +
-	"\x04name\x18\x01 \x01(\tB\"\xe0A\x02\xfaA\x1c\n" +
-	"\x1amemos.api.v1/SketchVersionR\x04name\"\xab\x04\n" +
-	"\rSketchVersion\x12\x17\n" +
-	"\x04name\x18\x01 \x01(\tB\x03\xe0A\bR\x04name\x12-\n" +
-	"\x04memo\x18\x02 \x01(\tB\x19\xe0A\x03\xfaA\x13\n" +
-	"\x11memos.api.v1/MemoR\x04memo\x12\"\n" +
-	"\n" +
-	"version_no\x18\x03 \x01(\x05B\x03\xe0A\x03R\tversionNo\x122\n" +
-	"\x12device_fingerprint\x18\x04 \x01(\tB\x03\xe0A\x03R\x11deviceFingerprint\x12-\n" +
-	"\x10uploaded_at_unix\x18\x05 \x01(\x03B\x03\xe0A\x03R\x0euploadedAtUnix\x12@\n" +
-	"\vreceived_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampB\x03\xe0A\x03R\n" +
-	"receivedAt\x12 \n" +
-	"\tpatch_key\x18\a \x01(\tB\x03\xe0A\x03R\bpatchKey\x12$\n" +
-	"\vsample_keys\x18\b \x03(\tB\x03\xe0A\x03R\n" +
-	"sampleKeys\x12\"\n" +
-	"\n" +
-	"backup_key\x18\t \x01(\tB\x03\xe0A\x03R\tbackupKey\x124\n" +
-	"\x13signature_algorithm\x18\n" +
-	" \x01(\tB\x03\xe0A\x03R\x12signatureAlgorithm:g\xeaAd\n" +
-	"\x1amemos.api.v1/SketchVersion\x12\x1fmemos/{memo}/versions/{version}\x1a\x04name*\x0fsketch_versions2\x0esketch_version2\xa1\x05\n" +
+	"\x11memos.api.v1/MemoR\x04name2\x81\x03\n" +
 	"\rSketchService\x12z\n" +
 	"\x0eListMySketches\x12#.memos.api.v1.ListMySketchesRequest\x1a$.memos.api.v1.ListMySketchesResponse\"\x1d\x82\xd3\xe4\x93\x02\x17\x12\x15/api/v1/po33/sketches\x12y\n" +
 	"\rPublishSketch\x12\".memos.api.v1.PublishSketchRequest\x1a\x12.memos.api.v1.Memo\"0\xdaA\x04name\x82\xd3\xe4\x93\x02#:\x01*\"\x1e/api/v1/{name=memos/*}:publish\x12y\n" +
-	"\rArchiveSketch\x12\".memos.api.v1.ArchiveSketchRequest\x1a\x12.memos.api.v1.Memo\"0\xdaA\x04name\x82\xd3\xe4\x93\x02#:\x01*\"\x1e/api/v1/{name=memos/*}:archive\x12\x92\x01\n" +
-	"\x12ListSketchVersions\x12'.memos.api.v1.ListSketchVersionsRequest\x1a(.memos.api.v1.ListSketchVersionsResponse\")\x82\xd3\xe4\x93\x02#\x12!/api/v1/{parent=memos/*}/versions\x12\x88\x01\n" +
-	"\x10GetSketchVersion\x12%.memos.api.v1.GetSketchVersionRequest\x1a\x1b.memos.api.v1.SketchVersion\"0\xdaA\x04name\x82\xd3\xe4\x93\x02#\x12!/api/v1/{name=memos/*/versions/*}B\xab\x01\n" +
+	"\rArchiveSketch\x12\".memos.api.v1.ArchiveSketchRequest\x1a\x12.memos.api.v1.Memo\"0\xdaA\x04name\x82\xd3\xe4\x93\x02#:\x01*\"\x1e/api/v1/{name=memos/*}:archiveB\xab\x01\n" +
 	"\x10com.memos.api.v1B\x16Po33SketchServiceProtoP\x01Z-github.com/incurl/riff/proto/gen/api/v1;apiv1\xa2\x02\x03MAX\xaa\x02\fMemos.Api.V1\xca\x02\fMemos\\Api\\V1\xe2\x02\x18Memos\\Api\\V1\\GPBMetadata\xea\x02\x0eMemos::Api::V1b\x06proto3"
 
 var (
@@ -592,38 +254,27 @@ func file_api_v1_po33_sketch_service_proto_rawDescGZIP() []byte {
 	return file_api_v1_po33_sketch_service_proto_rawDescData
 }
 
-var file_api_v1_po33_sketch_service_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_api_v1_po33_sketch_service_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
 var file_api_v1_po33_sketch_service_proto_goTypes = []any{
-	(*ListMySketchesRequest)(nil),      // 0: memos.api.v1.ListMySketchesRequest
-	(*ListMySketchesResponse)(nil),     // 1: memos.api.v1.ListMySketchesResponse
-	(*PublishSketchRequest)(nil),       // 2: memos.api.v1.PublishSketchRequest
-	(*ArchiveSketchRequest)(nil),       // 3: memos.api.v1.ArchiveSketchRequest
-	(*ListSketchVersionsRequest)(nil),  // 4: memos.api.v1.ListSketchVersionsRequest
-	(*ListSketchVersionsResponse)(nil), // 5: memos.api.v1.ListSketchVersionsResponse
-	(*GetSketchVersionRequest)(nil),    // 6: memos.api.v1.GetSketchVersionRequest
-	(*SketchVersion)(nil),              // 7: memos.api.v1.SketchVersion
-	(*Memo)(nil),                       // 8: memos.api.v1.Memo
-	(*timestamppb.Timestamp)(nil),      // 9: google.protobuf.Timestamp
+	(*ListMySketchesRequest)(nil),  // 0: memos.api.v1.ListMySketchesRequest
+	(*ListMySketchesResponse)(nil), // 1: memos.api.v1.ListMySketchesResponse
+	(*PublishSketchRequest)(nil),   // 2: memos.api.v1.PublishSketchRequest
+	(*ArchiveSketchRequest)(nil),   // 3: memos.api.v1.ArchiveSketchRequest
+	(*Memo)(nil),                   // 4: memos.api.v1.Memo
 }
 var file_api_v1_po33_sketch_service_proto_depIdxs = []int32{
-	8, // 0: memos.api.v1.ListMySketchesResponse.memos:type_name -> memos.api.v1.Memo
-	7, // 1: memos.api.v1.ListSketchVersionsResponse.versions:type_name -> memos.api.v1.SketchVersion
-	9, // 2: memos.api.v1.SketchVersion.received_at:type_name -> google.protobuf.Timestamp
-	0, // 3: memos.api.v1.SketchService.ListMySketches:input_type -> memos.api.v1.ListMySketchesRequest
-	2, // 4: memos.api.v1.SketchService.PublishSketch:input_type -> memos.api.v1.PublishSketchRequest
-	3, // 5: memos.api.v1.SketchService.ArchiveSketch:input_type -> memos.api.v1.ArchiveSketchRequest
-	4, // 6: memos.api.v1.SketchService.ListSketchVersions:input_type -> memos.api.v1.ListSketchVersionsRequest
-	6, // 7: memos.api.v1.SketchService.GetSketchVersion:input_type -> memos.api.v1.GetSketchVersionRequest
-	1, // 8: memos.api.v1.SketchService.ListMySketches:output_type -> memos.api.v1.ListMySketchesResponse
-	8, // 9: memos.api.v1.SketchService.PublishSketch:output_type -> memos.api.v1.Memo
-	8, // 10: memos.api.v1.SketchService.ArchiveSketch:output_type -> memos.api.v1.Memo
-	5, // 11: memos.api.v1.SketchService.ListSketchVersions:output_type -> memos.api.v1.ListSketchVersionsResponse
-	7, // 12: memos.api.v1.SketchService.GetSketchVersion:output_type -> memos.api.v1.SketchVersion
-	8, // [8:13] is the sub-list for method output_type
-	3, // [3:8] is the sub-list for method input_type
-	3, // [3:3] is the sub-list for extension type_name
-	3, // [3:3] is the sub-list for extension extendee
-	0, // [0:3] is the sub-list for field type_name
+	4, // 0: memos.api.v1.ListMySketchesResponse.memos:type_name -> memos.api.v1.Memo
+	0, // 1: memos.api.v1.SketchService.ListMySketches:input_type -> memos.api.v1.ListMySketchesRequest
+	2, // 2: memos.api.v1.SketchService.PublishSketch:input_type -> memos.api.v1.PublishSketchRequest
+	3, // 3: memos.api.v1.SketchService.ArchiveSketch:input_type -> memos.api.v1.ArchiveSketchRequest
+	1, // 4: memos.api.v1.SketchService.ListMySketches:output_type -> memos.api.v1.ListMySketchesResponse
+	4, // 5: memos.api.v1.SketchService.PublishSketch:output_type -> memos.api.v1.Memo
+	4, // 6: memos.api.v1.SketchService.ArchiveSketch:output_type -> memos.api.v1.Memo
+	4, // [4:7] is the sub-list for method output_type
+	1, // [1:4] is the sub-list for method input_type
+	1, // [1:1] is the sub-list for extension type_name
+	1, // [1:1] is the sub-list for extension extendee
+	0, // [0:1] is the sub-list for field type_name
 }
 
 func init() { file_api_v1_po33_sketch_service_proto_init() }
@@ -638,7 +289,7 @@ func file_api_v1_po33_sketch_service_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_api_v1_po33_sketch_service_proto_rawDesc), len(file_api_v1_po33_sketch_service_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   8,
+			NumMessages:   4,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
