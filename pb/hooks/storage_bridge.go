@@ -35,7 +35,7 @@ var storageBridgeCache = struct {
 }{}
 
 // registerStorageBridge subscribes the storage bridge to the
-// `patches` and `samples` collections' after-create, after-update,
+// unified `attachments` collection's after-create, after-update,
 // and after-delete record hooks. The bridge mirrors each local
 // file to the configured remote backend (S3, R2, MinIO) and
 // stores the public URL in the record's `remote_url` column.
@@ -56,11 +56,9 @@ func registerStorageBridge(app core.App) {
 		deleteRemoteForRecord(app, e.Record)
 		return nil
 	}
-	for _, tag := range []string{"patches", "samples"} {
-		app.OnRecordAfterCreateSuccess(tag).BindFunc(bind)
-		app.OnRecordAfterUpdateSuccess(tag).BindFunc(bind)
-		app.OnRecordAfterDeleteSuccess(tag).BindFunc(bindDelete)
-	}
+	app.OnRecordAfterCreateSuccess("attachments").BindFunc(bind)
+	app.OnRecordAfterUpdateSuccess("attachments").BindFunc(bind)
+	app.OnRecordAfterDeleteSuccess("attachments").BindFunc(bindDelete)
 }
 
 // mirrorRecordToRemote uploads every file in the record's
@@ -79,46 +77,35 @@ func mirrorRecordToRemote(app core.App, rec *core.Record) {
 	if !shouldMirrorCollection(rec.Collection().Name) {
 		return
 	}
-	filenames := rec.GetStringSlice(fileFieldName(rec))
-	if len(filenames) == 0 {
+	filename := rec.GetString("filename")
+	if filename == "" {
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), storageBridgeTimeout)
 	defer cancel()
 
-	urls := make([]string, 0, len(filenames))
-	for _, filename := range filenames {
-		if filename == "" {
-			continue
-		}
-		key := filepath.ToSlash(filepath.Join(rec.Collection().Id, rec.Id, filename))
-		fsys, err := app.NewFilesystem()
-		if err != nil {
-			storageBridgeLog.Warn("storage-bridge: cannot open filesystem", "err", err.Error())
-			return
-		}
-		r, err := fsys.GetReader(key)
-		if err != nil {
-			storageBridgeLog.Warn("storage-bridge: cannot read local file", "key", key, "err", err.Error())
-			return
-		}
-		url, err := store.Put(ctx, key, r, mimeForFile(filename))
-		_ = r.Close()
-		if err != nil {
-			storageBridgeLog.Warn("storage-bridge: upload failed", "key", key, "err", err.Error())
-			return
-		}
-		urls = append(urls, url)
-	}
-	if len(urls) == 0 {
+	key := filepath.ToSlash(filepath.Join(rec.Collection().Id, rec.Id, filename))
+	fsys, err := app.NewFilesystem()
+	if err != nil {
+		storageBridgeLog.Warn("storage-bridge: cannot open filesystem", "err", err.Error())
 		return
 	}
-	// Store as JSON array so we can carry multiple files (samples
-	// allows up to 50). For the single-file case, this still
-	// round-trips through joinURLs/splitURLs.
-	remote := joinURLs(urls)
-	rec.Set("remote_url", remote)
+	defer func() { _ = fsys.Close() }()
+	r, err := fsys.GetReader(key)
+	if err != nil {
+		storageBridgeLog.Warn("storage-bridge: cannot read local file", "key", key, "err", err.Error())
+		return
+	}
+	url, err := store.Put(ctx, key, r, mimeForFile(filename))
+	_ = r.Close()
+	if err != nil {
+		storageBridgeLog.Warn("storage-bridge: upload failed", "key", key, "err", err.Error())
+		return
+	}
+	// Single-file per row: a bare string is the right
+	// shape for `remote_url` (no JSON array needed).
+	rec.Set("remote_url", url)
 	if err := app.Save(rec); err != nil {
 		storageBridgeLog.Warn("storage-bridge: save failed", "record", rec.Id, "err", err.Error())
 	}

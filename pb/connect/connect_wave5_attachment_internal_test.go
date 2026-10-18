@@ -13,22 +13,27 @@ import (
 	v1 "github.com/incurl/riff/proto/gen/api/v1"
 )
 
-// seedPatchFile inserts a `patches` row with a real file attached. The
-// FileField validator requires the bytes to exist on disk, so we go
-// through filesystem.NewFileFromBytes and stash it on the record the
-// same way PocketBase's collection API would.
+// seedPatchFile inserts a row in the unified `attachments`
+// collection with a real file attached. The FileField
+// validator requires the bytes to exist on disk, so we go
+// through filesystem.NewFileFromBytes and stash it on the
+// record the same way PocketBase's collection API would.
+// Kept under the historical `seedPatchFile` name so the
+// call sites below read the same as before the 1850xxx
+// cutover.
 func seedPatchFile(t *testing.T, app core.App, author *core.Record, memoID, filename string) string {
 	t.Helper()
 	_ = author
-	coll, err := app.FindCollectionByNameOrId("patches")
+	coll, err := app.FindCollectionByNameOrId("attachments")
 	require.NoError(t, err)
 	rec := core.NewRecord(coll)
 	rec.Set("memo", memoID)
 	f, err := filesystem.NewFileFromBytes([]byte{0x00, 0x01, 0x02, 0x03, 0xff, 0xfe, 0xfd, 0x10, 0x20, 0x30}, filename)
 	require.NoError(t, err)
-	rec.Set("file", f)
-	rec.Set("description", "test patch")
-	rec.Set("compatible_po_version", "PO-33")
+	rec.Set("blob", f)
+	rec.Set("filename", filename)
+	rec.Set("size", int64(10))
+	rec.Set("storage", "local")
 	require.NoError(t, app.Save(rec))
 	return rec.Id
 }

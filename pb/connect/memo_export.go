@@ -261,50 +261,45 @@ type attachmentRef struct {
 	MediaMetadata string
 }
 
-// collectAttachments returns the union of patches and
-// samples that point at memo.
+// collectAttachments returns the rows in the unified
+// `attachments` collection that point at memo. One row
+// per file: the collection's single-file `blob` field
+// is the only file each row carries, so a single query
+// is enough.
 func (s *UserServer) collectAttachments(memo *core.Record) ([]attachmentRef, error) {
 	memoID := memo.Id
-	var out []attachmentRef
-	for _, coll := range []string{"patches", "samples"} {
-		rows, err := s.app.FindRecordsByFilter(
-			coll, "memo={:m}", "", 0, 0, map[string]any{"m": memoID},
-		)
-		if err != nil {
-			return nil, err
+	rows, err := s.app.FindRecordsByFilter(
+		"attachments", "memo={:m}", "", 0, 0, map[string]any{"m": memoID},
+	)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]attachmentRef, 0, len(rows))
+	for _, r := range rows {
+		filename := r.GetString("filename")
+		if filename == "" {
+			continue
 		}
-		for _, r := range rows {
-			filenames := attachmentFilenames(r)
-			if len(filenames) == 0 {
-				continue
-			}
-			filename := filenames[0]
-			uid := r.Id
-			mime := guessMimeFromFilename(filename)
-			out = append(out, attachmentRef{
-				UID:           uid,
-				Filename:      filename,
-				MimeType:      mime,
-				File:          r,
-				Collection:    coll,
-				MediaMetadata: r.GetString("media_metadata"),
-			})
-		}
+		mime := guessMimeFromFilename(filename)
+		out = append(out, attachmentRef{
+			UID:           r.Id,
+			Filename:      filename,
+			MimeType:      mime,
+			File:          r,
+			Collection:    "attachments",
+			MediaMetadata: r.GetString("media_metadata"),
+		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].UID < out[j].UID })
 	return out, nil
 }
 
-// attachmentFilenames returns the file names attached to
-// a `patches` (single) or `samples` (multi) record.
+// attachmentFilenames returns the file name attached to
+// a row in the unified `attachments` collection (one
+// file per row, on the `filename` column).
 func attachmentFilenames(rec *core.Record) []string {
-	switch rec.Collection().Name {
-	case "patches":
-		if f := rec.GetString("file"); f != "" {
-			return []string{f}
-		}
-	case "samples":
-		return rec.GetStringSlice("files")
+	if f := rec.GetString("filename"); f != "" {
+		return []string{f}
 	}
 	return nil
 }

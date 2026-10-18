@@ -194,7 +194,7 @@ func (s *InstanceServer) GetInstanceStats(ctx context.Context, _ *v1.GetInstance
 		Database: &v1.InstanceStats_DatabaseStats{Driver: "sqlite"},
 	}
 	// Record counts per known collection.
-	for _, name := range []string{"users", "spaces", "memos", "patches", "samples", "reactions", "memo_relations", "space_members", "notifications", "user_settings", "memo_views"} {
+	for _, name := range []string{"users", "spaces", "memos", "attachments", "reactions", "memo_relations", "space_members", "notifications", "user_settings", "memo_views"} {
 		coll, err := s.app.FindCollectionByNameOrId(name)
 		if err != nil {
 			continue

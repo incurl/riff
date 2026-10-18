@@ -15,9 +15,9 @@ import (
 
 // fileServerHandler returns a handler that serves one of
 // the three upstream /file/... routes. The builder key
-// selects the kind of file: "attachment" reads a
-// patches or samples row by UID, "user_avatar" reads a
-// users row by username or email.
+// selects the kind of file: "attachment" reads an
+// `attachments` row by UID, "user_avatar" reads a users
+// row by username or email.
 //
 // Upstream Memos has more elaborate content negotiation
 // (signed URLs, thumbnail cache, motion-photo clipping)
@@ -36,8 +36,9 @@ func fileServerHandler(app core.App, builder string) func(*core.RequestEvent) er
 }
 
 // attachmentFileHandler resolves /file/attachments/{uid}
-// or /file/attachments/{uid}/{filename} to a patches or
-// samples row and streams the primary file.
+// or /file/attachments/{uid}/{filename} to a row in the
+// unified `attachments` collection and streams the
+// primary file.
 //
 // The UID is the PocketBase 15-char id; riff also accepts
 // the upstream "name" form (the `attachments/{uid}`
@@ -53,7 +54,7 @@ func attachmentFileHandler(app core.App) func(*core.RequestEvent) error {
 		if err != nil {
 			return fileError(e, http.StatusNotFound, "attachment not found")
 		}
-		filename := rec.GetString("file")
+		filename := rec.GetString("filename")
 		if filename == "" {
 			return fileError(e, http.StatusNotFound, "attachment has no file")
 		}
@@ -82,18 +83,17 @@ func userAvatarFileHandler(app core.App) func(*core.RequestEvent) error {
 	}
 }
 
-// findAttachmentRecord returns the patches or samples
-// record whose id matches uid. Patches first because
-// most upstream Memos clients use the patches
-// collection for sample/song attachments.
+// findAttachmentRecord returns the row in the unified
+// `attachments` collection whose id matches uid. The
+// one-collection lookup matches the 1850xxx schema
+// simplification; pre-cutover code that split the lookup
+// across `patches`/`samples` is no longer needed.
 func findAttachmentRecord(app core.App, uid string) (*core.Record, error) {
-	for _, collection := range []string{"patches", "samples"} {
-		rec, err := app.FindRecordById(collection, uid)
-		if err == nil {
-			return rec, nil
-		}
+	rec, err := app.FindRecordById("attachments", uid)
+	if err != nil {
+		return nil, errors.New("attachment not found")
 	}
-	return nil, errors.New("attachment not found")
+	return rec, nil
 }
 
 // findUserByIdentifier resolves a user by username, email,
@@ -120,10 +120,10 @@ func findUserByIdentifier(app core.App, identifier string) (*core.Record, error)
 // streamRecordFile opens the named file on the
 // record's primary filesystem and streams its bytes
 // to the response. PocketBase stores file-field blobs
-// at <collectionId>/<recordId>/<filename>; the patches
-// and samples collections have MaxSelect:1 so the
-// simple form applies. The Cache-Control is
-// `private, no-store` to match the upstream Memos
+// at <collectionId>/<recordId>/<filename>; the unified
+// `attachments` collection has MaxSelect:1 on its `blob`
+// field, so the simple form applies. The Cache-Control
+// is `private, no-store` to match the upstream Memos
 // default; the Content-Type is sniffed from the file
 // extension.
 func streamRecordFile(e *core.RequestEvent, app core.App, rec *core.Record, filename string) error {

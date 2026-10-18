@@ -3,8 +3,8 @@
 // (CreateAttachment, UpdateAttachment, DeleteAttachment,
 // BatchDeleteAttachments) lives in attachment.go; this
 // file adds UploadAttachment, which receives a file in
-// bounded chunks and finalises a `patches` or `samples`
-// row when the last chunk arrives.
+// bounded chunks and finalises a single `attachments` row
+// when the last chunk arrives.
 //
 // The protocol matches the Memos proto and the SPA's
 // uploadService.ts: the first call carries a
@@ -26,13 +26,12 @@
 // Sessions are owned by the package-level uploadManager
 // (upload_session.go), which reaps staged files after
 // 30 minutes of inactivity. The handler relies on the
-// collection rules in `patches` and `samples` to gate
-// record creation: both collections require
-// `memo.author = @request.auth.id`, and the
-// createRecordRequest bridge in records.go feeds the
-// same OnRecordCreateRequest hook chain that the REST
-// API would, so file ownership and author enforcement
-// fall out for free.
+// collection rule in `attachments` to gate record
+// creation: the row requires `memo.author = @request.auth.id`
+// (when a memo is set), and the createRecordRequest bridge
+// in records.go feeds the same OnRecordCreateRequest hook
+// chain that the REST API would, so file ownership and
+// author enforcement fall out for free.
 package connect
 
 import (
@@ -96,10 +95,11 @@ func (s *AttachmentServer) uploadSpec(ctx context.Context, viewer *core.Record, 
 	if a.GetContent() != nil && len(a.GetContent()) > 0 {
 		return nil, connect.NewError(connect.CodeInvalidArgument, "attachment.content must be empty; use the data field for file bytes")
 	}
+	memoID := ""
 	if a.GetMemo() == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, "memo is required for upload")
 	}
-	memoID := memoIDFromName(a.GetMemo())
+	memoID = memoIDFromName(a.GetMemo())
 	if memoID == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, "memo name is malformed")
 	}
@@ -116,10 +116,15 @@ func (s *AttachmentServer) uploadSpec(ctx context.Context, viewer *core.Record, 
 		return nil, connect.NewError(connect.CodeResourceExhausted, "too many unfinished uploads")
 	}
 
-	coll := uploadCollectionForType(a.GetType())
-	if !collectionAcceptsMIME(coll, a.GetType()) {
+	// Pre-flight MIME check against the unified
+	// `attachments` collection's blob FileField. The
+	// authoritative check is the FileField validator
+	// at Save time, but surfacing a precise
+	// CodeInvalidArgument here saves the SPA a round
+	// trip on a guaranteed-fail spec.
+	if !attachmentMimeAllowed(a.GetType()) {
 		return nil, connect.NewError(connect.CodeInvalidArgument,
-			fmt.Sprintf("mime type %q is not accepted by the %s collection", a.GetType(), coll))
+			fmt.Sprintf("mime type %q is not accepted by the attachments collection", a.GetType()))
 	}
 
 	mgr := uploadManagerGet()
@@ -129,7 +134,6 @@ func (s *AttachmentServer) uploadSpec(ctx context.Context, viewer *core.Record, 
 	}
 	sess.filename = a.GetFilename()
 	sess.mimeType = a.GetType()
-	sess.collection = coll
 	sess.memoID = memoID
 	sess.expectedSize = spec.GetTotalSize()
 	sess.motionMediaJSON = motionMediaJSONFromProto(a.GetMotionMedia())
@@ -185,7 +189,7 @@ func (s *AttachmentServer) continueSession(ctx context.Context, sess *uploadSess
 	// Already finalised: idempotent return.
 	if sess.recordID != "" {
 		resp.CommittedSize = sess.bytesReceived
-		if rec, err := s.app.FindRecordById(sess.collection, sess.recordID); err == nil {
+		if rec, err := s.app.FindRecordById("attachments", sess.recordID); err == nil {
 			resp.Attachment = recordToAttachment(rec)
 		}
 		return resp, nil
@@ -247,13 +251,14 @@ func (s *AttachmentServer) continueSession(ctx context.Context, sess *uploadSess
 		}
 		return resp, nil
 	}
+
 	return nil, connect.NewError(connect.CodeInvalidArgument, "unreachable: empty data and finish_write=false")
 }
 
-// finalizeSession creates the patches/samples row,
-// uploads the staged file to PocketBase's filesystem,
-// and caches the result on the session so a retry
-// returns the same attachment.
+// finalizeSession creates the attachments row, uploads
+// the staged file to PocketBase's filesystem, and caches
+// the result on the session so a retry returns the same
+// attachment.
 func (s *AttachmentServer) finalizeSession(ctx context.Context, sess *uploadSession, resp *v1.UploadAttachmentResponse) (*v1.UploadAttachmentResponse, error) {
 	// Close the staging file so the upload to the PB
 	// filesystem can read it back.
@@ -279,7 +284,7 @@ func (s *AttachmentServer) finalizeSession(ctx context.Context, sess *uploadSess
 		return nil, connect.NewError(connect.CodeInternal, fmt.Sprintf("open staged file: %s", err.Error()))
 	}
 
-	coll, err := s.app.FindCollectionByNameOrId(sess.collection)
+	coll, err := s.app.FindCollectionByNameOrId("attachments")
 	if err != nil {
 		sess.closeAndCleanup()
 		uploadManagerGet().abort(sess.id)
@@ -287,17 +292,17 @@ func (s *AttachmentServer) finalizeSession(ctx context.Context, sess *uploadSess
 	}
 	rec := core.NewRecord(coll)
 	rec.Id = recID
-	rec.Set("memo", sess.memoID)
-	// Decide which file field to populate. The two
-	// collections use different field names ("file"
-	// for patches, "files" for samples); the schema's
-	// Required constraint enforces a value.
-	fieldName := fileFieldNameForCollection(sess.collection)
-	rec.Set(fieldName, staged)
-	rec.Set("description", "")
-	if sess.collection == "patches" {
-		rec.Set("compatible_po_version", "")
+	if sess.memoID != "" {
+		rec.Set("memo", sess.memoID)
 	}
+	// The unified `attachments` collection uses a
+	// single-file `blob` FileField for both binary
+	// patches and audio sample packs.
+	rec.Set("blob", staged)
+	rec.Set("filename", sess.filename)
+	rec.Set("size", sess.expectedSize)
+	rec.Set("storage", "local")
+	rec.Set("mime_type", sess.mimeType)
 	if sess.motionMediaJSON != "" {
 		rec.Set("motion_media", sess.motionMediaJSON)
 	}
@@ -316,7 +321,7 @@ func (s *AttachmentServer) finalizeSession(ctx context.Context, sess *uploadSess
 	// (storage_bridge) may mirror to a remote backend
 	// if one is configured; that mirror is
 	// best-effort and does not fail the upload.
-	if err := uploadFileToPocketBase(s.app, sess.collection, rec.Id, staged, sess.filename); err != nil {
+	if err := uploadFileToPocketBase(s.app, "attachments", rec.Id, staged, sess.filename); err != nil {
 		// Roll back the row we just created so a
 		// filesystem failure does not leave a
 		// dangling attachment record with no bytes.
@@ -332,88 +337,9 @@ func (s *AttachmentServer) finalizeSession(ctx context.Context, sess *uploadSess
 
 	sess.recordID = rec.Id
 	sess.bytesReceived = sess.expectedSize
-	sess.touch()
-	resp.CommittedSize = sess.bytesReceived
+	resp.CommittedSize = sess.expectedSize
 	resp.Attachment = recordToAttachment(rec)
 	return resp, nil
-}
-
-// uploadCollectionForType picks the target collection
-// from the spec's MIME type. The proto has no
-// collection discriminator (the SPA picks by what the
-// user is uploading), so we mirror the Memos
-// convention: audio and zip files live in `samples`;
-// everything else (PO-33 patches included) lives in
-// `patches`.
-func uploadCollectionForType(mime string) string {
-	mime = strings.ToLower(strings.TrimSpace(mime))
-	switch {
-	case strings.HasPrefix(mime, "audio/"),
-		mime == "application/zip":
-		return "samples"
-	default:
-		return "patches"
-	}
-}
-
-// collectionAcceptsMIME mirrors the FileField
-// allow-list for the chosen collection. We do this
-// lookup at spec time so a client gets a precise error
-// before the bytes are staged. The allowed lists are
-// duplicated from the migration so the handler does
-// not have to re-load the collection schema on every
-// call.
-func collectionAcceptsMIME(coll, mime string) bool {
-	mime = strings.ToLower(strings.TrimSpace(mime))
-	switch coll {
-	case "patches":
-		// The migration's MIME allow-list is
-		// `["application/octet-stream"]`; everything
-		// that isn't binary is rejected. We do not
-		// honour the SPA's content-type guesswork
-		// for PO-33 files because the PO-33 firmware
-		// itself emits application/octet-stream.
-		return mime == "application/octet-stream"
-	case "samples":
-		switch mime {
-		case "audio/wav", "audio/x-wav",
-			"audio/mpeg", "audio/mp3",
-			"application/zip":
-			return true
-		}
-	}
-	return false
-}
-
-// fileFieldNameForCollection returns the FileField
-// name for the target collection. The two attachment
-// collections use different field names ("file" for
-// patches, "files" for samples) because samples is a
-// multi-file pack and patches is a single file.
-func fileFieldNameForCollection(coll string) string {
-	if coll == "samples" {
-		return "files"
-	}
-	return "file"
-}
-
-// uploadFileToPocketBase copies the staged file into
-// PocketBase's local filesystem under the canonical
-// key for the record. The key layout is the one PB
-// uses for its REST file URLs:
-//
-//	<collectionId>/<recordId>/<filename>
-func uploadFileToPocketBase(app core.App, coll, recID string, f *filesystem.File, originalName string) error {
-	col, err := app.FindCollectionByNameOrId(coll)
-	if err != nil {
-		return err
-	}
-	fsys, err := app.NewFilesystem()
-	if err != nil {
-		return err
-	}
-	key := dirForFilenames(col.Id, recID, originalName)
-	return fsys.UploadFile(f, key)
 }
 
 // validateAttachmentID enforces the proto's
@@ -522,4 +448,80 @@ func newFileFromStagedPath(path, originalName string) (*filesystem.File, error) 
 	f.OriginalName = originalName
 	f.Name = originalName
 	return f, nil
+}
+
+// attachmentMimeAllowed reports whether mime is in the
+// unified `attachments` collection's blob FileField
+// MimeTypes allow-list. The list mirrors the one in
+// `pb/migrations/1850000000_create_attachments.go`; a
+// drift between the two will surface as a Save-time
+// FileField rejection, which the spec handler will
+// already have rejected earlier.
+//
+// We do not honour the SPA's content-type guesswork for
+// PO-33 patches because the PO-33 firmware itself emits
+// application/octet-stream for `.p33` files; forcing a
+// precise MIME would block the device path.
+func attachmentMimeAllowed(mime string) bool {
+	mime = strings.ToLower(strings.TrimSpace(mime))
+	switch mime {
+	// Images
+	case "image/png", "image/jpeg", "image/jpg", "image/gif",
+		"image/webp", "image/svg+xml", "image/bmp", "image/tiff",
+		"image/heic", "image/heif", "image/avif":
+		return true
+	// Audio
+	case "audio/wav", "audio/x-wav", "audio/mpeg", "audio/mp3",
+		"audio/aac", "audio/flac", "audio/ogg", "audio/m4a",
+		"audio/webm", "audio/midi", "audio/x-midi":
+		return true
+	// Video
+	case "video/mp4", "video/webm", "video/ogg", "video/quicktime":
+		return true
+	// Documents
+	case "application/pdf", "text/plain", "text/html", "text/css",
+		"text/javascript", "text/markdown", "text/csv",
+		"application/json", "application/xml":
+		return true
+	// Archives
+	case "application/zip", "application/x-tar", "application/gzip",
+		"application/x-7z-compressed", "application/x-rar-compressed":
+		return true
+	// Office
+	case "application/msword",
+		"application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+		"application/vnd.ms-excel",
+		"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
+		return true
+	// Generic binary — the PO-33 device uploads patches
+	// with this MIME.
+	case "application/octet-stream":
+		return true
+	}
+	return false
+}
+
+// uploadFileToPocketBase copies the staged file into
+// PocketBase's local filesystem under the canonical
+// key for the record. The key layout is the one PB
+// uses for its REST file URLs:
+//
+//	<collectionId>/<recordId>/<filename>
+//
+// We open a fresh filesystem handle so a cached
+// backend from an earlier call does not serve stale
+// metadata; the staged file is also the bytes we just
+// wrote, so the upload is effectively a `cp`.
+func uploadFileToPocketBase(app core.App, coll, recID string, f *filesystem.File, originalName string) error {
+	col, err := app.FindCollectionByNameOrId(coll)
+	if err != nil {
+		return err
+	}
+	fsys, err := app.NewFilesystem()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = fsys.Close() }()
+	key := dirForFilenames(col.Id, recID, originalName)
+	return fsys.UploadFile(f, key)
 }

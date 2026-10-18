@@ -276,7 +276,6 @@ func (s *UserServer) applyOneMemo(ctx context.Context, zr *zip.ReadCloser, manif
 		newRec.Set("author", userID)
 		newRec.Set("content", readContentBytes(zr, rec))
 		newRec.Set("visibility", visibility)
-		newRec.Set("type", "note")
 		if spaceID != "" {
 			newRec.Set("space", spaceID)
 		}
@@ -307,7 +306,6 @@ func (s *UserServer) applyOneMemo(ctx context.Context, zr *zip.ReadCloser, manif
 			newRec.Set("author", userID)
 			newRec.Set("content", readContentBytes(zr, rec))
 			newRec.Set("visibility", visibility)
-			newRec.Set("type", "note")
 			if spaceID != "" {
 				newRec.Set("space", spaceID)
 			}
@@ -355,7 +353,6 @@ func (s *UserServer) applyOneMemo(ctx context.Context, zr *zip.ReadCloser, manif
 		newRec.Set("author", userID)
 		newRec.Set("content", readContentBytes(zr, rec))
 		newRec.Set("visibility", visibility)
-		newRec.Set("type", "note")
 		if spaceID != "" {
 			newRec.Set("space", spaceID)
 		}
@@ -414,10 +411,10 @@ func (s *UserServer) applyContentTimestamps(rec *core.Record, src *exportMemoRec
 	}
 }
 
-// applyAttachments creates `patches` or `samples`
-// records for each attachment in the memo record and
-// uploads the file bytes through PocketBase's
-// filesystem.
+// applyAttachments creates a row in the unified
+// `attachments` collection for each attachment in the
+// memo record and uploads the file bytes through
+// PocketBase's filesystem.
 func (s *UserServer) applyAttachments(ctx context.Context, zr *zip.ReadCloser, memoRec *core.Record, src *exportMemoRecord) error {
 	for _, att := range src.Attachments {
 		if err := s.applyOneAttachment(ctx, zr, memoRec, &att); err != nil {
@@ -427,19 +424,10 @@ func (s *UserServer) applyAttachments(ctx context.Context, zr *zip.ReadCloser, m
 	return nil
 }
 
-// applyOneAttachment creates one patches or samples
-// record and uploads the file bytes.
+// applyOneAttachment creates one row in the unified
+// `attachments` collection and uploads the file bytes.
 func (s *UserServer) applyOneAttachment(ctx context.Context, zr *zip.ReadCloser, memoRec *core.Record, att *exportAttachment) error {
-	// Determine the target collection. The design
-	// says the importer re-sniffs the media type on
-	// upload; we honour the archive's `type` field
-	// as a hint and fall back to the path-based
-	// guess if it is missing.
-	collection, err := s.attachmentCollectionFor(att)
-	if err != nil {
-		return err
-	}
-	coll, err := s.app.FindCollectionByNameOrId(collection)
+	coll, err := s.app.FindCollectionByNameOrId("attachments")
 	if err != nil {
 		return fmt.Errorf("find collection: %w", err)
 	}
@@ -472,14 +460,13 @@ func (s *UserServer) applyOneAttachment(ctx context.Context, zr *zip.ReadCloser,
 	if safeName == "" {
 		safeName = "upload.bin"
 	}
-	if err := uploadAttachmentBytes(s.app, collection, newRec.Id, data, safeName); err != nil {
+	if err := uploadAttachmentBytes(s.app, "attachments", newRec.Id, data, safeName); err != nil {
 		return fmt.Errorf("upload bytes: %w", err)
 	}
-	if collection == "patches" {
-		newRec.Set("file", safeName)
-	} else {
-		newRec.Set("files", []string{safeName})
-	}
+	newRec.Set("filename", safeName)
+	newRec.Set("size", int64(len(data)))
+	newRec.Set("storage", "local")
+	newRec.Set("mime_type", att.Type)
 	if att.MediaMeta != nil {
 		if raw, err := json.Marshal(att.MediaMeta); err == nil {
 			newRec.Set("media_metadata", string(raw))
@@ -489,16 +476,6 @@ func (s *UserServer) applyOneAttachment(ctx context.Context, zr *zip.ReadCloser,
 		return fmt.Errorf("save attachment record: %w", err)
 	}
 	return nil
-}
-
-// attachmentCollectionFor picks `patches` or `samples`
-// based on the archive's `type` field, falling back to
-// the path-based guess.
-func (s *UserServer) attachmentCollectionFor(att *exportAttachment) (string, error) {
-	if strings.HasPrefix(att.Type, "audio/") || att.Type == "application/zip" {
-		return "samples", nil
-	}
-	return "patches", nil
 }
 
 // readAttachmentBytes returns the bytes of the

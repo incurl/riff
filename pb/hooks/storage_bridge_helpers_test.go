@@ -111,8 +111,7 @@ func TestMimeForFile(t *testing.T) {
 }
 
 func TestShouldMirrorCollection(t *testing.T) {
-	require.True(t, shouldMirrorCollection("patches"))
-	require.True(t, shouldMirrorCollection("samples"))
+	require.True(t, shouldMirrorCollection("attachments"))
 	require.False(t, shouldMirrorCollection("memos"))
 	require.False(t, shouldMirrorCollection("users"))
 }

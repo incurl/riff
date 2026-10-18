@@ -18,14 +18,14 @@ import (
 var motionMediaLog = slog.Default()
 
 // motionMediaMaxFileSize caps the JPEG blob we'll read for
-// detection. The patches collection is already capped at
-// 8 MB by the field's MaxSize; samples is a multi-file
-// audio collection and the `motion_media` column is
-// meaningless for non-JPEG entries, so a 16 MB ceiling
-// here is comfortably above the largest possible JPEG
-// we'll encounter. Past that, a file is unlikely to be
-// a valid Motion Photo and we'd rather skip it than risk
-// OOMing on a malicious upload.
+// detection. The unified `attachments` collection's
+// `blob` field is the only place user files land, and
+// the `motion_media` column is meaningless for non-JPEG
+// entries, so a 16 MB ceiling here is comfortably above
+// the largest possible JPEG we'll encounter. Past that,
+// a file is unlikely to be a valid Motion Photo and
+// we'd rather skip it than risk OOMing on a malicious
+// upload.
 const motionMediaMaxFileSize = 16 * 1024 * 1024
 
 // motionMediaSkipExtensions is the set of filename
@@ -44,7 +44,7 @@ var motionMediaSkipExtensions = map[string]struct{}{
 }
 
 // registerMotionMedia subscribes the JPEG-Motion-Photo
-// detector to the `patches` and `samples` collection's
+// detector to the unified `attachments` collection's
 // after-create hook. Fires only on create, not on
 // update: the blob is immutable from riff's perspective
 // once written, and re-running detection on every save
@@ -65,30 +65,24 @@ func registerMotionMedia(app core.App) {
 		go detectMotionMedia(e.App, e.Record)
 		return nil
 	}
-	app.OnRecordAfterCreateSuccess("patches").BindFunc(bind)
-	app.OnRecordAfterCreateSuccess("samples").BindFunc(bind)
+	app.OnRecordAfterCreateSuccess("attachments").BindFunc(bind)
 }
 
-// detectMotionMedia reads the first file on the record,
+// detectMotionMedia reads the file on the record,
 // runs motionphoto.DetectJPEG, and writes the JSON
 // payload to the `motion_media` column. The detector
 // is also given a reader-based variant in
 // motionphoto.DetectJPEGReader that we don't use
 // here because the file fits comfortably in memory
-// (8 MB cap on patches; samples multi-file entries
-// skip non-JPEG filenames before any read).
+// (16 MB cap above the field's own MaxSize).
 func detectMotionMedia(app core.App, rec *core.Record) {
 	if rec == nil {
 		return
 	}
-	// Pick the first file on the record. patches has a
-	// single `file` field; samples has a `files` slice.
-	// Both are read the same way via GetStringSlice.
-	filenames := rec.GetStringSlice(fileFieldName(rec))
-	if len(filenames) == 0 {
+	filename := rec.GetString("filename")
+	if filename == "" {
 		return
 	}
-	filename := filenames[0]
 	if !shouldInspectForMotionPhoto(filename) {
 		return
 	}
@@ -144,18 +138,6 @@ func detectMotionMedia(app core.App, rec *core.Record) {
 	rec.Set("motion_media", string(encoded))
 	if err := app.Save(rec); err != nil {
 		motionMediaLog.Warn("motion-media: save error", "record", rec.Id, "err", err.Error())
-	}
-}
-
-// fileFieldName returns "file" for `patches` and
-// "files" for `samples`. Both are FileFields, so the
-// rest of the file-key construction is the same.
-func fileFieldName(rec *core.Record) string {
-	switch rec.Collection().Name {
-	case "samples":
-		return "files"
-	default:
-		return "file"
 	}
 }
 

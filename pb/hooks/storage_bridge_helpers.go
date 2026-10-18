@@ -76,10 +76,12 @@ func configFromProto(s *v1.InstanceSetting_StorageSetting) (storage.Config, erro
 	}
 }
 
-// shouldMirrorCollection returns true for the two collections that
-// hold user-uploaded attachments.
+// shouldMirrorCollection returns true for the unified
+// `attachments` collection that holds user-uploaded files.
+// Kept as a tiny helper so the call site in
+// mirrorRecordToRemote can read as a positive predicate.
 func shouldMirrorCollection(name string) bool {
-	return name == "patches" || name == "samples"
+	return name == "attachments"
 }
 
 // mimeForFile returns a best-effort Content-Type for a filename.

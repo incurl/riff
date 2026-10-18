@@ -13,18 +13,16 @@ import (
 )
 
 // AttachmentServer implements the Memos AttachmentService.
-// Phase 4 wired the read path (ListAttachments). Wave 5
-// added the metadata-only write path (Create/Get/Update/
-// Delete and BatchDelete). Slice 2 of the SPA-unblock
-// roadmap implemented the chunked UploadAttachment RPC
-// in attachment_upload.go; sessions are owned by the
-// package-level uploadManager (upload_session.go).
 //
-// In our schema, "attachments" is a federated concept: a
-// PO-33 patch is stored in the `patches` collection and a
-// sample-pack audio file is stored in `samples`. Both have
-// a file field. The methods below translate resource names
-// like "attachments/{id}" back to a record by id.
+// In riff's schema, an attachment is a row in the unified
+// `attachments` collection: one row per file, with a single
+// `blob` FileField, an optional `memo` relation, the additive
+// PO-33 columns (`device_fingerprint_snapshot`), and the
+// motion-photo / media-metadata / remote-url sidecars the
+// hooks write. The proto's `Attachment` message is one
+// resource per row, so the wire shape is unchanged from
+// upstream Memos and the `attachments/{id}` resource name
+// resolves directly to a record id.
 type AttachmentServer struct {
 	apiv1connect.UnimplementedAttachmentServiceHandler
 	app core.App
@@ -35,45 +33,24 @@ func NewAttachmentServer(app core.App) *AttachmentServer {
 }
 
 // ListAttachments returns a paginated list of attachments
-// across the patches and samples collections, filtered by
-// the caller's read access.
-//
-// Pagination is applied per source collection, so a request
-// for the newest N attachments may return up to 2N rows when
-// both patches and samples have data. We accept that while the
-// collections are small; a merged, cursor-paginated view can
-// come later if the feed grows enough to need exact page sizes.
+// from the unified `attachments` collection, filtered by the
+// caller's read access.
 func (s *AttachmentServer) ListAttachments(ctx context.Context, req *v1.ListAttachmentsRequest) (*v1.ListAttachmentsResponse, error) {
 	limit, offset := paginationFromRequest(0, int(req.GetPageSize()))
 
-	out := []*v1.Attachment{}
-
-	patches, err := s.app.FindRecordsByFilter("patches", "", "-created", limit, offset)
+	rows, err := s.app.FindRecordsByFilter("attachments", "", "-created", limit, offset)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
 	}
-	for _, p := range patches {
-		if !canAccessAttachment(s.app, ctx, p) {
+	out := make([]*v1.Attachment, 0, len(rows))
+	for _, r := range rows {
+		if !canAccessAttachment(s.app, ctx, r) {
 			continue
 		}
-		if a := patchToAttachment(p); a != nil {
+		if a := resourceToAttachment(r); a != nil {
 			out = append(out, a)
 		}
 	}
-
-	samples, err := s.app.FindRecordsByFilter("samples", "", "-created", limit, offset)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err.Error())
-	}
-	for _, sa := range samples {
-		if !canAccessAttachment(s.app, ctx, sa) {
-			continue
-		}
-		if a := sampleToAttachment(sa); a != nil {
-			out = append(out, a)
-		}
-	}
-
 	return &v1.ListAttachmentsResponse{Attachments: out, NextPageToken: ""}, nil
 }
 
@@ -101,13 +78,15 @@ func canAccessAttachment(app core.App, ctx context.Context, rec *core.Record) bo
 	return ok
 }
 
-// patchToAttachment converts a `patches` record to an
-// Attachment proto.
-func patchToAttachment(rec *core.Record) *v1.Attachment {
+// resourceToAttachment converts an `attachments` record to an
+// Attachment proto. The `filename` column stores the
+// user-supplied name; the `external_link` is the
+// PocketBase file URL the SPA can stream.
+func resourceToAttachment(rec *core.Record) *v1.Attachment {
 	if rec == nil {
 		return nil
 	}
-	filename := rec.GetString("file")
+	filename := rec.GetString("filename")
 	a := &v1.Attachment{
 		Name:         "attachments/" + rec.Id,
 		Filename:     filename,
@@ -124,33 +103,12 @@ func patchToAttachment(rec *core.Record) *v1.Attachment {
 	return a
 }
 
-// sampleToAttachment converts a `samples` record to an
-// Attachment proto. We pick the first file as the
-// representative; the frontend resolves the rest via the
-// related memo's attachments field.
-func sampleToAttachment(rec *core.Record) *v1.Attachment {
-	if rec == nil {
-		return nil
-	}
-	files := rec.GetStringSlice("files")
-	if len(files) == 0 {
-		return nil
-	}
-	filename := files[0]
-	a := &v1.Attachment{
-		Name:         "attachments/" + rec.Id,
-		Filename:     filename,
-		ExternalLink: buildFileURL(rec.Collection().Name, rec.Id, filename),
-		Type:         guessMime(filename, "audio/wav"),
-	}
-	a.CreateTime = timestampToProto(rec.GetDateTime("created"))
-	if mm := readMotionMedia(rec); mm != nil {
-		a.MotionMedia = mm
-	}
-	if md := mediaMetadataFromRecord(rec); md != nil {
-		a.MediaMetadata = md
-	}
-	return a
+// recordToAttachment is the package-wide entry point for
+// converting an `attachments` record to a proto. It is a
+// thin alias for resourceToAttachment kept for callers
+// that previously switched on collection name.
+func recordToAttachment(rec *core.Record) *v1.Attachment {
+	return resourceToAttachment(rec)
 }
 
 // buildFileURL composes the PocketBase file URL for a record.
@@ -206,21 +164,20 @@ func lastDot(s string) int {
 	return -1
 }
 
-// findAttachmentRecord resolves "attachments/{id}" to a (collection, record)
-// pair. The id is the PocketBase record id; we look first in `patches`, then
-// in `samples`. Returns the empty string for collection when not found.
+// findAttachmentRecord resolves "attachments/{id}" to a
+// (collection, record) pair. The id is the PocketBase
+// record id; the unified `attachments` collection is the
+// only place an attachment row can live.
 func findAttachmentRecord(app core.App, name string) (collection string, rec *core.Record, err error) {
 	id := attachmentIDFromName(name)
 	if id == "" {
 		return "", nil, connect.NewError(connect.CodeInvalidArgument, "name is required")
 	}
-	for _, coll := range []string{"patches", "samples"} {
-		r, err := app.FindRecordById(coll, id)
-		if err == nil {
-			return coll, r, nil
-		}
+	r, err := app.FindRecordById("attachments", id)
+	if err != nil {
+		return "", nil, connect.NewError(connect.CodeNotFound, "attachment not found")
 	}
-	return "", nil, connect.NewError(connect.CodeNotFound, "attachment not found")
+	return "attachments", r, nil
 }
 
 // attachmentIDFromName extracts the record id from "attachments/{id}".
@@ -230,22 +187,6 @@ func attachmentIDFromName(name string) string {
 		return ""
 	}
 	return name[len(prefix):]
-}
-
-// recordToAttachment dispatches to patchToAttachment/sampleToAttachment
-// based on the record's collection.
-func recordToAttachment(rec *core.Record) *v1.Attachment {
-	if rec == nil {
-		return nil
-	}
-	switch rec.Collection().Name {
-	case "patches":
-		return patchToAttachment(rec)
-	case "samples":
-		return sampleToAttachment(rec)
-	default:
-		return nil
-	}
 }
 
 // GetAttachment returns a single attachment by resource name.
@@ -263,8 +204,7 @@ func (s *AttachmentServer) GetAttachment(ctx context.Context, req *v1.GetAttachm
 	return recordToAttachment(rec), nil
 }
 
-// DeleteAttachment removes a single attachment. We go through the
-// record-request bridge so the `patches`/`samples` collection rules apply.
+// DeleteAttachment removes a single attachment by resource name.
 func (s *AttachmentServer) DeleteAttachment(ctx context.Context, req *v1.DeleteAttachmentRequest) (*emptypb.Empty, error) {
 	if CurrentUser(ctx) == nil {
 		return nil, connect.NewError(connect.CodeUnauthenticated, "authentication required")
@@ -305,10 +245,10 @@ func (s *AttachmentServer) BatchDeleteAttachments(ctx context.Context, req *v1.B
 }
 
 // CreateAttachment registers metadata for an attachment. The actual
-// file upload goes through PocketBase's collection API or, in the
-// future, the UploadAttachment RPC. We create a `patches` row by
-// default; the proto has no collection discriminator, and riff's
-// admin UI sets the type via the route.
+// file upload goes through PocketBase's collection API or
+// UploadAttachment. We create a single `attachments` row; the proto
+// has no collection discriminator, and riff's admin UI sets the
+// `memo`/`filename`/etc. via the request.
 func (s *AttachmentServer) CreateAttachment(ctx context.Context, req *v1.CreateAttachmentRequest) (*v1.Attachment, error) {
 	if CurrentUser(ctx) == nil {
 		return nil, connect.NewError(connect.CodeUnauthenticated, "authentication required")
@@ -323,7 +263,7 @@ func (s *AttachmentServer) CreateAttachment(ctx context.Context, req *v1.CreateA
 	if a.GetType() == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, "type is required")
 	}
-	coll, err := s.app.FindCollectionByNameOrId("patches")
+	coll, err := s.app.FindCollectionByNameOrId("attachments")
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
 	}
@@ -331,7 +271,9 @@ func (s *AttachmentServer) CreateAttachment(ctx context.Context, req *v1.CreateA
 	if req.GetAttachmentId() != "" {
 		rec.Id = req.GetAttachmentId()
 	}
-	rec.Set("description", "")
+	rec.Set("filename", a.GetFilename())
+	rec.Set("size", 0)
+	rec.Set("storage", "local")
 	if memoName := a.GetMemo(); memoName != "" {
 		if memoID := memoIDFromName(memoName); memoID != "" {
 			rec.Set("memo", memoID)
@@ -344,9 +286,10 @@ func (s *AttachmentServer) CreateAttachment(ctx context.Context, req *v1.CreateA
 }
 
 // UpdateAttachment is a metadata round-trip. The proto's optional
-// fields are mostly presentation hints and the underlying schema only
-// stores `file`, `description`, `compatible_po_version`. We accept
-// the call as a no-op so the SPA can persist without a 501.
+// fields are mostly presentation hints; the underlying schema stores
+// `filename`, `size`, `storage`, and the PO-33 / motion-photo
+// sidecars. We accept the call as a no-op for fields we do not
+// mutate, so the SPA can persist without a 501.
 func (s *AttachmentServer) UpdateAttachment(ctx context.Context, req *v1.UpdateAttachmentRequest) (*v1.Attachment, error) {
 	if CurrentUser(ctx) == nil {
 		return nil, connect.NewError(connect.CodeUnauthenticated, "authentication required")
@@ -354,11 +297,10 @@ func (s *AttachmentServer) UpdateAttachment(ctx context.Context, req *v1.UpdateA
 	if req.GetAttachment() == nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, "attachment is required")
 	}
-	coll, rec, err := findAttachmentRecord(s.app, req.GetAttachment().GetName())
+	_, rec, err := findAttachmentRecord(s.app, req.GetAttachment().GetName())
 	if err != nil {
 		return nil, err
 	}
-	_ = coll
 	if !canAccessAttachment(s.app, ctx, rec) {
 		return nil, connect.NewError(connect.CodeNotFound, "attachment not found")
 	}

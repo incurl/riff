@@ -181,9 +181,9 @@ func upstreamMemosRoutes() []upstreamRouteEntry {
 		{Method: http.MethodGet, Path: "/memos/api/memos/-/linkMetadata", Flavor: "connect_proxy", Target: memosConnectMemoGetLinkMetadataProcedure, Scope: ratelimit.ScopeLinkMetadata},
 		{Method: http.MethodPost, Path: "/memos/api/memos/-/linkMetadata/batchGet", Flavor: "connect_proxy", Target: memosConnectMemoBatchGetLinkMetadataProcedure, Scope: ratelimit.ScopeLinkMetadata},
 
-		// ---- Attachments (patches/samples collection) ----
-		{Method: http.MethodGet, Path: "/memos/api/attachments", Flavor: "pb_records_crud", Target: "patches", Scope: ratelimit.ScopeAuthenticated},
-		{Method: http.MethodGet, Path: "/memos/api/attachments/{name}", Flavor: "pb_records_crud", Target: "patches", Scope: ratelimit.ScopeAuthenticated},
+		// ---- Attachments (unified `attachments` collection) ----
+		{Method: http.MethodGet, Path: "/memos/api/attachments", Flavor: "pb_records_crud", Target: "attachments", Scope: ratelimit.ScopeAuthenticated},
+		{Method: http.MethodGet, Path: "/memos/api/attachments/{name}", Flavor: "pb_records_crud", Target: "attachments", Scope: ratelimit.ScopeAuthenticated},
 		{Method: http.MethodPost, Path: "/memos/api/attachments", Flavor: "connect_proxy", Target: memosConnectAttachmentCreateAttachmentProcedure, Scope: ratelimit.ScopeUploadUser},
 		{Method: http.MethodPatch, Path: "/memos/api/attachments/{name}", Flavor: "connect_proxy", Target: memosConnectAttachmentUpdateAttachmentProcedure, Scope: ratelimit.ScopeUploadUser},
 		{Method: http.MethodDelete, Path: "/memos/api/attachments/{name}", Flavor: "connect_proxy", Target: memosConnectAttachmentDeleteAttachmentProcedure, Scope: ratelimit.ScopeUploadUser},

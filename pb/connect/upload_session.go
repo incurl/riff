@@ -16,7 +16,7 @@
 //
 //	spec         → stage file opened, session inserted
 //	writeOffset  → bytes appended at offset
-//	finishWrite  → record created in patches/samples, file
+//	finishWrite  → record created in `attachments`, file
 //	                uploaded to PocketBase's filesystem, stage
 //	                file deleted
 //	expiry       → stage file deleted, session removed
@@ -74,10 +74,10 @@ const uploadMaxChunkSize = 2 * 1024 * 1024
 const uploadMaxUnfinishedPerUser = 8
 
 // uploadMaxTotalSize is the per-file hard ceiling, set
-// comfortably above the patches (8 MB) and samples (32 MB)
-// FileField MaxSize values. A request above this is
-// rejected at the spec stage so a client cannot even stage
-// a 4 GB blob to disk. The number is a defence in depth:
+// comfortably above the unified `attachments` collection's
+// blob FileField MaxSize. A request above this is rejected
+// at the spec stage so a client cannot even stage a 4 GB
+// blob to disk. The number is a defence in depth:
 // PocketBase's own FileField validator is the authoritative
 // size check at finalisation.
 const uploadMaxTotalSize int64 = 64 * 1024 * 1024
@@ -89,13 +89,16 @@ const uploadStageDir = "uploads"
 
 // uploadSession is the in-memory state for one in-flight
 // upload. A session is created on spec, mutated by
+// writeOffset / finishWrite, and reaped on expiry. The
+// destination collection is now always the unified
+// `attachments` collection, so the field is no longer
+// needed on the session.
 // writeOffset, and closed on finishWrite or expiry.
 type uploadSession struct {
 	id              string
 	userID          string
 	filename        string
 	mimeType        string
-	collection      string // "patches" or "samples"
 	memoID          string
 	motionMediaJSON string
 	mediaMetadata   string

@@ -15,19 +15,18 @@ import (
 // attachment from the memo. Idempotent.
 //
 // The proto accepts any "attachments/{id}" the SPA is holding; the handler
-// resolves each id to a row in the `patches` or `samples` collection and
+// resolves each id to a row in the unified `attachments` collection and
 // keeps only the rows whose `memo` is the target. An attachment that belongs
-// to a different memo is rejected — the rule on the patches/samples
-// collection is `memo.author = @request.auth.id`, and a save with a new
-// memo would either fail the rule (if the new memo's author is not the
-// caller) or silently move the file out from under another memo (if the
-// author happens to match). Both outcomes are worse than a clean error, so
-// we forbid moves here. The SPA only ever sends attachments it already
-// knows belong to the memo being edited, so the restriction is invisible in
-// practice.
+// to a different memo is rejected — the rule on the attachments collection
+// is `memo.author = @request.auth.id`, and a save with a new memo would
+// either fail the rule (if the new memo's author is not the caller) or
+// silently move the file out from under another memo (if the author happens
+// to match). Both outcomes are worse than a clean error, so we forbid moves
+// here. The SPA only ever sends attachments it already knows belong to the
+// memo being edited, so the restriction is invisible in practice.
 //
 // Only the memo's author may rewrite the set; the rule engine has no
-// per-row equivalent because patches/samples inherit visibility from their
+// per-row equivalent because attachments inherit visibility from their
 // parent memo rather than the other way round.
 //
 // The whole rewrite runs in a single transaction so a rejected target
@@ -52,14 +51,10 @@ func (s *MemoServer) SetMemoAttachments(ctx context.Context, req *v1.SetMemoAtta
 	// Resolve every supplied attachment id to a (collection, record) pair,
 	// rejecting ids the SPA cannot have legitimately produced (empty name,
 	// non-existent row, cross-memo move).
-	type boundAttachment struct {
-		collection string
-		rec        *core.Record
-	}
-	wanted := make([]boundAttachment, 0, len(req.GetAttachments()))
+	wanted := make([]*core.Record, 0, len(req.GetAttachments()))
 	seen := make(map[string]struct{}, len(req.GetAttachments()))
 	for _, att := range req.GetAttachments() {
-		coll, rec, err := findAttachmentRecord(s.app, att.GetName())
+		_, rec, err := findAttachmentRecord(s.app, att.GetName())
 		if err != nil {
 			return nil, connect.NewError(connect.CodeInvalidArgument, "attachment not found: "+att.GetName())
 		}
@@ -74,36 +69,33 @@ func (s *MemoServer) SetMemoAttachments(ctx context.Context, req *v1.SetMemoAtta
 		// Dedup within the request — the SPA never sends duplicates, but a
 		// defensive dedup here means a stray duplicate cannot produce two
 		// pointer entries in the rewrite loop below.
-		key := coll + "/" + rec.Id
-		if _, dup := seen[key]; dup {
+		if _, dup := seen[rec.Id]; dup {
 			continue
 		}
-		seen[key] = struct{}{}
-		wanted = append(wanted, boundAttachment{collection: coll, rec: rec})
+		seen[rec.Id] = struct{}{}
+		wanted = append(wanted, rec)
 	}
 
 	wantedIDs := make(map[string]struct{}, len(wanted))
-	for _, b := range wanted {
-		wantedIDs[b.collection+"/"+b.rec.Id] = struct{}{}
+	for _, r := range wanted {
+		wantedIDs[r.Id] = struct{}{}
 	}
 
 	if err := s.app.RunInTransaction(func(txApp core.App) error {
 		// Delete every existing attachment on this memo that is not in the
-		// requested set. Patches/samples each have a single `memo` relation,
-		// so the union of the two filter results is the complete superset.
-		for _, coll := range []string{"patches", "samples"} {
-			existing, err := txApp.FindRecordsByFilter(coll,
-				"memo={:id}", "", 0, 0, map[string]any{"id": memoID})
-			if err != nil {
-				return err
+		// requested set. The unified `attachments` collection has a single
+		// `memo` relation, so a single filter is the complete superset.
+		existing, err := txApp.FindRecordsByFilter("attachments",
+			"memo={:id}", "", 0, 0, map[string]any{"id": memoID})
+		if err != nil {
+			return err
+		}
+		for _, r := range existing {
+			if _, keep := wantedIDs[r.Id]; keep {
+				continue
 			}
-			for _, r := range existing {
-				if _, keep := wantedIDs[coll+"/"+r.Id]; keep {
-					continue
-				}
-				if err := deleteRecordRequest(ctx, txApp, r); err != nil {
-					return err
-				}
+			if err := deleteRecordRequest(ctx, txApp, r); err != nil {
+				return err
 			}
 		}
 		return nil

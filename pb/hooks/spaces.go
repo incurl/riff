@@ -15,9 +15,9 @@ import (
 //     ADMIN."
 //
 //  2. OnRecordDeleteRequest: cascade the deletion to all directly
-//     assigned memos, plus their owned resources (patches,
-//     samples, memo_relations endpoints, reactions). This
-//     implements the design doc's:
+//     assigned memos, plus their owned resources (the unified
+//     `attachments` rows, memo_relations endpoints, reactions).
+//     This implements the design doc's:
 //     "Hard-deleting a Space atomically deletes the Space, its
 //     memberships, every directly assigned memo, those memos'
 //     owned database resources, and relations having a deleted
@@ -92,10 +92,7 @@ func cascadeSpaceDeletion(app core.App, spaceID string, memoIDs []string) error 
 				// Already gone (deleted concurrently); nothing to cascade.
 				continue
 			}
-			if err := deleteByFilter(txApp, "patches", "memo={:id}", map[string]any{"id": memoID}); err != nil {
-				return err
-			}
-			if err := deleteByFilter(txApp, "samples", "memo={:id}", map[string]any{"id": memoID}); err != nil {
+			if err := deleteByFilter(txApp, "attachments", "memo={:id}", map[string]any{"id": memoID}); err != nil {
 				return err
 			}
 			if err := deleteByFilter(txApp, "reactions", "memo={:id}", map[string]any{"id": memoID}); err != nil {

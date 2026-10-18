@@ -153,9 +153,11 @@ func TestUploadAttachment_SpecRejectsMissingFields(t *testing.T) {
 }
 
 // TestUploadAttachment_SpecRejectsMimeType verifies the
-// pre-flight MIME allow-list. A spec with a PNG file
-// is routed to `patches` (the default), where only
-// application/octet-stream is allowed, so the call
+// unified `attachments` collection's MIME allow-list.
+// The collection accepts a wide range of media types
+// (image/png, audio/wav, application/zip, ...). A
+// spec claiming application/x-msdownload (a Windows
+// executable) is outside the allow-list, so the call
 // must fail.
 func TestUploadAttachment_SpecRejectsMimeType(t *testing.T) {
 	app := newHookedApp(t)
@@ -165,7 +167,7 @@ func TestUploadAttachment_SpecRejectsMimeType(t *testing.T) {
 	ctx := withViewer(context.Background(), alice)
 
 	srv := NewAttachmentServer(app)
-	_, err := srv.UploadAttachment(ctx, uploadSpecRequest(memoName, "photo.png", "image/png", 10))
+	_, err := srv.UploadAttachment(ctx, uploadSpecRequest(memoName, "evil.exe", "application/x-msdownload", 10))
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
 }
@@ -204,10 +206,9 @@ func TestUploadAttachment_HappyPath(t *testing.T) {
 	ctx := withViewer(context.Background(), alice)
 
 	srv := NewAttachmentServer(app)
-	// The patches collection's FileField validator
-	// only accepts application/octet-stream. The PB
-	// mime detector sniffs the first 256 bytes; we
-	// fill the payload with control bytes so the
+	// The `attachments` collection's `blob` FileField
+	// validator accepts a wide range of file types.
+	// We fill the payload with control bytes so the
 	// detector lands on octet-stream.
 	payload := bytes.Repeat([]byte{0x00, 0x01, 0x02, 0x03}, 64)
 	spec := uploadSpecRequest(memoName, "kick.po33", "application/octet-stream", int64(len(payload)))
@@ -233,11 +234,11 @@ func TestUploadAttachment_HappyPath(t *testing.T) {
 
 	// The row exists and the file bytes match.
 	patchID := strings.TrimPrefix(resp.GetAttachment().GetName(), "attachments/")
-	rec, err := app.FindRecordById("patches", patchID)
+	rec, err := app.FindRecordById("attachments", patchID)
 	require.NoError(t, err)
 	fsys, err := app.NewFilesystem()
 	require.NoError(t, err)
-	r, err := fsys.GetReader(fmt.Sprintf("%s/%s/%s", rec.Collection().Id, rec.Id, rec.GetString("file")))
+	r, err := fsys.GetReader(fmt.Sprintf("%s/%s/%s", rec.Collection().Id, rec.Id, rec.GetString("filename")))
 	require.NoError(t, err)
 	defer r.Close()
 	got := make([]byte, len(payload))
@@ -544,10 +545,10 @@ func TestUploadAttachment_RejectsSpuriousFinishWithoutBytes(t *testing.T) {
 	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
 }
 
-// TestUploadAttachment_SampleAudio lands an audio
-// file in `samples` instead of `patches`. The proto
-// has no collection discriminator, so the routing
-// is purely MIME-driven.
+// TestUploadAttachment_SampleAudio lands an audio file
+// in the unified `attachments` collection. The proto has
+// no collection discriminator, so the file just lands in
+// `attachments` regardless of MIME type.
 func TestUploadAttachment_SampleAudio(t *testing.T) {
 	app := newHookedApp(t)
 	resetUploadManagerForTest(t, app)
@@ -567,7 +568,7 @@ func TestUploadAttachment_SampleAudio(t *testing.T) {
 	require.NotNil(t, resp.GetAttachment())
 	assert.Equal(t, "audio/wav", resp.GetAttachment().GetType())
 	id := resp.GetAttachment().GetName()[len("attachments/"):]
-	rec, err := app.FindRecordById("samples", id)
+	rec, err := app.FindRecordById("attachments", id)
 	require.NoError(t, err)
-	assert.Equal(t, "kit.wav", rec.GetStringSlice("files")[0])
+	assert.Equal(t, "kit.wav", rec.GetString("filename"))
 }

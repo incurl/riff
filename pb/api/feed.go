@@ -2,7 +2,6 @@ package api
 
 import (
 	"net/http"
-	"strconv"
 
 	"github.com/pocketbase/pocketbase/core"
 )
@@ -22,9 +21,17 @@ type FeedResponse struct {
 //	page, per_page    standard pagination (defaults 1, 30; max 100)
 //	space             restrict to a specific space uid or id;
 //	                   "unassigned" means no space
-//	type              filter by memos.type (note, patch, sample_pack, link)
 //	tag               filter by memos.tags json array containing the tag
-//	bpm_min, bpm_max  inclusive range on memos.bpm
+//
+// The 1860xxx series dropped the `type` and
+// `bpm_min`/`bpm_max` filters alongside the
+// columns they referenced. The `type` filter
+// was riff-only and the SPA never used it.
+// `bpm_min`/`bpm_max` could not be ported to
+// a JSON column without a post-query Go
+// filter, and the SPA never used them either;
+// they were a future-API stub that the
+// realignment retired.
 //
 // Returns a paginated list of memos the caller can read. The same
 // memos collection view rule applies: PRIVATE (own only),
@@ -75,41 +82,12 @@ func feedHandler(e *core.RequestEvent) error {
 			params["sid"] = spaces[0].Id
 		}
 	}
-	if typeQ := q.Get("type"); typeQ != "" {
-		if filter != "" {
-			filter += " && "
-		}
-		filter += "type = {:type}"
-		params["type"] = typeQ
-	}
 	if tagQ := q.Get("tag"); tagQ != "" {
 		if filter != "" {
 			filter += " && "
 		}
 		filter += "tags ?= {:tag}"
 		params["tag"] = tagQ
-	}
-	if v := q.Get("bpm_min"); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil {
-			return NewAPIError(http.StatusBadRequest, "bpm_min must be an integer")
-		}
-		if filter != "" {
-			filter += " && "
-		}
-		filter += "bpm >= {:bmin}"
-		params["bmin"] = float64(n)
-	}
-	if v := q.Get("bpm_max"); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil {
-			return NewAPIError(http.StatusBadRequest, "bpm_max must be an integer")
-		}
-		if filter != "" {
-			filter += " && "
-		}
-		filter += "bpm <= {:bmax}"
-		params["bmax"] = float64(n)
 	}
 
 	// We over-fetch by a small factor to compensate for the

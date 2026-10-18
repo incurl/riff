@@ -13,42 +13,39 @@ import (
 	v1 "github.com/incurl/riff/proto/gen/api/v1"
 )
 
-// memoAttachmentFixture inserts a patches or samples row attached to
-// memoID, with a real on-disk file backing the FileField. PocketBase's
-// FileField validator accepts a *filesystem.File but rejects a bare
-// filename string, so we build a one-byte File via filesystem.NewFileFromBytes
-// and assign it the same way the production upload pipeline does. The
+// memoAttachmentFixture inserts a row in the unified
+// `attachments` collection attached to memoID, with a
+// real on-disk file backing the FileField. PocketBase's
+// FileField validator accepts a *filesystem.File but
+// rejects a bare filename string, so we build a one-byte
+// File via filesystem.NewFileFromBytes and assign it the
+// same way the production upload pipeline does. The
 // single-save form mirrors the seedPatchFile helper in
-// connect_wave5_attachment_internal_test.go so the test fixture cannot
-// drift from the field-level validation rules the running server enforces.
+// connect_wave5_attachment_internal_test.go so the test
+// fixture cannot drift from the field-level validation
+// rules the running server enforces.
 func memoAttachmentFixture(t *testing.T, app core.App, memoID, collection, filename string) *core.Record {
 	t.Helper()
-	col := requireCollection(t, app, collection)
+	_ = collection // unified `attachments` only; kept for the call site readability
+	col := requireCollection(t, app, "attachments")
 
 	rec := core.NewRecord(col)
 	rec.Set("memo", memoID)
-	rec.Set("description", "test")
+	rec.Set("filename", filename)
+	rec.Set("size", int64(len("test-bytes")))
+	rec.Set("storage", "local")
 
-	// PocketBase's FileField validator runs MIME detection on the bytes
-	// and rejects anything that does not match the collection's
-	// MimeTypes allowlist. The patches collection only accepts
-	// application/octet-stream, and the samples collection accepts
-	// audio/{wav,x-wav,mpeg,mp3} or application/zip, so the byte payload
-	// for the samples case starts with the RIFF/WAVE magic so the
-	// detector resolves to audio/wav.
-	payload := []byte{0x00, 0x01, 0x02, 0x03, 0xff, 0xfe, 0xfd, 0x10, 0x20, 0x30}
-	if collection == "samples" {
-		payload = append([]byte("RIFF\x00\x00\x00\x00WAVEfmt "), payload...)
-	}
-	f, err := filesystem.NewFileFromBytes(payload, filename)
+	// PocketBase's FileField validator runs MIME
+	// detection on the bytes and rejects anything
+	// outside the unified `attachments` collection's
+	// `blob` MimeTypes allow-list. The collection
+	// accepts a wide range of file types, so a small
+	// non-magic byte payload is fine for the unit
+	// tests; the production upload pipeline is what
+	// actually exercises the field's MIME rules.
+	f, err := filesystem.NewFileFromBytes([]byte("test-bytes"), filename)
 	require.NoError(t, err)
-
-	if collection == "patches" {
-		rec.Set("file", f)
-		rec.Set("compatible_po_version", "PO-33")
-	} else {
-		rec.Set("files", []*filesystem.File{f})
-	}
+	rec.Set("blob", f)
 	require.NoError(t, app.Save(rec))
 	return rec
 }
@@ -76,8 +73,8 @@ func TestSetMemoAttachments_ReplaceClears(t *testing.T) {
 	require.NoError(t, err)
 	memoID := memoIDFromName(created.GetName())
 
-	_ = memoAttachmentFixture(t, app, memoID, "patches", "a.po33")
-	_ = memoAttachmentFixture(t, app, memoID, "samples", "b.wav")
+	_ = memoAttachmentFixture(t, app, memoID, "attachments", "a.po33")
+	_ = memoAttachmentFixture(t, app, memoID, "attachments", "b.wav")
 
 	_, err = srv.SetMemoAttachments(withViewer(context.Background(), alice), &v1.SetMemoAttachmentsRequest{
 		Name:        "memos/" + memoID,
@@ -85,11 +82,9 @@ func TestSetMemoAttachments_ReplaceClears(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	for _, coll := range []string{"patches", "samples"} {
-		rows, err := app.FindRecordsByFilter(coll, "memo={:id}", "", 0, 0, map[string]any{"id": memoID})
-		require.NoError(t, err)
-		assert.Empty(t, rows, "after SetMemoAttachments([]) the %s collection should be empty", coll)
-	}
+	rows, err := app.FindRecordsByFilter("attachments", "memo={:id}", "", 0, 0, map[string]any{"id": memoID})
+	require.NoError(t, err)
+	assert.Empty(t, rows, "after SetMemoAttachments([]) the attachments collection should be empty")
 }
 
 // TestSetMemoAttachments_PassesThroughSuppliedSet asserts the
@@ -107,27 +102,27 @@ func TestSetMemoAttachments_PassesThroughSuppliedSet(t *testing.T) {
 	require.NoError(t, err)
 	memoID := memoIDFromName(created.GetName())
 
-	p1 := memoAttachmentFixture(t, app, memoID, "patches", "a.po33")
-	s1 := memoAttachmentFixture(t, app, memoID, "samples", "b.wav")
+	p1 := memoAttachmentFixture(t, app, memoID, "attachments", "a.po33")
+	s1 := memoAttachmentFixture(t, app, memoID, "attachments", "b.wav")
 
 	_, err = srv.SetMemoAttachments(withViewer(context.Background(), alice), &v1.SetMemoAttachmentsRequest{
 		Name: "memos/" + memoID,
 		Attachments: []*v1.Attachment{
-			{Name: "attachments/" + p1.Id, Filename: p1.GetString("file")},
-			{Name: "attachments/" + s1.Id, Filename: s1.GetString("files")},
+			{Name: "attachments/" + p1.Id},
+			{Name: "attachments/" + s1.Id},
 		},
 	})
 	require.NoError(t, err)
 
-	rows, err := app.FindRecordsByFilter("patches", "memo={:id}", "", 0, 0, map[string]any{"id": memoID})
+	rows, err := app.FindRecordsByFilter("attachments", "memo={:id}", "", 0, 0, map[string]any{"id": memoID})
 	require.NoError(t, err)
-	assert.Len(t, rows, 1)
-	assert.Equal(t, p1.Id, rows[0].Id)
-
-	srows, err := app.FindRecordsByFilter("samples", "memo={:id}", "", 0, 0, map[string]any{"id": memoID})
-	require.NoError(t, err)
-	assert.Len(t, srows, 1)
-	assert.Equal(t, s1.Id, srows[0].Id)
+	assert.Len(t, rows, 2)
+	got := map[string]string{}
+	for _, r := range rows {
+		got[r.Id] = r.GetString("filename")
+	}
+	assert.Equal(t, "a.po33", got[p1.Id])
+	assert.Equal(t, "b.wav", got[s1.Id])
 }
 
 // TestSetMemoAttachments_AuthorOnly guards the author check: a non-author
@@ -145,7 +140,7 @@ func TestSetMemoAttachments_AuthorOnly(t *testing.T) {
 	require.NoError(t, err)
 	memoID := memoIDFromName(created.GetName())
 
-	p1 := memoAttachmentFixture(t, app, memoID, "patches", "a.po33")
+	p1 := memoAttachmentFixture(t, app, memoID, "attachments", "a.po33")
 
 	_, err = srv.SetMemoAttachments(withViewer(context.Background(), bob), &v1.SetMemoAttachmentsRequest{
 		Name: "memos/" + memoID,
@@ -185,7 +180,7 @@ func TestSetMemoAttachments_RejectsForeignMemo(t *testing.T) {
 	require.NoError(t, err)
 	memoB := memoIDFromName(createdB.GetName())
 
-	pA := memoAttachmentFixture(t, app, memoA, "patches", "a.po33")
+	pA := memoAttachmentFixture(t, app, memoA, "attachments", "a.po33")
 
 	_, err = srv.SetMemoAttachments(withViewer(context.Background(), alice), &v1.SetMemoAttachmentsRequest{
 		Name: "memos/" + memoB,
@@ -196,7 +191,7 @@ func TestSetMemoAttachments_RejectsForeignMemo(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
 
-	rows, err := app.FindRecordsByFilter("patches", "memo={:id}", "", 0, 0, map[string]any{"id": memoA})
+	rows, err := app.FindRecordsByFilter("attachments", "memo={:id}", "", 0, 0, map[string]any{"id": memoA})
 	require.NoError(t, err)
 	assert.Len(t, rows, 1, "foreign-memo rejection must not delete the original attachment")
 }

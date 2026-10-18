@@ -89,8 +89,8 @@ func TestInstanceService_IgnoresInstallerPlaceholder(t *testing.T) {
 
 // --- AttachmentService ------------------------------------------------------
 
-// TestAttachmentService_Empty asserts an instance with no patches or
-// samples returns an empty (non-nil) list rather than an error.
+// TestAttachmentService_Empty asserts an instance with no
+// attachments returns an empty (non-nil) list rather than an error.
 func TestAttachmentService_Empty(t *testing.T) {
 	app := newPhase2App(t)
 	srv := connect.NewAttachmentServer(app)
@@ -100,70 +100,74 @@ func TestAttachmentService_Empty(t *testing.T) {
 	assert.Empty(t, resp.GetAttachments())
 }
 
-// TestAttachmentService_PublicPatchVisibleAnonymously asserts a patch
-// attached to a PUBLIC memo shows up for an anonymous caller, with
-// the fields the frontend reads (name, filename, type, link).
-func TestAttachmentService_PublicPatchVisibleAnonymously(t *testing.T) {
+// TestAttachmentService_PublicAttachmentVisibleAnonymously asserts
+// an attachment on a PUBLIC memo shows up for an anonymous caller,
+// with the fields the frontend reads (name, filename, type, link).
+func TestAttachmentService_PublicAttachmentVisibleAnonymously(t *testing.T) {
 	app := newPhase2App(t)
 
-	cols := mustCols(t, app, "users", "memos", "patches")
-	users, memos, patches := cols[0], cols[1], cols[2]
+	cols := mustCols(t, app, "users", "memos", "attachments")
+	users, memos, attachments := cols[0], cols[1], cols[2]
 
 	memo := newPublicMemo(t, app, users, memos, "alice", "patch")
-	patch := newPatch(t, app, patches, memo, []byte{0x01, 0x02, 0x03, 0x04})
+	att := newAttachment(t, app, attachments, memo, []byte{0x01, 0x02, 0x03, 0x04})
 
 	srv := connect.NewAttachmentServer(app)
 	resp, err := srv.ListAttachments(context.Background(), &v1.ListAttachmentsRequest{})
 	require.NoError(t, err)
 
-	require.Len(t, resp.GetAttachments(), 1, "the public patch must be listed")
+	require.Len(t, resp.GetAttachments(), 1, "the public attachment must be listed")
 	a := resp.GetAttachments()[0]
 
-	assert.Equal(t, "attachments/"+patch.Id, a.GetName())
+	assert.Equal(t, "attachments/"+att.Id, a.GetName())
 	assert.True(t, strings.HasSuffix(a.GetFilename(), ".po33"), "filename = %q", a.GetFilename())
 	assert.Equal(t, "application/octet-stream", a.GetType())
-	assert.True(t, strings.HasPrefix(a.GetExternalLink(), "/api/files/patches/"+patch.Id+"/"),
+	assert.True(t, strings.HasPrefix(a.GetExternalLink(), "/api/files/attachments/"+att.Id+"/"),
 		"external link = %q", a.GetExternalLink())
 	assert.NotNil(t, a.GetCreateTime())
 }
 
-// TestAttachmentService_PrivateMemoHiddenAnonymously asserts a patch
-// whose parent memo is PRIVATE is filtered out for anonymous callers.
+// TestAttachmentService_PrivateMemoHiddenAnonymously asserts an
+// attachment whose parent memo is PRIVATE is filtered out for
+// anonymous callers.
 func TestAttachmentService_PrivateMemoHiddenAnonymously(t *testing.T) {
 	app := newPhase2App(t)
 
-	cols := mustCols(t, app, "users", "memos", "patches")
-	users, memos, patches := cols[0], cols[1], cols[2]
+	cols := mustCols(t, app, "users", "memos", "attachments")
+	users, memos, attachments := cols[0], cols[1], cols[2]
 
 	memo := newMemo(t, app, users, memos, "bob", "PRIVATE", "note")
-	newPatch(t, app, patches, memo, []byte{0x09, 0x08, 0x07})
+	newAttachment(t, app, attachments, memo, []byte{0x09, 0x08, 0x07})
 
 	srv := connect.NewAttachmentServer(app)
 	resp, err := srv.ListAttachments(context.Background(), &v1.ListAttachmentsRequest{})
 	require.NoError(t, err)
-	assert.Empty(t, resp.GetAttachments(), "a PRIVATE memo's patch must not leak to anonymous callers")
+	assert.Empty(t, resp.GetAttachments(), "a PRIVATE memo's attachment must not leak to anonymous callers")
 }
 
-// TestAttachmentService_SamplePackUsesFirstFile asserts the samples
-// branch maps a multi-file sample pack to a single Attachment whose
-// filename is the first stored file.
-func TestAttachmentService_SamplePackUsesFirstFile(t *testing.T) {
+// TestAttachmentService_ArchiveAttachmentVisible asserts that a
+// single-file archive (an application/zip) lands in the unified
+// `attachments` collection and surfaces the right MIME on the wire.
+func TestAttachmentService_ArchiveAttachmentVisible(t *testing.T) {
 	app := newPhase2App(t)
 
-	cols := mustCols(t, app, "users", "memos", "samples")
-	users, memos, samples := cols[0], cols[1], cols[2]
+	cols := mustCols(t, app, "users", "memos", "attachments")
+	users, memos, attachments := cols[0], cols[1], cols[2]
 
 	memo := newPublicMemo(t, app, users, memos, "carol", "sample_pack")
 
-	// A minimal ZIP header keeps the file field's MIME validator
-	// happy without shipping a real audio fixture.
+	// A minimal ZIP header keeps the file field's MIME
+	// validator happy without shipping a real audio fixture.
 	zipBytes := []byte{0x50, 0x4B, 0x03, 0x04, 0x00, 0x00, 0x00, 0x00}
 	f, err := filesystem.NewFileFromBytes(zipBytes, "kit.zip")
 	require.NoError(t, err)
 
-	rec := core.NewRecord(samples)
+	rec := core.NewRecord(attachments)
 	rec.Set("memo", memo.Id)
-	rec.Set("files", f)
+	rec.Set("filename", "kit.zip")
+	rec.Set("size", int64(len(zipBytes)))
+	rec.Set("storage", "local")
+	rec.Set("blob", f)
 	require.NoError(t, app.Save(rec))
 
 	srv := connect.NewAttachmentServer(app)
@@ -174,7 +178,7 @@ func TestAttachmentService_SamplePackUsesFirstFile(t *testing.T) {
 	a := resp.GetAttachments()[0]
 	assert.Equal(t, "attachments/"+rec.Id, a.GetName())
 	assert.Equal(t, "application/zip", a.GetType())
-	assert.True(t, strings.HasPrefix(a.GetExternalLink(), "/api/files/samples/"+rec.Id+"/"),
+	assert.True(t, strings.HasPrefix(a.GetExternalLink(), "/api/files/attachments/"+rec.Id+"/"),
 		"external link = %q", a.GetExternalLink())
 }
 
@@ -213,7 +217,6 @@ func newMemo(t *testing.T, app core.App, users, memos *core.Collection, username
 	r.Set("author", author.Id)
 	r.Set("content", "test memo for "+username)
 	r.Set("visibility", visibility)
-	r.Set("type", memoType)
 	require.NoError(t, app.Save(r))
 	return r
 }
@@ -224,15 +227,22 @@ func newPublicMemo(t *testing.T, app core.App, users, memos *core.Collection, us
 	return newMemo(t, app, users, memos, username, "PUBLIC", memoType)
 }
 
-// newPatch attaches a binary file to a memo.
-func newPatch(t *testing.T, app core.App, patches *core.Collection, memo *core.Record, contents []byte) *core.Record {
+// newAttachment inserts a row in the unified `attachments`
+// collection with a real on-disk file backing the `blob`
+// FileField. The collection's MimeTypes allow-list
+// permits application/octet-stream by default, so a
+// non-magic byte payload is fine.
+func newAttachment(t *testing.T, app core.App, attachments *core.Collection, memo *core.Record, contents []byte) *core.Record {
 	t.Helper()
 	f, err := filesystem.NewFileFromBytes(contents, "kick.po33")
 	require.NoError(t, err)
 
-	r := core.NewRecord(patches)
+	r := core.NewRecord(attachments)
 	r.Set("memo", memo.Id)
-	r.Set("file", f)
+	r.Set("filename", "kick.po33")
+	r.Set("size", int64(len(contents)))
+	r.Set("storage", "local")
+	r.Set("blob", f)
 	require.NoError(t, app.Save(r))
 	return r
 }
