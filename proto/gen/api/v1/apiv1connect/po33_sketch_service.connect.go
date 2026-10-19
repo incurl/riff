@@ -33,6 +33,13 @@ const (
 	// SketchServiceArchiveSketchProcedure is the procedure name of the SketchService's ArchiveSketch
 	// RPC.
 	SketchServiceArchiveSketchProcedure = "/memos.api.v1.SketchService/ArchiveSketch"
+	// SketchServiceGetSketchProcedure is the procedure name of the SketchService's GetSketch RPC.
+	SketchServiceGetSketchProcedure = "/memos.api.v1.SketchService/GetSketch"
+	// SketchServicePushSketchProcedure is the procedure name of the SketchService's PushSketch RPC.
+	SketchServicePushSketchProcedure = "/memos.api.v1.SketchService/PushSketch"
+	// SketchServiceGetPushStatusProcedure is the procedure name of the SketchService's GetPushStatus
+	// RPC.
+	SketchServiceGetPushStatusProcedure = "/memos.api.v1.SketchService/GetPushStatus"
 )
 
 var (
@@ -55,6 +62,27 @@ var (
 			StreamType: connect.StreamTypeUnary,
 			Schema:     v1.File_api_v1_po33_sketch_service_proto.Services().ByName("SketchService").Methods().ByName("ArchiveSketch"),
 			Procedure:  SketchServiceArchiveSketchProcedure,
+		}
+	})
+	sketchServiceGetSketchSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_api_v1_po33_sketch_service_proto.Services().ByName("SketchService").Methods().ByName("GetSketch"),
+			Procedure:  SketchServiceGetSketchProcedure,
+		}
+	})
+	sketchServicePushSketchSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_api_v1_po33_sketch_service_proto.Services().ByName("SketchService").Methods().ByName("PushSketch"),
+			Procedure:  SketchServicePushSketchProcedure,
+		}
+	})
+	sketchServiceGetPushStatusSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_api_v1_po33_sketch_service_proto.Services().ByName("SketchService").Methods().ByName("GetPushStatus"),
+			Procedure:  SketchServiceGetPushStatusProcedure,
 		}
 	})
 )
@@ -89,6 +117,44 @@ type SketchServiceClient interface {
 	// previous attachment blobs but do not change
 	// the ARCHIVED state.
 	ArchiveSketch(context.Context, *v1.ArchiveSketchRequest) (*v1.Memo, error)
+	// GetSketch returns a single sketch memo by
+	// resource name, with the SketchPayload
+	// envelope populated. Used by the SPA to
+	// render the in-page sketch player on the
+	// memo detail page without re-listing
+	// every sketch the caller owns. The caller
+	// must be the sketch author or a space
+	// member (per `canViewMemo`); a non-viewer
+	// gets NotFound rather than Forbidden so
+	// a private sketch's existence is not
+	// leaked to a stranger.
+	GetSketch(context.Context, *v1.GetSketchRequest) (*v1.Memo, error)
+	// PushSketch queues a sketch memo for delivery
+	// to one of the caller's bound PO-33 devices.
+	// The flow is device-pulls: the server writes
+	// a `pending_pull` envelope onto the
+	// `po33_devices` row with a 15-minute signed
+	// URL the device's `GET /api/po33/sketches/
+	// pending` handler will accept. The push is
+	// idempotent within the 30s rate-limit window:
+	// a second push for the same (device, memo)
+	// pair overwrites the prior envelope with a
+	// fresh signed URL but does not change the
+	// push id, so the SPA's polling
+	// `GetPushStatus` sees a single logical push.
+	PushSketch(context.Context, *v1.PushSketchRequest) (*v1.PushSketchResponse, error)
+	// GetPushStatus returns the latest push state
+	// for a (device, push_id) pair. The SPA polls
+	// this every 2s while the push dialog is open
+	// and the response drives the four-state badge
+	// (queued / sending / delivered / failed). A
+	// push that has been acked by the device is
+	// still queryable for 30 minutes so the SPA
+	// can render a "delivered" state after the
+	// user closes the dialog; after that the
+	// handler returns NotFound and the SPA
+	// clears its local state.
+	GetPushStatus(context.Context, *v1.GetPushStatusRequest) (*v1.PushStatus, error)
 }
 
 // NewSketchServiceClient constructs a client for the memos.api.v1.SketchService service. Multiple
@@ -127,6 +193,44 @@ type SketchServiceHandler interface {
 	// previous attachment blobs but do not change
 	// the ARCHIVED state.
 	ArchiveSketch(context.Context, *v1.ArchiveSketchRequest) (*v1.Memo, error)
+	// GetSketch returns a single sketch memo by
+	// resource name, with the SketchPayload
+	// envelope populated. Used by the SPA to
+	// render the in-page sketch player on the
+	// memo detail page without re-listing
+	// every sketch the caller owns. The caller
+	// must be the sketch author or a space
+	// member (per `canViewMemo`); a non-viewer
+	// gets NotFound rather than Forbidden so
+	// a private sketch's existence is not
+	// leaked to a stranger.
+	GetSketch(context.Context, *v1.GetSketchRequest) (*v1.Memo, error)
+	// PushSketch queues a sketch memo for delivery
+	// to one of the caller's bound PO-33 devices.
+	// The flow is device-pulls: the server writes
+	// a `pending_pull` envelope onto the
+	// `po33_devices` row with a 15-minute signed
+	// URL the device's `GET /api/po33/sketches/
+	// pending` handler will accept. The push is
+	// idempotent within the 30s rate-limit window:
+	// a second push for the same (device, memo)
+	// pair overwrites the prior envelope with a
+	// fresh signed URL but does not change the
+	// push id, so the SPA's polling
+	// `GetPushStatus` sees a single logical push.
+	PushSketch(context.Context, *v1.PushSketchRequest) (*v1.PushSketchResponse, error)
+	// GetPushStatus returns the latest push state
+	// for a (device, push_id) pair. The SPA polls
+	// this every 2s while the push dialog is open
+	// and the response drives the four-state badge
+	// (queued / sending / delivered / failed). A
+	// push that has been acked by the device is
+	// still queryable for 30 minutes so the SPA
+	// can render a "delivered" state after the
+	// user closes the dialog; after that the
+	// handler returns NotFound and the SPA
+	// clears its local state.
+	GetPushStatus(context.Context, *v1.GetPushStatusRequest) (*v1.PushStatus, error)
 }
 
 // RegisterSketchServiceHandler registers svc as the memos.api.v1.SketchService implementation on
@@ -137,6 +241,9 @@ func RegisterSketchServiceHandler(server *connect.Server, svc SketchServiceHandl
 		connect.Method{Spec: sketchServiceListMySketchesSpec(), Handler: adapter.listMySketches},
 		connect.Method{Spec: sketchServicePublishSketchSpec(), Handler: adapter.publishSketch},
 		connect.Method{Spec: sketchServiceArchiveSketchSpec(), Handler: adapter.archiveSketch},
+		connect.Method{Spec: sketchServiceGetSketchSpec(), Handler: adapter.getSketch},
+		connect.Method{Spec: sketchServicePushSketchSpec(), Handler: adapter.pushSketch},
+		connect.Method{Spec: sketchServiceGetPushStatusSpec(), Handler: adapter.getPushStatus},
 	)
 }
 
@@ -153,6 +260,18 @@ func (UnimplementedSketchServiceHandler) PublishSketch(context.Context, *v1.Publ
 
 func (UnimplementedSketchServiceHandler) ArchiveSketch(context.Context, *v1.ArchiveSketchRequest) (*v1.Memo, error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, "memos.api.v1.SketchService.ArchiveSketch is not implemented")
+}
+
+func (UnimplementedSketchServiceHandler) GetSketch(context.Context, *v1.GetSketchRequest) (*v1.Memo, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "memos.api.v1.SketchService.GetSketch is not implemented")
+}
+
+func (UnimplementedSketchServiceHandler) PushSketch(context.Context, *v1.PushSketchRequest) (*v1.PushSketchResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "memos.api.v1.SketchService.PushSketch is not implemented")
+}
+
+func (UnimplementedSketchServiceHandler) GetPushStatus(context.Context, *v1.GetPushStatusRequest) (*v1.PushStatus, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "memos.api.v1.SketchService.GetPushStatus is not implemented")
 }
 
 type sketchServiceClient struct {
@@ -178,6 +297,30 @@ func (c *sketchServiceClient) PublishSketch(ctx context.Context, req *v1.Publish
 func (c *sketchServiceClient) ArchiveSketch(ctx context.Context, req *v1.ArchiveSketchRequest) (*v1.Memo, error) {
 	var res v1.Memo
 	if err := c.client.CallUnary(ctx, sketchServiceArchiveSketchSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *sketchServiceClient) GetSketch(ctx context.Context, req *v1.GetSketchRequest) (*v1.Memo, error) {
+	var res v1.Memo
+	if err := c.client.CallUnary(ctx, sketchServiceGetSketchSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *sketchServiceClient) PushSketch(ctx context.Context, req *v1.PushSketchRequest) (*v1.PushSketchResponse, error) {
+	var res v1.PushSketchResponse
+	if err := c.client.CallUnary(ctx, sketchServicePushSketchSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *sketchServiceClient) GetPushStatus(ctx context.Context, req *v1.GetPushStatusRequest) (*v1.PushStatus, error) {
+	var res v1.PushStatus
+	if err := c.client.CallUnary(ctx, sketchServiceGetPushStatusSpec(), req, &res); err != nil {
 		return nil, err
 	}
 	return &res, nil
@@ -215,6 +358,42 @@ func (h sketchServiceHandler) archiveSketch(ctx context.Context, _ connect.Spec,
 		return err
 	}
 	res, err := h.svc.ArchiveSketch(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h sketchServiceHandler) getSketch(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.GetSketchRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.GetSketch(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h sketchServiceHandler) pushSketch(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.PushSketchRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.PushSketch(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h sketchServiceHandler) getPushStatus(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.GetPushStatusRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.GetPushStatus(ctx, &req)
 	if err != nil {
 		return err
 	}

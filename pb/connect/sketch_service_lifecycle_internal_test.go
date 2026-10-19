@@ -71,7 +71,7 @@ func newPublishedSketchMemo(t *testing.T, app core.App, userID string) *core.Rec
 // outright.
 func TestPublishSketch_NotInDraft_Fails(t *testing.T) {
 	app := newHookedApp(t)
-	srv := NewSketchServer(app)
+	srv := NewSketchServer(app, nil)
 	alice := newUser(t, app, "alice")
 
 	// An already-NORMAL sketch: the publish
@@ -91,7 +91,7 @@ func TestPublishSketch_NotInDraft_Fails(t *testing.T) {
 // memo from a non-existent one.
 func TestPublishSketch_NotOwner_NotFound(t *testing.T) {
 	app := newHookedApp(t)
-	srv := NewSketchServer(app)
+	srv := NewSketchServer(app, nil)
 	alice := newUser(t, app, "alice")
 	bob := newUser(t, app, "bob")
 	memo := newDraftSketchMemo(t, app, alice.Id)
@@ -112,7 +112,7 @@ func TestPublishSketch_NotOwner_NotFound(t *testing.T) {
 // FAILED_PRECONDITION.
 func TestPublishSketch_NotASketch_Fails(t *testing.T) {
 	app := newHookedApp(t)
-	srv := NewSketchServer(app)
+	srv := NewSketchServer(app, nil)
 	alice := newUser(t, app, "alice")
 
 	// Force a text memo into DRAFT state
@@ -144,7 +144,7 @@ func TestPublishSketch_NotASketch_Fails(t *testing.T) {
 // response carries the new state.
 func TestArchiveSketch_HappyPath_NormalToArchived(t *testing.T) {
 	app := newHookedApp(t)
-	srv := NewSketchServer(app)
+	srv := NewSketchServer(app, nil)
 	alice := newUser(t, app, "alice")
 	memo := newPublishedSketchMemo(t, app, alice.Id)
 
@@ -165,7 +165,7 @@ func TestArchiveSketch_HappyPath_NormalToArchived(t *testing.T) {
 // same row without an error.
 func TestArchiveSketch_AlreadyArchived_Idempotent(t *testing.T) {
 	app := newHookedApp(t)
-	srv := NewSketchServer(app)
+	srv := NewSketchServer(app, nil)
 	alice := newUser(t, app, "alice")
 	memo := newPublishedSketchMemo(t, app, alice.Id)
 

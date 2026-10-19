@@ -43,7 +43,7 @@ func newSketchMemo(t *testing.T, app core.App, userID, content string) *core.Rec
 // sketch memos.
 func TestListMySketches_EmptyByDefault(t *testing.T) {
 	app := newHookedApp(t)
-	srv := NewSketchServer(app)
+	srv := NewSketchServer(app, nil)
 	alice := newUser(t, app, "alice")
 
 	out, err := srv.ListMySketches(withViewer(context.Background(), alice), &v1.ListMySketchesRequest{})
@@ -58,7 +58,7 @@ func TestListMySketches_EmptyByDefault(t *testing.T) {
 // sketch does not surface to alice.
 func TestListMySketches_OnlyMineWithSourceSketch(t *testing.T) {
 	app := newHookedApp(t)
-	srv := NewSketchServer(app)
+	srv := NewSketchServer(app, nil)
 	alice := newUser(t, app, "alice")
 	bob := newUser(t, app, "bob")
 
@@ -89,7 +89,7 @@ func TestListMySketches_OnlyMineWithSourceSketch(t *testing.T) {
 // unauthenticated path.
 func TestListMySketches_RequiresAuth(t *testing.T) {
 	app := newHookedApp(t)
-	srv := NewSketchServer(app)
+	srv := NewSketchServer(app, nil)
 	alice := newUser(t, app, "alice")
 	newSketchMemo(t, app, alice.Id, "sketch")
 

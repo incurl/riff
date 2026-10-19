@@ -22,6 +22,7 @@ import "google/api/annotations.proto";
 import "google/api/client.proto";
 import "google/api/field_behavior.proto";
 import "google/api/resource.proto";
+import "google/protobuf/timestamp.proto";
 
 option go_package = "gen/api/v1";
 
@@ -87,6 +88,58 @@ service SketchService {
     };
     option (google.api.method_signature) = "name";
   }
+
+  // GetSketch returns a single sketch memo by
+  // resource name, with the SketchPayload
+  // envelope populated. Used by the SPA to
+  // render the in-page sketch player on the
+  // memo detail page without re-listing
+  // every sketch the caller owns. The caller
+  // must be the sketch author or a space
+  // member (per `canViewMemo`); a non-viewer
+  // gets NotFound rather than Forbidden so
+  // a private sketch's existence is not
+  // leaked to a stranger.
+  rpc GetSketch(GetSketchRequest) returns (Memo) {
+    option (google.api.http) = {get: "/api/v1/{name=memos/*}"};
+    option (google.api.method_signature) = "name";
+  }
+
+  // PushSketch queues a sketch memo for delivery
+  // to one of the caller's bound PO-33 devices.
+  // The flow is device-pulls: the server writes
+  // a `pending_pull` envelope onto the
+  // `po33_devices` row with a 15-minute signed
+  // URL the device's `GET /api/po33/sketches/
+  // pending` handler will accept. The push is
+  // idempotent within the 30s rate-limit window:
+  // a second push for the same (device, memo)
+  // pair overwrites the prior envelope with a
+  // fresh signed URL but does not change the
+  // push id, so the SPA's polling
+  // `GetPushStatus` sees a single logical push.
+  rpc PushSketch(PushSketchRequest) returns (PushSketchResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/{name=memos/*}:push"
+      body: "*"
+    };
+    option (google.api.method_signature) = "name,device";
+  }
+
+  // GetPushStatus returns the latest push state
+  // for a (device, push_id) pair. The SPA polls
+  // this every 2s while the push dialog is open
+  // and the response drives the four-state badge
+  // (queued / sending / delivered / failed). A
+  // push that has been acked by the device is
+  // still queryable for 30 minutes so the SPA
+  // can render a "delivered" state after the
+  // user closes the dialog; after that the
+  // handler returns NotFound and the SPA
+  // clears its local state.
+  rpc GetPushStatus(GetPushStatusRequest) returns (PushStatus) {
+    option (google.api.http) = {get: "/api/v1/{device=po33-devices/*}/pushes/{push}"};
+  }
 }
 
 message ListMySketchesRequest {
@@ -115,4 +168,102 @@ message ArchiveSketchRequest {
     (google.api.field_behavior) = REQUIRED,
     (google.api.resource_reference) = {type: "memos.api.v1/Memo"}
   ];
+}
+
+// GetSketchRequest is the body of GetSketch.
+// Today it is the single `name` field; the
+// `(google.api.method_signature)` annotation on
+// the RPC mirrors the upstream Memos
+// `GetMemoRequest` shape.
+message GetSketchRequest {
+  // The resource name of the sketch memo.
+  // Format: memos/{memo}
+  string name = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.resource_reference) = {type: "memos.api.v1/Memo"}
+  ];
+}
+
+// PushSketchRequest is the body of PushSketch.
+// The caller must own the device (`device`)
+// and the memo (`name`); a non-owner is
+// rejected with PermissionDenied / NotFound.
+message PushSketchRequest {
+  // The sketch memo to push. Format: memos/{memo}.
+  string name = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.resource_reference) = {type: "memos.api.v1/Memo"}
+  ];
+  // The bound PO-33 device to push to.
+  // Format: po33-devices/{device}.
+  string device = 2 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.resource_reference) = {type: "memos.api.v1/Device"}
+  ];
+}
+
+// PushSketchResponse is the body of a successful
+// PushSketch. The `push_id` is the value the
+// SPA polls via GetPushStatus to render the
+// badge state. The signed_url + signed_expires_at
+// fields are also returned so a server-rendered
+// email notification (future) can deep-link the
+// device straight to the download; the SPA
+// itself never uses them (the device's
+// `GET /api/po33/sketches/pending` poll is
+// the single authority on what to download).
+message PushSketchResponse {
+  string push_id = 1;
+  string signed_url = 2;
+  google.protobuf.Timestamp signed_expires_at = 3;
+}
+
+// GetPushStatusRequest is the body of
+// GetPushStatus. The `{device}` and `{push}`
+// URL fields are repeated here as named
+// request fields; the http binding
+// populates them from the path.
+message GetPushStatusRequest {
+  string device = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.resource_reference) = {type: "memos.api.v1/Device"}
+  ];
+  string push = 2 [(google.api.field_behavior) = REQUIRED];
+}
+
+// PushStatus is the polled push state. The
+// `state` field is one of:
+//
+//	STATE_UNSPECIFIED  — the push id is unknown to
+//	                      the server (rolled out
+//	                      of the 30-min keep
+//	                      window or never existed).
+//	QUEUED             — the envelope is on the
+//	                      device row, the device
+//	                      has not yet polled.
+//	SENDING            — the device has polled
+//	                      and is reading the bytes.
+//	DELIVERED          — the device has acked
+//	                      receipt.
+//	FAILED             — the device returned a
+//	                      failure on its ack
+//	                      POST, or the signed
+//	                      URL expired before
+//	                      the device fetched.
+enum PushState {
+  PUSH_STATE_UNSPECIFIED = 0;
+  PUSH_STATE_QUEUED = 1;
+  PUSH_STATE_SENDING = 2;
+  PUSH_STATE_DELIVERED = 3;
+  PUSH_STATE_FAILED = 4;
+}
+
+message PushStatus {
+  string push_id = 1;
+  string device = 2;
+  string memo = 3;
+  PushState state = 4;
+  google.protobuf.Timestamp queued_at = 5;
+  google.protobuf.Timestamp updated_at = 6;
+  string failure_reason = 7;
 }

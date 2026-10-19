@@ -10,6 +10,7 @@ import (
 	_ "google.golang.org/genproto/googleapis/api/annotations"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
+	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
@@ -21,6 +22,80 @@ const (
 	// Verify that runtime/protoimpl is sufficiently up-to-date.
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
+
+// PushStatus is the polled push state. The
+// `state` field is one of:
+//
+//	STATE_UNSPECIFIED  — the push id is unknown to
+//	                      the server (rolled out
+//	                      of the 30-min keep
+//	                      window or never existed).
+//	QUEUED             — the envelope is on the
+//	                      device row, the device
+//	                      has not yet polled.
+//	SENDING            — the device has polled
+//	                      and is reading the bytes.
+//	DELIVERED          — the device has acked
+//	                      receipt.
+//	FAILED             — the device returned a
+//	                      failure on its ack
+//	                      POST, or the signed
+//	                      URL expired before
+//	                      the device fetched.
+type PushState int32
+
+const (
+	PushState_PUSH_STATE_UNSPECIFIED PushState = 0
+	PushState_PUSH_STATE_QUEUED      PushState = 1
+	PushState_PUSH_STATE_SENDING     PushState = 2
+	PushState_PUSH_STATE_DELIVERED   PushState = 3
+	PushState_PUSH_STATE_FAILED      PushState = 4
+)
+
+// Enum value maps for PushState.
+var (
+	PushState_name = map[int32]string{
+		0: "PUSH_STATE_UNSPECIFIED",
+		1: "PUSH_STATE_QUEUED",
+		2: "PUSH_STATE_SENDING",
+		3: "PUSH_STATE_DELIVERED",
+		4: "PUSH_STATE_FAILED",
+	}
+	PushState_value = map[string]int32{
+		"PUSH_STATE_UNSPECIFIED": 0,
+		"PUSH_STATE_QUEUED":      1,
+		"PUSH_STATE_SENDING":     2,
+		"PUSH_STATE_DELIVERED":   3,
+		"PUSH_STATE_FAILED":      4,
+	}
+)
+
+func (x PushState) Enum() *PushState {
+	p := new(PushState)
+	*p = x
+	return p
+}
+
+func (x PushState) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (PushState) Descriptor() protoreflect.EnumDescriptor {
+	return file_api_v1_po33_sketch_service_proto_enumTypes[0].Descriptor()
+}
+
+func (PushState) Type() protoreflect.EnumType {
+	return &file_api_v1_po33_sketch_service_proto_enumTypes[0]
+}
+
+func (x PushState) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use PushState.Descriptor instead.
+func (PushState) EnumDescriptor() ([]byte, []int) {
+	return file_api_v1_po33_sketch_service_proto_rawDescGZIP(), []int{0}
+}
 
 type ListMySketchesRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -218,11 +293,340 @@ func (x *ArchiveSketchRequest) GetName() string {
 	return ""
 }
 
+// GetSketchRequest is the body of GetSketch.
+// Today it is the single `name` field; the
+// `(google.api.method_signature)` annotation on
+// the RPC mirrors the upstream Memos
+// `GetMemoRequest` shape.
+type GetSketchRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The resource name of the sketch memo.
+	// Format: memos/{memo}
+	Name          string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetSketchRequest) Reset() {
+	*x = GetSketchRequest{}
+	mi := &file_api_v1_po33_sketch_service_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetSketchRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetSketchRequest) ProtoMessage() {}
+
+func (x *GetSketchRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_api_v1_po33_sketch_service_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetSketchRequest.ProtoReflect.Descriptor instead.
+func (*GetSketchRequest) Descriptor() ([]byte, []int) {
+	return file_api_v1_po33_sketch_service_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *GetSketchRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+// PushSketchRequest is the body of PushSketch.
+// The caller must own the device (`device`)
+// and the memo (`name`); a non-owner is
+// rejected with PermissionDenied / NotFound.
+type PushSketchRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The sketch memo to push. Format: memos/{memo}.
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// The bound PO-33 device to push to.
+	// Format: po33-devices/{device}.
+	Device        string `protobuf:"bytes,2,opt,name=device,proto3" json:"device,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PushSketchRequest) Reset() {
+	*x = PushSketchRequest{}
+	mi := &file_api_v1_po33_sketch_service_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PushSketchRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PushSketchRequest) ProtoMessage() {}
+
+func (x *PushSketchRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_api_v1_po33_sketch_service_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PushSketchRequest.ProtoReflect.Descriptor instead.
+func (*PushSketchRequest) Descriptor() ([]byte, []int) {
+	return file_api_v1_po33_sketch_service_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *PushSketchRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *PushSketchRequest) GetDevice() string {
+	if x != nil {
+		return x.Device
+	}
+	return ""
+}
+
+// PushSketchResponse is the body of a successful
+// PushSketch. The `push_id` is the value the
+// SPA polls via GetPushStatus to render the
+// badge state. The signed_url + signed_expires_at
+// fields are also returned so a server-rendered
+// email notification (future) can deep-link the
+// device straight to the download; the SPA
+// itself never uses them (the device's
+// `GET /api/po33/sketches/pending` poll is
+// the single authority on what to download).
+type PushSketchResponse struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	PushId          string                 `protobuf:"bytes,1,opt,name=push_id,json=pushId,proto3" json:"push_id,omitempty"`
+	SignedUrl       string                 `protobuf:"bytes,2,opt,name=signed_url,json=signedUrl,proto3" json:"signed_url,omitempty"`
+	SignedExpiresAt *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=signed_expires_at,json=signedExpiresAt,proto3" json:"signed_expires_at,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *PushSketchResponse) Reset() {
+	*x = PushSketchResponse{}
+	mi := &file_api_v1_po33_sketch_service_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PushSketchResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PushSketchResponse) ProtoMessage() {}
+
+func (x *PushSketchResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_api_v1_po33_sketch_service_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PushSketchResponse.ProtoReflect.Descriptor instead.
+func (*PushSketchResponse) Descriptor() ([]byte, []int) {
+	return file_api_v1_po33_sketch_service_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *PushSketchResponse) GetPushId() string {
+	if x != nil {
+		return x.PushId
+	}
+	return ""
+}
+
+func (x *PushSketchResponse) GetSignedUrl() string {
+	if x != nil {
+		return x.SignedUrl
+	}
+	return ""
+}
+
+func (x *PushSketchResponse) GetSignedExpiresAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.SignedExpiresAt
+	}
+	return nil
+}
+
+// GetPushStatusRequest is the body of
+// GetPushStatus. The `{device}` and `{push}`
+// URL fields are repeated here as named
+// request fields; the http binding
+// populates them from the path.
+type GetPushStatusRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Device        string                 `protobuf:"bytes,1,opt,name=device,proto3" json:"device,omitempty"`
+	Push          string                 `protobuf:"bytes,2,opt,name=push,proto3" json:"push,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetPushStatusRequest) Reset() {
+	*x = GetPushStatusRequest{}
+	mi := &file_api_v1_po33_sketch_service_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetPushStatusRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetPushStatusRequest) ProtoMessage() {}
+
+func (x *GetPushStatusRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_api_v1_po33_sketch_service_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetPushStatusRequest.ProtoReflect.Descriptor instead.
+func (*GetPushStatusRequest) Descriptor() ([]byte, []int) {
+	return file_api_v1_po33_sketch_service_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *GetPushStatusRequest) GetDevice() string {
+	if x != nil {
+		return x.Device
+	}
+	return ""
+}
+
+func (x *GetPushStatusRequest) GetPush() string {
+	if x != nil {
+		return x.Push
+	}
+	return ""
+}
+
+type PushStatus struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	PushId        string                 `protobuf:"bytes,1,opt,name=push_id,json=pushId,proto3" json:"push_id,omitempty"`
+	Device        string                 `protobuf:"bytes,2,opt,name=device,proto3" json:"device,omitempty"`
+	Memo          string                 `protobuf:"bytes,3,opt,name=memo,proto3" json:"memo,omitempty"`
+	State         PushState              `protobuf:"varint,4,opt,name=state,proto3,enum=memos.api.v1.PushState" json:"state,omitempty"`
+	QueuedAt      *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=queued_at,json=queuedAt,proto3" json:"queued_at,omitempty"`
+	UpdatedAt     *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	FailureReason string                 `protobuf:"bytes,7,opt,name=failure_reason,json=failureReason,proto3" json:"failure_reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PushStatus) Reset() {
+	*x = PushStatus{}
+	mi := &file_api_v1_po33_sketch_service_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PushStatus) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PushStatus) ProtoMessage() {}
+
+func (x *PushStatus) ProtoReflect() protoreflect.Message {
+	mi := &file_api_v1_po33_sketch_service_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PushStatus.ProtoReflect.Descriptor instead.
+func (*PushStatus) Descriptor() ([]byte, []int) {
+	return file_api_v1_po33_sketch_service_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *PushStatus) GetPushId() string {
+	if x != nil {
+		return x.PushId
+	}
+	return ""
+}
+
+func (x *PushStatus) GetDevice() string {
+	if x != nil {
+		return x.Device
+	}
+	return ""
+}
+
+func (x *PushStatus) GetMemo() string {
+	if x != nil {
+		return x.Memo
+	}
+	return ""
+}
+
+func (x *PushStatus) GetState() PushState {
+	if x != nil {
+		return x.State
+	}
+	return PushState_PUSH_STATE_UNSPECIFIED
+}
+
+func (x *PushStatus) GetQueuedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.QueuedAt
+	}
+	return nil
+}
+
+func (x *PushStatus) GetUpdatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.UpdatedAt
+	}
+	return nil
+}
+
+func (x *PushStatus) GetFailureReason() string {
+	if x != nil {
+		return x.FailureReason
+	}
+	return ""
+}
+
 var File_api_v1_po33_sketch_service_proto protoreflect.FileDescriptor
 
 const file_api_v1_po33_sketch_service_proto_rawDesc = "" +
 	"\n" +
-	" api/v1/po33_sketch_service.proto\x12\fmemos.api.v1\x1a\x19api/v1/memo_service.proto\x1a\x1cgoogle/api/annotations.proto\x1a\x17google/api/client.proto\x1a\x1fgoogle/api/field_behavior.proto\x1a\x19google/api/resource.proto\"]\n" +
+	" api/v1/po33_sketch_service.proto\x12\fmemos.api.v1\x1a\x19api/v1/memo_service.proto\x1a\x1cgoogle/api/annotations.proto\x1a\x17google/api/client.proto\x1a\x1fgoogle/api/field_behavior.proto\x1a\x19google/api/resource.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"]\n" +
 	"\x15ListMySketchesRequest\x12 \n" +
 	"\tpage_size\x18\x01 \x01(\x05B\x03\xe0A\x01R\bpageSize\x12\"\n" +
 	"\n" +
@@ -235,11 +639,48 @@ const file_api_v1_po33_sketch_service_proto_rawDesc = "" +
 	"\x11memos.api.v1/MemoR\x04name\"E\n" +
 	"\x14ArchiveSketchRequest\x12-\n" +
 	"\x04name\x18\x01 \x01(\tB\x19\xe0A\x02\xfaA\x13\n" +
-	"\x11memos.api.v1/MemoR\x04name2\x81\x03\n" +
+	"\x11memos.api.v1/MemoR\x04name\"A\n" +
+	"\x10GetSketchRequest\x12-\n" +
+	"\x04name\x18\x01 \x01(\tB\x19\xe0A\x02\xfaA\x13\n" +
+	"\x11memos.api.v1/MemoR\x04name\"w\n" +
+	"\x11PushSketchRequest\x12-\n" +
+	"\x04name\x18\x01 \x01(\tB\x19\xe0A\x02\xfaA\x13\n" +
+	"\x11memos.api.v1/MemoR\x04name\x123\n" +
+	"\x06device\x18\x02 \x01(\tB\x1b\xe0A\x02\xfaA\x15\n" +
+	"\x13memos.api.v1/DeviceR\x06device\"\x94\x01\n" +
+	"\x12PushSketchResponse\x12\x17\n" +
+	"\apush_id\x18\x01 \x01(\tR\x06pushId\x12\x1d\n" +
+	"\n" +
+	"signed_url\x18\x02 \x01(\tR\tsignedUrl\x12F\n" +
+	"\x11signed_expires_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\x0fsignedExpiresAt\"d\n" +
+	"\x14GetPushStatusRequest\x123\n" +
+	"\x06device\x18\x01 \x01(\tB\x1b\xe0A\x02\xfaA\x15\n" +
+	"\x13memos.api.v1/DeviceR\x06device\x12\x17\n" +
+	"\x04push\x18\x02 \x01(\tB\x03\xe0A\x02R\x04push\"\x9b\x02\n" +
+	"\n" +
+	"PushStatus\x12\x17\n" +
+	"\apush_id\x18\x01 \x01(\tR\x06pushId\x12\x16\n" +
+	"\x06device\x18\x02 \x01(\tR\x06device\x12\x12\n" +
+	"\x04memo\x18\x03 \x01(\tR\x04memo\x12-\n" +
+	"\x05state\x18\x04 \x01(\x0e2\x17.memos.api.v1.PushStateR\x05state\x127\n" +
+	"\tqueued_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\bqueuedAt\x129\n" +
+	"\n" +
+	"updated_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12%\n" +
+	"\x0efailure_reason\x18\a \x01(\tR\rfailureReason*\x87\x01\n" +
+	"\tPushState\x12\x1a\n" +
+	"\x16PUSH_STATE_UNSPECIFIED\x10\x00\x12\x15\n" +
+	"\x11PUSH_STATE_QUEUED\x10\x01\x12\x16\n" +
+	"\x12PUSH_STATE_SENDING\x10\x02\x12\x18\n" +
+	"\x14PUSH_STATE_DELIVERED\x10\x03\x12\x15\n" +
+	"\x11PUSH_STATE_FAILED\x10\x042\xf8\x05\n" +
 	"\rSketchService\x12z\n" +
 	"\x0eListMySketches\x12#.memos.api.v1.ListMySketchesRequest\x1a$.memos.api.v1.ListMySketchesResponse\"\x1d\x82\xd3\xe4\x93\x02\x17\x12\x15/api/v1/po33/sketches\x12y\n" +
 	"\rPublishSketch\x12\".memos.api.v1.PublishSketchRequest\x1a\x12.memos.api.v1.Memo\"0\xdaA\x04name\x82\xd3\xe4\x93\x02#:\x01*\"\x1e/api/v1/{name=memos/*}:publish\x12y\n" +
-	"\rArchiveSketch\x12\".memos.api.v1.ArchiveSketchRequest\x1a\x12.memos.api.v1.Memo\"0\xdaA\x04name\x82\xd3\xe4\x93\x02#:\x01*\"\x1e/api/v1/{name=memos/*}:archiveB\xab\x01\n" +
+	"\rArchiveSketch\x12\".memos.api.v1.ArchiveSketchRequest\x1a\x12.memos.api.v1.Memo\"0\xdaA\x04name\x82\xd3\xe4\x93\x02#:\x01*\"\x1e/api/v1/{name=memos/*}:archive\x12f\n" +
+	"\tGetSketch\x12\x1e.memos.api.v1.GetSketchRequest\x1a\x12.memos.api.v1.Memo\"%\xdaA\x04name\x82\xd3\xe4\x93\x02\x18\x12\x16/api/v1/{name=memos/*}\x12\x85\x01\n" +
+	"\n" +
+	"PushSketch\x12\x1f.memos.api.v1.PushSketchRequest\x1a .memos.api.v1.PushSketchResponse\"4\xdaA\vname,device\x82\xd3\xe4\x93\x02 :\x01*\"\x1b/api/v1/{name=memos/*}:push\x12\x84\x01\n" +
+	"\rGetPushStatus\x12\".memos.api.v1.GetPushStatusRequest\x1a\x18.memos.api.v1.PushStatus\"5\x82\xd3\xe4\x93\x02/\x12-/api/v1/{device=po33-devices/*}/pushes/{push}B\xab\x01\n" +
 	"\x10com.memos.api.v1B\x16Po33SketchServiceProtoP\x01Z-github.com/incurl/riff/proto/gen/api/v1;apiv1\xa2\x02\x03MAX\xaa\x02\fMemos.Api.V1\xca\x02\fMemos\\Api\\V1\xe2\x02\x18Memos\\Api\\V1\\GPBMetadata\xea\x02\x0eMemos::Api::V1b\x06proto3"
 
 var (
@@ -254,27 +695,45 @@ func file_api_v1_po33_sketch_service_proto_rawDescGZIP() []byte {
 	return file_api_v1_po33_sketch_service_proto_rawDescData
 }
 
-var file_api_v1_po33_sketch_service_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_api_v1_po33_sketch_service_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_api_v1_po33_sketch_service_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
 var file_api_v1_po33_sketch_service_proto_goTypes = []any{
-	(*ListMySketchesRequest)(nil),  // 0: memos.api.v1.ListMySketchesRequest
-	(*ListMySketchesResponse)(nil), // 1: memos.api.v1.ListMySketchesResponse
-	(*PublishSketchRequest)(nil),   // 2: memos.api.v1.PublishSketchRequest
-	(*ArchiveSketchRequest)(nil),   // 3: memos.api.v1.ArchiveSketchRequest
-	(*Memo)(nil),                   // 4: memos.api.v1.Memo
+	(PushState)(0),                 // 0: memos.api.v1.PushState
+	(*ListMySketchesRequest)(nil),  // 1: memos.api.v1.ListMySketchesRequest
+	(*ListMySketchesResponse)(nil), // 2: memos.api.v1.ListMySketchesResponse
+	(*PublishSketchRequest)(nil),   // 3: memos.api.v1.PublishSketchRequest
+	(*ArchiveSketchRequest)(nil),   // 4: memos.api.v1.ArchiveSketchRequest
+	(*GetSketchRequest)(nil),       // 5: memos.api.v1.GetSketchRequest
+	(*PushSketchRequest)(nil),      // 6: memos.api.v1.PushSketchRequest
+	(*PushSketchResponse)(nil),     // 7: memos.api.v1.PushSketchResponse
+	(*GetPushStatusRequest)(nil),   // 8: memos.api.v1.GetPushStatusRequest
+	(*PushStatus)(nil),             // 9: memos.api.v1.PushStatus
+	(*Memo)(nil),                   // 10: memos.api.v1.Memo
+	(*timestamppb.Timestamp)(nil),  // 11: google.protobuf.Timestamp
 }
 var file_api_v1_po33_sketch_service_proto_depIdxs = []int32{
-	4, // 0: memos.api.v1.ListMySketchesResponse.memos:type_name -> memos.api.v1.Memo
-	0, // 1: memos.api.v1.SketchService.ListMySketches:input_type -> memos.api.v1.ListMySketchesRequest
-	2, // 2: memos.api.v1.SketchService.PublishSketch:input_type -> memos.api.v1.PublishSketchRequest
-	3, // 3: memos.api.v1.SketchService.ArchiveSketch:input_type -> memos.api.v1.ArchiveSketchRequest
-	1, // 4: memos.api.v1.SketchService.ListMySketches:output_type -> memos.api.v1.ListMySketchesResponse
-	4, // 5: memos.api.v1.SketchService.PublishSketch:output_type -> memos.api.v1.Memo
-	4, // 6: memos.api.v1.SketchService.ArchiveSketch:output_type -> memos.api.v1.Memo
-	4, // [4:7] is the sub-list for method output_type
-	1, // [1:4] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	10, // 0: memos.api.v1.ListMySketchesResponse.memos:type_name -> memos.api.v1.Memo
+	11, // 1: memos.api.v1.PushSketchResponse.signed_expires_at:type_name -> google.protobuf.Timestamp
+	0,  // 2: memos.api.v1.PushStatus.state:type_name -> memos.api.v1.PushState
+	11, // 3: memos.api.v1.PushStatus.queued_at:type_name -> google.protobuf.Timestamp
+	11, // 4: memos.api.v1.PushStatus.updated_at:type_name -> google.protobuf.Timestamp
+	1,  // 5: memos.api.v1.SketchService.ListMySketches:input_type -> memos.api.v1.ListMySketchesRequest
+	3,  // 6: memos.api.v1.SketchService.PublishSketch:input_type -> memos.api.v1.PublishSketchRequest
+	4,  // 7: memos.api.v1.SketchService.ArchiveSketch:input_type -> memos.api.v1.ArchiveSketchRequest
+	5,  // 8: memos.api.v1.SketchService.GetSketch:input_type -> memos.api.v1.GetSketchRequest
+	6,  // 9: memos.api.v1.SketchService.PushSketch:input_type -> memos.api.v1.PushSketchRequest
+	8,  // 10: memos.api.v1.SketchService.GetPushStatus:input_type -> memos.api.v1.GetPushStatusRequest
+	2,  // 11: memos.api.v1.SketchService.ListMySketches:output_type -> memos.api.v1.ListMySketchesResponse
+	10, // 12: memos.api.v1.SketchService.PublishSketch:output_type -> memos.api.v1.Memo
+	10, // 13: memos.api.v1.SketchService.ArchiveSketch:output_type -> memos.api.v1.Memo
+	10, // 14: memos.api.v1.SketchService.GetSketch:output_type -> memos.api.v1.Memo
+	7,  // 15: memos.api.v1.SketchService.PushSketch:output_type -> memos.api.v1.PushSketchResponse
+	9,  // 16: memos.api.v1.SketchService.GetPushStatus:output_type -> memos.api.v1.PushStatus
+	11, // [11:17] is the sub-list for method output_type
+	5,  // [5:11] is the sub-list for method input_type
+	5,  // [5:5] is the sub-list for extension type_name
+	5,  // [5:5] is the sub-list for extension extendee
+	0,  // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_api_v1_po33_sketch_service_proto_init() }
@@ -288,13 +747,14 @@ func file_api_v1_po33_sketch_service_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_api_v1_po33_sketch_service_proto_rawDesc), len(file_api_v1_po33_sketch_service_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   4,
+			NumEnums:      1,
+			NumMessages:   9,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
 		GoTypes:           file_api_v1_po33_sketch_service_proto_goTypes,
 		DependencyIndexes: file_api_v1_po33_sketch_service_proto_depIdxs,
+		EnumInfos:         file_api_v1_po33_sketch_service_proto_enumTypes,
 		MessageInfos:      file_api_v1_po33_sketch_service_proto_msgTypes,
 	}.Build()
 	File_api_v1_po33_sketch_service_proto = out.File

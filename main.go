@@ -130,9 +130,37 @@ func main() {
 	// /memos.api.v1.*/* endpoints. The Memos React frontend
 	// talks to these; this is what makes Phase 4 "drop the
 	// existing frontend in unchanged" work.
+	//
+	// connect.Register bootstraps the install-wide
+	// signed-URL signer (see
+	// pb/connect/sketch_signer_bootstrap.go). The
+	// same signer is shared with the REST handlers
+	// in pb/api/po33_device_pull.go via
+	// SetDevicePullSigner, so the device-pull
+	// `/sketches/{memoId}/download` route verifies
+	// against the same key the SPA-facing
+	// SketchService.PushSketch RPC used to mint the
+	// URL. The signer is a closure-driven pointer
+	// so a slow OnServe bootstrap does not race a
+	// fast first request: the OnServe hook runs
+	// before the HTTP listener is bound.
 	if err := connect.Register(app, rateLimiter); err != nil {
 		log.Fatal(err)
 	}
+
+	// Share the connect-side signer with the
+	// REST handlers in pb/api/po33_device_pull.go
+	// so the device-pull /sketches/{memoId}/download
+	// route verifies against the same key the
+	// SPA-facing SketchService.PushSketch RPC
+	// used to mint the URL. The OnServe hook
+	// runs after the connect package's hook
+	// (which is what mints the signer) so the
+	// accessor returns a non-nil value.
+	app.OnServe().BindFunc(func(e *core.ServeEvent) error {
+		api.SetDevicePullSigner(connect.InstallSignedURLSignerForREST())
+		return e.Next()
+	})
 
 	// --- SPA static handler --------------------------------------------
 	// Serve the Vite build of the Memos React app from the root of

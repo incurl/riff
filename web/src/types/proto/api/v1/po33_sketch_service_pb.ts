@@ -2,21 +2,23 @@
 // @generated from file api/v1/po33_sketch_service.proto (package memos.api.v1, syntax proto3)
 /* eslint-disable */
 
-import type { GenFile, GenMessage, GenService } from "@bufbuild/protobuf/codegenv2";
-import { fileDesc, messageDesc, serviceDesc } from "@bufbuild/protobuf/codegenv2";
+import type { GenEnum, GenFile, GenMessage, GenService } from "@bufbuild/protobuf/codegenv2";
+import { enumDesc, fileDesc, messageDesc, serviceDesc } from "@bufbuild/protobuf/codegenv2";
 import type { Memo, MemoSchema } from "./memo_service_pb";
 import { file_api_v1_memo_service } from "./memo_service_pb";
 import { file_google_api_annotations } from "../../google/api/annotations_pb";
 import { file_google_api_client } from "../../google/api/client_pb";
 import { file_google_api_field_behavior } from "../../google/api/field_behavior_pb";
 import { file_google_api_resource } from "../../google/api/resource_pb";
+import type { Timestamp } from "@bufbuild/protobuf/wkt";
+import { file_google_protobuf_timestamp } from "@bufbuild/protobuf/wkt";
 import type { Message } from "@bufbuild/protobuf";
 
 /**
  * Describes the file api/v1/po33_sketch_service.proto.
  */
 export const file_api_v1_po33_sketch_service: GenFile = /*@__PURE__*/
-  fileDesc("CiBhcGkvdjEvcG8zM19za2V0Y2hfc2VydmljZS5wcm90bxIMbWVtb3MuYXBpLnYxIkgKFUxpc3RNeVNrZXRjaGVzUmVxdWVzdBIWCglwYWdlX3NpemUYASABKAVCA+BBARIXCgpwYWdlX3Rva2VuGAIgASgJQgPgQQEiVAoWTGlzdE15U2tldGNoZXNSZXNwb25zZRIhCgVtZW1vcxgBIAMoCzISLm1lbW9zLmFwaS52MS5NZW1vEhcKD25leHRfcGFnZV90b2tlbhgCIAEoCSI/ChRQdWJsaXNoU2tldGNoUmVxdWVzdBInCgRuYW1lGAEgASgJQhngQQL6QRMKEW1lbW9zLmFwaS52MS9NZW1vIj8KFEFyY2hpdmVTa2V0Y2hSZXF1ZXN0EicKBG5hbWUYASABKAlCGeBBAvpBEwoRbWVtb3MuYXBpLnYxL01lbW8ygQMKDVNrZXRjaFNlcnZpY2USegoOTGlzdE15U2tldGNoZXMSIy5tZW1vcy5hcGkudjEuTGlzdE15U2tldGNoZXNSZXF1ZXN0GiQubWVtb3MuYXBpLnYxLkxpc3RNeVNrZXRjaGVzUmVzcG9uc2UiHYLT5JMCFxIVL2FwaS92MS9wbzMzL3NrZXRjaGVzEnkKDVB1Ymxpc2hTa2V0Y2gSIi5tZW1vcy5hcGkudjEuUHVibGlzaFNrZXRjaFJlcXVlc3QaEi5tZW1vcy5hcGkudjEuTWVtbyIw2kEEbmFtZYLT5JMCIzoBKiIeL2FwaS92MS97bmFtZT1tZW1vcy8qfTpwdWJsaXNoEnkKDUFyY2hpdmVTa2V0Y2gSIi5tZW1vcy5hcGkudjEuQXJjaGl2ZVNrZXRjaFJlcXVlc3QaEi5tZW1vcy5hcGkudjEuTWVtbyIw2kEEbmFtZYLT5JMCIzoBKiIeL2FwaS92MS97bmFtZT1tZW1vcy8qfTphcmNoaXZlQqsBChBjb20ubWVtb3MuYXBpLnYxQhZQbzMzU2tldGNoU2VydmljZVByb3RvUAFaLWdpdGh1Yi5jb20vaW5jdXJsL3JpZmYvcHJvdG8vZ2VuL2FwaS92MTthcGl2MaICA01BWKoCDE1lbW9zLkFwaS5WMcoCDE1lbW9zXEFwaVxWMeICGE1lbW9zXEFwaVxWMVxHUEJNZXRhZGF0YeoCDk1lbW9zOjpBcGk6OlYxYgZwcm90bzM", [file_api_v1_memo_service, file_google_api_annotations, file_google_api_client, file_google_api_field_behavior, file_google_api_resource]);
+  fileDesc("CiBhcGkvdjEvcG8zM19za2V0Y2hfc2VydmljZS5wcm90bxIMbWVtb3MuYXBpLnYxIkgKFUxpc3RNeVNrZXRjaGVzUmVxdWVzdBIWCglwYWdlX3NpemUYASABKAVCA+BBARIXCgpwYWdlX3Rva2VuGAIgASgJQgPgQQEiVAoWTGlzdE15U2tldGNoZXNSZXNwb25zZRIhCgVtZW1vcxgBIAMoCzISLm1lbW9zLmFwaS52MS5NZW1vEhcKD25leHRfcGFnZV90b2tlbhgCIAEoCSI/ChRQdWJsaXNoU2tldGNoUmVxdWVzdBInCgRuYW1lGAEgASgJQhngQQL6QRMKEW1lbW9zLmFwaS52MS9NZW1vIj8KFEFyY2hpdmVTa2V0Y2hSZXF1ZXN0EicKBG5hbWUYASABKAlCGeBBAvpBEwoRbWVtb3MuYXBpLnYxL01lbW8iOwoQR2V0U2tldGNoUmVxdWVzdBInCgRuYW1lGAEgASgJQhngQQL6QRMKEW1lbW9zLmFwaS52MS9NZW1vImkKEVB1c2hTa2V0Y2hSZXF1ZXN0EicKBG5hbWUYASABKAlCGeBBAvpBEwoRbWVtb3MuYXBpLnYxL01lbW8SKwoGZGV2aWNlGAIgASgJQhvgQQL6QRUKE21lbW9zLmFwaS52MS9EZXZpY2UicAoSUHVzaFNrZXRjaFJlc3BvbnNlEg8KB3B1c2hfaWQYASABKAkSEgoKc2lnbmVkX3VybBgCIAEoCRI1ChFzaWduZWRfZXhwaXJlc19hdBgDIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAiVgoUR2V0UHVzaFN0YXR1c1JlcXVlc3QSKwoGZGV2aWNlGAEgASgJQhvgQQL6QRUKE21lbW9zLmFwaS52MS9EZXZpY2USEQoEcHVzaBgCIAEoCUID4EECItoBCgpQdXNoU3RhdHVzEg8KB3B1c2hfaWQYASABKAkSDgoGZGV2aWNlGAIgASgJEgwKBG1lbW8YAyABKAkSJgoFc3RhdGUYBCABKA4yFy5tZW1vcy5hcGkudjEuUHVzaFN0YXRlEi0KCXF1ZXVlZF9hdBgFIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASLgoKdXBkYXRlZF9hdBgGIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASFgoOZmFpbHVyZV9yZWFzb24YByABKAkqhwEKCVB1c2hTdGF0ZRIaChZQVVNIX1NUQVRFX1VOU1BFQ0lGSUVEEAASFQoRUFVTSF9TVEFURV9RVUVVRUQQARIWChJQVVNIX1NUQVRFX1NFTkRJTkcQAhIYChRQVVNIX1NUQVRFX0RFTElWRVJFRBADEhUKEVBVU0hfU1RBVEVfRkFJTEVEEAQy+AUKDVNrZXRjaFNlcnZpY2USegoOTGlzdE15U2tldGNoZXMSIy5tZW1vcy5hcGkudjEuTGlzdE15U2tldGNoZXNSZXF1ZXN0GiQubWVtb3MuYXBpLnYxLkxpc3RNeVNrZXRjaGVzUmVzcG9uc2UiHYLT5JMCFxIVL2FwaS92MS9wbzMzL3NrZXRjaGVzEnkKDVB1Ymxpc2hTa2V0Y2gSIi5tZW1vcy5hcGkudjEuUHVibGlzaFNrZXRjaFJlcXVlc3QaEi5tZW1vcy5hcGkudjEuTWVtbyIw2kEEbmFtZYLT5JMCIzoBKiIeL2FwaS92MS97bmFtZT1tZW1vcy8qfTpwdWJsaXNoEnkKDUFyY2hpdmVTa2V0Y2gSIi5tZW1vcy5hcGkudjEuQXJjaGl2ZVNrZXRjaFJlcXVlc3QaEi5tZW1vcy5hcGkudjEuTWVtbyIw2kEEbmFtZYLT5JMCIzoBKiIeL2FwaS92MS97bmFtZT1tZW1vcy8qfTphcmNoaXZlEmYKCUdldFNrZXRjaBIeLm1lbW9zLmFwaS52MS5HZXRTa2V0Y2hSZXF1ZXN0GhIubWVtb3MuYXBpLnYxLk1lbW8iJdpBBG5hbWWC0+STAhgSFi9hcGkvdjEve25hbWU9bWVtb3MvKn0ShQEKClB1c2hTa2V0Y2gSHy5tZW1vcy5hcGkudjEuUHVzaFNrZXRjaFJlcXVlc3QaIC5tZW1vcy5hcGkudjEuUHVzaFNrZXRjaFJlc3BvbnNlIjTaQQtuYW1lLGRldmljZYLT5JMCIDoBKiIbL2FwaS92MS97bmFtZT1tZW1vcy8qfTpwdXNoEoQBCg1HZXRQdXNoU3RhdHVzEiIubWVtb3MuYXBpLnYxLkdldFB1c2hTdGF0dXNSZXF1ZXN0GhgubWVtb3MuYXBpLnYxLlB1c2hTdGF0dXMiNYLT5JMCLxItL2FwaS92MS97ZGV2aWNlPXBvMzMtZGV2aWNlcy8qfS9wdXNoZXMve3B1c2h9QqsBChBjb20ubWVtb3MuYXBpLnYxQhZQbzMzU2tldGNoU2VydmljZVByb3RvUAFaLWdpdGh1Yi5jb20vaW5jdXJsL3JpZmYvcHJvdG8vZ2VuL2FwaS92MTthcGl2MaICA01BWKoCDE1lbW9zLkFwaS5WMcoCDE1lbW9zXEFwaVxWMeICGE1lbW9zXEFwaVxWMVxHUEJNZXRhZGF0YeoCDk1lbW9zOjpBcGk6OlYxYgZwcm90bzM", [file_api_v1_memo_service, file_google_api_annotations, file_google_api_client, file_google_api_field_behavior, file_google_api_resource, file_google_protobuf_timestamp]);
 
 /**
  * @generated from message memos.api.v1.ListMySketchesRequest
@@ -103,6 +105,233 @@ export const ArchiveSketchRequestSchema: GenMessage<ArchiveSketchRequest> = /*@_
   messageDesc(file_api_v1_po33_sketch_service, 3);
 
 /**
+ * GetSketchRequest is the body of GetSketch.
+ * Today it is the single `name` field; the
+ * `(google.api.method_signature)` annotation on
+ * the RPC mirrors the upstream Memos
+ * `GetMemoRequest` shape.
+ *
+ * @generated from message memos.api.v1.GetSketchRequest
+ */
+export type GetSketchRequest = Message<"memos.api.v1.GetSketchRequest"> & {
+  /**
+   * The resource name of the sketch memo.
+   * Format: memos/{memo}
+   *
+   * @generated from field: string name = 1;
+   */
+  name: string;
+};
+
+/**
+ * Describes the message memos.api.v1.GetSketchRequest.
+ * Use `create(GetSketchRequestSchema)` to create a new message.
+ */
+export const GetSketchRequestSchema: GenMessage<GetSketchRequest> = /*@__PURE__*/
+  messageDesc(file_api_v1_po33_sketch_service, 4);
+
+/**
+ * PushSketchRequest is the body of PushSketch.
+ * The caller must own the device (`device`)
+ * and the memo (`name`); a non-owner is
+ * rejected with PermissionDenied / NotFound.
+ *
+ * @generated from message memos.api.v1.PushSketchRequest
+ */
+export type PushSketchRequest = Message<"memos.api.v1.PushSketchRequest"> & {
+  /**
+   * The sketch memo to push. Format: memos/{memo}.
+   *
+   * @generated from field: string name = 1;
+   */
+  name: string;
+
+  /**
+   * The bound PO-33 device to push to.
+   * Format: po33-devices/{device}.
+   *
+   * @generated from field: string device = 2;
+   */
+  device: string;
+};
+
+/**
+ * Describes the message memos.api.v1.PushSketchRequest.
+ * Use `create(PushSketchRequestSchema)` to create a new message.
+ */
+export const PushSketchRequestSchema: GenMessage<PushSketchRequest> = /*@__PURE__*/
+  messageDesc(file_api_v1_po33_sketch_service, 5);
+
+/**
+ * PushSketchResponse is the body of a successful
+ * PushSketch. The `push_id` is the value the
+ * SPA polls via GetPushStatus to render the
+ * badge state. The signed_url + signed_expires_at
+ * fields are also returned so a server-rendered
+ * email notification (future) can deep-link the
+ * device straight to the download; the SPA
+ * itself never uses them (the device's
+ * `GET /api/po33/sketches/pending` poll is
+ * the single authority on what to download).
+ *
+ * @generated from message memos.api.v1.PushSketchResponse
+ */
+export type PushSketchResponse = Message<"memos.api.v1.PushSketchResponse"> & {
+  /**
+   * @generated from field: string push_id = 1;
+   */
+  pushId: string;
+
+  /**
+   * @generated from field: string signed_url = 2;
+   */
+  signedUrl: string;
+
+  /**
+   * @generated from field: google.protobuf.Timestamp signed_expires_at = 3;
+   */
+  signedExpiresAt?: Timestamp | undefined;
+};
+
+/**
+ * Describes the message memos.api.v1.PushSketchResponse.
+ * Use `create(PushSketchResponseSchema)` to create a new message.
+ */
+export const PushSketchResponseSchema: GenMessage<PushSketchResponse> = /*@__PURE__*/
+  messageDesc(file_api_v1_po33_sketch_service, 6);
+
+/**
+ * GetPushStatusRequest is the body of
+ * GetPushStatus. The `{device}` and `{push}`
+ * URL fields are repeated here as named
+ * request fields; the http binding
+ * populates them from the path.
+ *
+ * @generated from message memos.api.v1.GetPushStatusRequest
+ */
+export type GetPushStatusRequest = Message<"memos.api.v1.GetPushStatusRequest"> & {
+  /**
+   * @generated from field: string device = 1;
+   */
+  device: string;
+
+  /**
+   * @generated from field: string push = 2;
+   */
+  push: string;
+};
+
+/**
+ * Describes the message memos.api.v1.GetPushStatusRequest.
+ * Use `create(GetPushStatusRequestSchema)` to create a new message.
+ */
+export const GetPushStatusRequestSchema: GenMessage<GetPushStatusRequest> = /*@__PURE__*/
+  messageDesc(file_api_v1_po33_sketch_service, 7);
+
+/**
+ * @generated from message memos.api.v1.PushStatus
+ */
+export type PushStatus = Message<"memos.api.v1.PushStatus"> & {
+  /**
+   * @generated from field: string push_id = 1;
+   */
+  pushId: string;
+
+  /**
+   * @generated from field: string device = 2;
+   */
+  device: string;
+
+  /**
+   * @generated from field: string memo = 3;
+   */
+  memo: string;
+
+  /**
+   * @generated from field: memos.api.v1.PushState state = 4;
+   */
+  state: PushState;
+
+  /**
+   * @generated from field: google.protobuf.Timestamp queued_at = 5;
+   */
+  queuedAt?: Timestamp | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Timestamp updated_at = 6;
+   */
+  updatedAt?: Timestamp | undefined;
+
+  /**
+   * @generated from field: string failure_reason = 7;
+   */
+  failureReason: string;
+};
+
+/**
+ * Describes the message memos.api.v1.PushStatus.
+ * Use `create(PushStatusSchema)` to create a new message.
+ */
+export const PushStatusSchema: GenMessage<PushStatus> = /*@__PURE__*/
+  messageDesc(file_api_v1_po33_sketch_service, 8);
+
+/**
+ * PushStatus is the polled push state. The
+ * `state` field is one of:
+ *
+ * 	STATE_UNSPECIFIED  — the push id is unknown to
+ * 	                      the server (rolled out
+ * 	                      of the 30-min keep
+ * 	                      window or never existed).
+ * 	QUEUED             — the envelope is on the
+ * 	                      device row, the device
+ * 	                      has not yet polled.
+ * 	SENDING            — the device has polled
+ * 	                      and is reading the bytes.
+ * 	DELIVERED          — the device has acked
+ * 	                      receipt.
+ * 	FAILED             — the device returned a
+ * 	                      failure on its ack
+ * 	                      POST, or the signed
+ * 	                      URL expired before
+ * 	                      the device fetched.
+ *
+ * @generated from enum memos.api.v1.PushState
+ */
+export enum PushState {
+  /**
+   * @generated from enum value: PUSH_STATE_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * @generated from enum value: PUSH_STATE_QUEUED = 1;
+   */
+  QUEUED = 1,
+
+  /**
+   * @generated from enum value: PUSH_STATE_SENDING = 2;
+   */
+  SENDING = 2,
+
+  /**
+   * @generated from enum value: PUSH_STATE_DELIVERED = 3;
+   */
+  DELIVERED = 3,
+
+  /**
+   * @generated from enum value: PUSH_STATE_FAILED = 4;
+   */
+  FAILED = 4,
+}
+
+/**
+ * Describes the enum memos.api.v1.PushState.
+ */
+export const PushStateSchema: GenEnum<PushState> = /*@__PURE__*/
+  enumDesc(file_api_v1_po33_sketch_service, 0);
+
+/**
  * SketchService is the SPA-facing side of the
  * PO-33 sketch upload flow. The lifecycle RPCs
  * (PublishSketch, ArchiveSketch) live in this
@@ -175,6 +404,68 @@ export const SketchService: GenService<{
     methodKind: "unary";
     input: typeof ArchiveSketchRequestSchema;
     output: typeof MemoSchema;
+  },
+  /**
+   * GetSketch returns a single sketch memo by
+   * resource name, with the SketchPayload
+   * envelope populated. Used by the SPA to
+   * render the in-page sketch player on the
+   * memo detail page without re-listing
+   * every sketch the caller owns. The caller
+   * must be the sketch author or a space
+   * member (per `canViewMemo`); a non-viewer
+   * gets NotFound rather than Forbidden so
+   * a private sketch's existence is not
+   * leaked to a stranger.
+   *
+   * @generated from rpc memos.api.v1.SketchService.GetSketch
+   */
+  getSketch: {
+    methodKind: "unary";
+    input: typeof GetSketchRequestSchema;
+    output: typeof MemoSchema;
+  },
+  /**
+   * PushSketch queues a sketch memo for delivery
+   * to one of the caller's bound PO-33 devices.
+   * The flow is device-pulls: the server writes
+   * a `pending_pull` envelope onto the
+   * `po33_devices` row with a 15-minute signed
+   * URL the device's `GET /api/po33/sketches/
+   * pending` handler will accept. The push is
+   * idempotent within the 30s rate-limit window:
+   * a second push for the same (device, memo)
+   * pair overwrites the prior envelope with a
+   * fresh signed URL but does not change the
+   * push id, so the SPA's polling
+   * `GetPushStatus` sees a single logical push.
+   *
+   * @generated from rpc memos.api.v1.SketchService.PushSketch
+   */
+  pushSketch: {
+    methodKind: "unary";
+    input: typeof PushSketchRequestSchema;
+    output: typeof PushSketchResponseSchema;
+  },
+  /**
+   * GetPushStatus returns the latest push state
+   * for a (device, push_id) pair. The SPA polls
+   * this every 2s while the push dialog is open
+   * and the response drives the four-state badge
+   * (queued / sending / delivered / failed). A
+   * push that has been acked by the device is
+   * still queryable for 30 minutes so the SPA
+   * can render a "delivered" state after the
+   * user closes the dialog; after that the
+   * handler returns NotFound and the SPA
+   * clears its local state.
+   *
+   * @generated from rpc memos.api.v1.SketchService.GetPushStatus
+   */
+  getPushStatus: {
+    methodKind: "unary";
+    input: typeof GetPushStatusRequestSchema;
+    output: typeof PushStatusSchema;
   },
 }> = /*@__PURE__*/
   serviceDesc(file_api_v1_po33_sketch_service, 0);

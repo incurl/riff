@@ -88,6 +88,28 @@ func Register(app core.App, limiter ratelimit.Limiter) {
 		// contract.
 		e.Router.POST("/api/po33/sketches/upload", uploadSketchHandler)
 
+		// PO-33 device-pull sketch push. The
+		// flow is device-pulls (see
+		// docs/design/po33-device-binding.md,
+		// 2026-10-19 appendix): the SPA-facing
+		// POST writes a `pending_pull`
+		// envelope onto the device row with a
+		// 15-minute signed URL; the device
+		// polls GET /sketches/pending, fetches
+		// /sketches/{memoId}/download with the
+		// signed URL, and acks via
+		// /sketches/pending/ack. The first two
+		// routes are owner-facing (auth:
+		// PocketBase session or memos_pat_*
+		// token); the last three are
+		// device-facing (auth: the device's
+		// `X-Device-Fingerprint` header).
+		e.Router.POST("/api/po33/devices/{deviceId}/push", pushSketchHandler)
+		e.Router.GET("/api/po33/devices/{deviceId}/pushes/{pushId}", pushStatusHandler)
+		e.Router.GET("/api/po33/sketches/pending", pendingPullHandler)
+		e.Router.POST("/api/po33/sketches/pending/ack", ackPendingPullHandler)
+		e.Router.GET("/api/po33/sketches/{memoId}/download", deviceSketchDownloadHandler)
+
 		// Upstream-Memos REST surface at /memos/api/...
 		// 97 routes (84 proto-annotated + 3 file server
 		// + 1 SSE). The connect_proxy flavor dispatches

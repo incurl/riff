@@ -119,6 +119,7 @@ var procedureScope = map[string]ratelimit.Scope{
 	// ScopeWriteUser budget with the other
 	// user-driven mutations.
 	apiv1connect.DeviceServiceRevokeDeviceProcedure:                               ratelimit.ScopeWriteUser,
+	apiv1connect.SketchServicePushSketchProcedure:                                 ratelimit.ScopeWriteUser,
 	// SketchService is read-only and falls
 	// under the catch-all authenticated
 	// bucket; no row needed.

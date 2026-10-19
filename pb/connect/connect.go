@@ -61,8 +61,29 @@ import (
 // passed, the loop in OnServe consults procedureScope (also in
 // ratelimit.go) and attaches a Route.BindFunc(RateLimit(...)) for every
 // procedure that has a row.
+//
+// Register also bootstraps the install-wide
+// signed-URL signer used by the SketchService
+// push flow (see sketch_signer_bootstrap.go).
+// The signer is read or minted on the first
+// OnServe pass and installed in the connect-go
+// interceptor chain so every request that
+// reaches PushSketch can read the signer via
+// PendingPullSignerFromContext.
 func Register(app core.App, limiter ratelimit.Limiter) error {
-	srv := connect.NewServer(WithAuth(app))
+	// Bootstrap the signer. The hook runs
+	// before the HTTP listener is bound,
+	// so every request that reaches the
+	// connect-go mux sees a non-nil
+	// signer. A second Register() call
+	// (test path) is a no-op because the
+	// persisted key is stable across
+	// boots.
+	installSignedURLSigner(app)
+	srv := connect.NewServer(
+		WithAuth(app),
+		WithSignedURLSigner(InstallSignedURLSignerForREST),
+	)
 
 	// Implemented services.
 	apiv1connect.RegisterAuthServiceHandler(srv, NewAuthServer(app, limiter))
@@ -94,8 +115,12 @@ func Register(app core.App, limiter ratelimit.Limiter) error {
 	// SketchService — SPA-facing read of the caller's
 	// own sketch memos. The actual device download
 	// path is /api/po33/sketches/download (REST) and
-	// the device upload path is a future slice.
-	apiv1connect.RegisterSketchServiceHandler(srv, NewSketchServer(app))
+	// the device upload path is a future slice. The
+	// server also implements PushSketch and
+	// GetPushStatus for the device-pull push flow
+	// (see docs/design/po33-device-binding.md,
+	// 2026-10-19 appendix).
+	apiv1connect.RegisterSketchServiceHandler(srv, NewSketchServer(app, limiter))
 
 	// Mount the connect-go HTTP handlers on a stdlib mux.
 	mux := http.NewServeMux()

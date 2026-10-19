@@ -856,9 +856,20 @@ paths:
     /api/v1/memos/{memo}:
         get:
             tags:
-                - MemoService
-            description: GetMemo gets a memo.
-            operationId: MemoService_GetMemo
+                - SketchService
+            description: |-
+                GetSketch returns a single sketch memo by
+                 resource name, with the SketchPayload
+                 envelope populated. Used by the SPA to
+                 render the in-page sketch player on the
+                 memo detail page without re-listing
+                 every sketch the caller owns. The caller
+                 must be the sketch author or a space
+                 member (per `canViewMemo`); a non-viewer
+                 gets NotFound rather than Forbidden so
+                 a private sketch's existence is not
+                 leaked to a stranger.
+            operationId: SketchService_GetSketch
             parameters:
                 - name: memo
                   in: path
@@ -1428,6 +1439,51 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/Status'
+    /api/v1/memos/{memo}:push:
+        post:
+            tags:
+                - SketchService
+            description: |-
+                PushSketch queues a sketch memo for delivery
+                 to one of the caller's bound PO-33 devices.
+                 The flow is device-pulls: the server writes
+                 a `pending_pull` envelope onto the
+                 `po33_devices` row with a 15-minute signed
+                 URL the device's `GET /api/po33/sketches/
+                 pending` handler will accept. The push is
+                 idempotent within the 30s rate-limit window:
+                 a second push for the same (device, memo)
+                 pair overwrites the prior envelope with a
+                 fresh signed URL but does not change the
+                 push id, so the SPA's polling
+                 `GetPushStatus` sees a single logical push.
+            operationId: SketchService_PushSketch
+            parameters:
+                - name: memo
+                  in: path
+                  description: The memo id.
+                  required: true
+                  schema:
+                    type: string
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/PushSketchRequest'
+                required: true
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/PushSketchResponse'
+                default:
+                    description: Default error response
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Status'
     /api/v1/po33-devices/{po33-device}:
         get:
             tags:
@@ -1477,6 +1533,54 @@ paths:
                 "200":
                     description: OK
                     content: {}
+                default:
+                    description: Default error response
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Status'
+    /api/v1/po33-devices/{po33-device}/pushes/{pushe}:
+        get:
+            tags:
+                - SketchService
+            description: |-
+                GetPushStatus returns the latest push state
+                 for a (device, push_id) pair. The SPA polls
+                 this every 2s while the push dialog is open
+                 and the response drives the four-state badge
+                 (queued / sending / delivered / failed). A
+                 push that has been acked by the device is
+                 still queryable for 30 minutes so the SPA
+                 can render a "delivered" state after the
+                 user closes the dialog; after that the
+                 handler returns NotFound and the SPA
+                 clears its local state.
+            operationId: SketchService_GetPushStatus
+            parameters:
+                - name: push
+                  in: path
+                  required: true
+                  schema:
+                    type: string
+                - name: po33-device
+                  in: path
+                  description: The po33-device id.
+                  required: true
+                  schema:
+                    type: string
+                - name: pushe
+                  in: path
+                  description: The pushe id.
+                  required: true
+                  schema:
+                    type: string
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/PushStatus'
                 default:
                     description: Default error response
                     content:
@@ -4930,6 +5034,72 @@ components:
                     description: |-
                         The resource name of the memo to publish.
                          Format: memos/{memo}
+        PushSketchRequest:
+            required:
+                - name
+                - device
+            type: object
+            properties:
+                name:
+                    type: string
+                    description: 'The sketch memo to push. Format: memos/{memo}.'
+                device:
+                    type: string
+                    description: |-
+                        The bound PO-33 device to push to.
+                         Format: po33-devices/{device}.
+            description: |-
+                PushSketchRequest is the body of PushSketch.
+                 The caller must own the device (`device`)
+                 and the memo (`name`); a non-owner is
+                 rejected with PermissionDenied / NotFound.
+        PushSketchResponse:
+            type: object
+            properties:
+                pushId:
+                    type: string
+                signedUrl:
+                    type: string
+                signedExpiresAt:
+                    type: string
+                    format: date-time
+            description: |-
+                PushSketchResponse is the body of a successful
+                 PushSketch. The `push_id` is the value the
+                 SPA polls via GetPushStatus to render the
+                 badge state. The signed_url + signed_expires_at
+                 fields are also returned so a server-rendered
+                 email notification (future) can deep-link the
+                 device straight to the download; the SPA
+                 itself never uses them (the device's
+                 `GET /api/po33/sketches/pending` poll is
+                 the single authority on what to download).
+        PushStatus:
+            type: object
+            properties:
+                pushId:
+                    type: string
+                device:
+                    type: string
+                memo:
+                    type: string
+                state:
+                    enum:
+                        - PUSH_STATE_UNSPECIFIED
+                        - PUSH_STATE_QUEUED
+                        - PUSH_STATE_SENDING
+                        - PUSH_STATE_DELIVERED
+                        - PUSH_STATE_FAILED
+                    type: string
+                    format: enum
+                queuedAt:
+                    type: string
+                    format: date-time
+                updatedAt:
+                    type: string
+                    format: date-time
+                failureReason:
+                    type: string
         Reaction:
             required:
                 - reactionType

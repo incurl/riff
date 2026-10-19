@@ -50,6 +50,16 @@ const (
 	ScopeWriteUser Scope = "write_user"
 	// ScopeArchiveUser counts memo exports and imports per user.
 	ScopeArchiveUser Scope = "archive_user"
+	// ScopeSketchPushDeviceMemo counts PO-33 sketch
+	// pushes per (device, memo) pair. The push flow
+	// is device-pulls (see docs/design/po33-device-binding.md,
+	// 2026-10-19 appendix), so a single user click
+	// enqueues one envelope; the limit absorbs
+	// double-clicks on the "Push" button without
+	// capping legitimate per-device concurrency
+	// (a user with two devices can push the same
+	// sketch to each in 2 req, well under 10).
+	ScopeSketchPushDeviceMemo Scope = "sketch_push_device_memo"
 )
 
 // Rule is the limit for one scope: at most Limit units within Window.
@@ -86,6 +96,7 @@ func DefaultPolicy() Policy {
 		ScopeTranscribeUser:     {Limit: 20, Window: time.Hour},
 		ScopeWriteUser:          {Limit: 120, Window: time.Minute},
 		ScopeArchiveUser:        {Limit: 10, Window: time.Hour},
+		ScopeSketchPushDeviceMemo: {Limit: 10, Window: time.Minute},
 	}
 }
 

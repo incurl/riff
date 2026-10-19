@@ -504,3 +504,122 @@ newHookedApp fixture the other Connect tests use. Coverage:
 - `internal/qr/qr.go` (new; wraps `github.com/skip2/go-qrcode`,
   pending Q2)
 - `internal/random/crockford.go` (new; user-code generator)
+
+## Appendix: Push direction (2026-10-19)
+
+The original design (above) covers pairing, signing, and upload. A
+later slice (2026-10-19) added the **inverse** direction: the SPA
+asks the server to push a sketch to one of the user's bound
+devices. The two transports considered were:
+
+- **device-pushes** (server-initiated): the SPA opens a long-poll
+  or WebSocket to the PO-33 and forwards the bytes. Requires
+  the firmware to ship a state machine the current revision
+  does not have.
+- **device-pulls** (device-initiated): the SPA writes a small
+  envelope to a per-device row, the device polls the server
+  every 2s and fetches the bytes via a short-lived signed URL.
+  Reuses the signed-URL pattern the upload route already
+  verifies; the device-side code is the same `GetFirstRecordByFilter`
+  + signed-URL verify it already has.
+
+The chosen transport is **device-pulls**. The full lifecycle:
+
+```
+[SPA]      SketchService.PushSketch        (or POST /api/po33/devices/{id}/push)
+            |
+            v
+[Server]   writes `po33_devices.pending_pull` envelope:
+            { push_id, sketch_memo_id, signed_url, signed_expires_at,
+              version_no, queued_at, state = "QUEUED" }
+            |
+            v
+[Device]   GET /api/po33/sketches/pending
+            | X-Device-Fingerprint: <public_key_fpr>
+            v
+[Server]   advances state to "SENDING" and returns the envelope
+            |
+            v
+[Device]   GET /api/po33/sketches/{memo}/download?<exp=...&mac=...>
+            | X-Device-Fingerprint: <public_key_fpr> (preferred)
+            v
+[Server]   verifies signed URL, streams .p33 bytes, writes audit row
+            |
+            v
+[Device]   POST /api/po33/sketches/pending/ack { push_id }
+            | X-Device-Fingerprint: <public_key_fpr>
+            v
+[Server]   advances state to "DELIVERED" or "FAILED"
+```
+
+### State machine
+
+| State      | Set by                                  | Cleared by                |
+|------------|-----------------------------------------|---------------------------|
+| (empty)    | —                                       | SPA PushSketch            |
+| QUEUED     | SPA PushSketch                          | device poll (→ SENDING)   |
+| SENDING    | device `/pending` poll                  | device `/ack` (→ DELIVERED) |
+|            |                                         | 15-min timer (→ FAILED)    |
+| DELIVERED  | device `/ack` (no `reason` field)       | 15-min keep-alive expires  |
+| FAILED     | device `/ack` (with `reason`) or timer  | 15-min keep-alive expires  |
+
+The keep-alive is `15 * time.Minute` — the same as the signed-URL
+TTL — so the SPA's `GetPushStatus` poll and the device's
+`/pending` poll expire on the same timer. A re-opened dialog
+after the keep-alive sees `UNSPECIFIED` / `EXPIRED`; the SPA
+clears its local state.
+
+### Files
+
+- `pb/migrations/1870000000_add_device_pending_pull.go` — the
+  `pending_pull` JSON column on `po33_devices`.
+- `pb/connect/sketch_service_push.go` — `PushSketch` +
+  `GetPushStatus` + envelope types + per-`(device, memo)`
+  rate-limit + idempotency window.
+- `pb/api/po33_device_pull.go` — owner-facing
+  `POST /api/po33/devices/{id}/push` and
+  `GET /api/po33/devices/{id}/pushes/{pushId}`, plus the
+  device-facing `/api/po33/sketches/pending` poll,
+  `/api/po33/sketches/pending/ack`, and
+  `/api/po33/sketches/{memo}/download` routes.
+- `internal/signedurl/` — the 15-min HMAC-SHA256 signer
+  persisted to `instance_settings.download_signing_key`.
+- `proto/api/v1/po33_sketch_service.proto` — `GetSketch`,
+  `PushSketch`, `GetPushStatus` RPCs and their messages.
+- `pb/connect/sketch_signer_bootstrap.go` — the per-install
+  signer bootstrap (load or mint the HMAC key, install the
+  connect-go interceptor that threads the signer into
+  every request).
+- `pb/connect/sketch_service.go` — `GetSketch` handler.
+
+### Tests
+
+- `pb/connect/sketch_service_push_internal_test.go` — 15 tests
+  covering the Connect path: envelope round-trip, double-click
+  idempotency, cross-tenant guard, revoked device, text-memo
+  guard, unknown push state, push status poll, unauthenticated
+  paths.
+- `pb/api/po33_device_pull_internal_test.go` — 13 tests
+  covering the REST path: auth, ownership, sketch-only rule,
+  state machine, audit row, signature checks, idempotency.
+- `internal/signedurl/signedurl_test.go` — 8 tests covering
+  the signer: round-trip, expired, bad MAC, wrong key, wrong
+  path, malformed, TTL override, secret wipe.
+
+### Security posture (recap)
+
+- 404 not 403 on owner / bundle mismatches.
+- Per-device 1-push-per-30s rate limit.
+- Never log device tokens or signing keys.
+- Audit to existing `po33_sketch_downloads` (PATCH kind).
+- Signed URL is 15 min, HMAC-SHA256, per-install key.
+
+### Deferred (out of scope)
+
+- WebSocket / SSE "true push" transport.
+- Push history table (out-of-band audit of which sketch went
+  to which device at which time).
+- Batched pushes (a user with N devices pushes the same
+  sketch to all in one click).
+- Server-rendered email notification deep-linking to the
+  signed URL.

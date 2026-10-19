@@ -5,6 +5,89 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## Sketch push transport is device-pulls: SPA queues a 15-min signed URL on the device row, the PO-33 polls (2026-10-19)
+
+The "Push to my device" feature on the SPA's sketch player has two
+plausible transports. The first is **device-pushes**: the SPA opens a
+WebSocket or long-poll to the PO-33 and forwards the bytes when the
+user clicks. The second is **device-pulls**: the SPA writes a small
+envelope to a per-device row, the device polls the server every 2s
+and fetches the bytes via a short-lived signed URL. The PO-33 K.O!
+firmware has only an HTTP/1.1 client with a one-shot Ed25519
+signature; a long-poll over the same client would be doable but
+requires the firmware team to ship a state machine on the device
+that the current firmware revision does not have. Device-pulls
+reuses the existing signed-URL pattern the upload route already
+verifies; the device-side code is the same `GetFirstRecordByFilter`
++ signed-URL verify it already has.
+
+**The envelope is on the device row, not in a new collection.** A
+`po33_sketch_pending_pulls` collection with a `(device, state)` index
+was the obvious design, but every poll would have to read a list,
+filter by state, and pick the most recent. A single `pending_pull`
+JSON column on the device row is a one-record read per poll; the
+state machine is the column's `state` field. A future push-history
+table (out of scope for this commit) can derive its id from the
+envelope; today, a single push is the single envelope.
+
+**The signing key is per-install, persisted in `instance_settings`,
+and never logged.** A 32-byte HMAC-SHA256 key is minted on
+`app.Bootstrap()` if the row is missing and stored under the
+`DOWNLOAD_SIGNING_KEY` key. A future operator who deletes the row
+forces a re-mint on next start; URLs issued before the rotation are
+rejected because the new key's MAC won't match. The bootstrap path
+writes no log line that carries the key bytes — the brief's §10 audit
+requirements treat the signing key the same way they treat the
+device access tokens.
+
+**The signed URL is 15 minutes, not 5.** A human at the device who
+walks away for a coffee break comes back to a still-valid push. A
+leaked URL expires before the next round of operator-driven
+rotation. The same 15-minute number is the keep-alive window the
+SPA's `GetPushStatus` poll reads so the two timers expire together
+on the same envelope.
+
+**The push is idempotent within the rate-limit window.** A
+double-click on the "Push" button enqueues one signed URL; the
+second click overwrites the prior envelope with a fresh signed URL
+but reuses the prior `push_id` so the SPA's poll sees a single
+logical push. The per-`(device, memo)` `ScopeSketchPushDeviceMemo`
+rate limit (10 / min) absorbs the click without capping
+legitimate per-device concurrency (a user with two devices can
+push the same sketch to each in two requests, well under 10).
+
+**Security stance.** Owner-mismatched lookups return 404 not 403
+so a stranger cannot enumerate device ids. Per-device
+1-push-per-30s rate limit (above) plus per-install rate limiter
+gates on the route. The signed URL is the only auth on the
+device-pull `/sketches/{memo}/download` route; the device's
+`X-Device-Fingerprint` header is preferred so the audit row carries
+a device id, but the URL alone is sufficient (the device may strip
+the header when it follows a redirect). The download handler
+returns 404 (not 401) on a bad signature so a leaked URL doesn't
+reveal whether the memo exists.
+
+**The SPA-facing API is the new `SketchService.PushSketch` Connect
+RPC; the same flow is also exposed at
+`POST /api/po33/devices/{deviceId}/push` for `memos_pat_*` callers
+(CLI, third-party SPA).** The duplication is intentional: the
+Connect path is the SPA's preferred transport, and the REST path is
+the surface the brief promises; both sides write the same envelope
+and read the same `pending_pull` column.
+
+**The memo detail page mounts the player on the existing
+`source === "sketch"` branch.** No new route. The `GetSketch` RPC
+is a deep-linkable read for the player to use when the memo is
+loaded from a notification; the page itself still renders the
+existing memo body.
+
+**Deferred (out of scope for this commit):** WebSocket / SSE
+"true push" transport, push history table, batched pushes (a user
+with N devices pushes the same sketch to all in one click).
+See `docs/design/po33-device-binding.md` (2026-10-19 appendix) for
+the full lifecycle and `pb/api/po33_device_pull.go` for the REST
+implementation.
+
 ## `/api/v1/status` advertises V0 (`0.21.0`) so the MoeMemos V0 surface is selected, not the V1 fallback (2026-10-19)
 
 After the V0 dispatch-helper fix below shipped, the Android MoeMemos
