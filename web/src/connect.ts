@@ -8,6 +8,8 @@ import { AuthService } from "./types/proto/api/v1/auth_service_pb";
 import { IdentityProviderService } from "./types/proto/api/v1/idp_service_pb";
 import { InstanceService } from "./types/proto/api/v1/instance_service_pb";
 import { MemoService } from "./types/proto/api/v1/memo_service_pb";
+import { DeviceService } from "./types/proto/api/v1/po33_device_service_pb";
+import { SketchService } from "./types/proto/api/v1/po33_sketch_service_pb";
 import { SpaceService } from "./types/proto/api/v1/space_service_pb";
 import { UserService } from "./types/proto/api/v1/user_service_pb";
 import { redirectOnAuthFailure } from "./utils/auth-redirect";
@@ -212,3 +214,12 @@ export const spaceServiceClient = createClient(SpaceService, transport);
 
 // Configuration service clients
 export const identityProviderServiceClient = createClient(IdentityProviderService, transport);
+
+// PO-33 device + sketch clients. The device side is
+// SPA-facing (List / Get / Revoke). The sketch side
+// carries the new GetSketch / PushSketch /
+// GetPushStatus RPCs the sketch player dialog
+// uses to push a memo to one of the caller's
+// bound PO-33 devices.
+export const deviceServiceClient = createClient(DeviceService, transport);
+export const sketchServiceClient = createClient(SketchService, transport);

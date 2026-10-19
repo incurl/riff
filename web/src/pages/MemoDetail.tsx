@@ -8,9 +8,13 @@ import MemoParentPlaceholder, { type MemoParentStatus } from "@/components/MemoP
 import MemoView, { type MemoViewHandle } from "@/components/MemoView";
 import { computeCommentAmount } from "@/components/MemoView/MemoViewContext";
 import { createMemoNavigationState, resolveMemoDetailOrigin } from "@/components/MemoView/navigation";
+import PushToDeviceDialog from "@/components/Sketch/PushToDeviceDialog";
+import SketchPlayer from "@/components/Sketch/SketchPlayer";
+import { Button } from "@/components/ui/button";
 import { useAppSidebar } from "@/contexts/AppSidebarContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { useInstance } from "@/contexts/InstanceContext";
+import useDialog from "@/hooks/useDialog";
 import useMemoDetailError from "@/hooks/useMemoDetailError";
 import { useInfiniteMemoComments, useMemo } from "@/hooks/useMemoQueries";
 import { useSharedMemo, withShareAttachmentLinks } from "@/hooks/useMemoShareQueries";
@@ -20,6 +24,7 @@ import { ROUTES } from "@/router/routes";
 import type { Attachment } from "@/types/proto/api/v1/attachment_service_pb";
 import { State } from "@/types/proto/api/v1/common_pb";
 import type { Memo } from "@/types/proto/api/v1/memo_service_pb";
+import { useTranslate } from "@/utils/i18n";
 import { findMemoAnchorTarget } from "@/utils/markdown-manipulation";
 
 const MemoSidebarRegistration = ({
@@ -220,6 +225,33 @@ const MemoDetail = () => {
   const userResolutionNames = Array.from(
     new Set([displayMemo, ...comments].flatMap((item) => [item.creator, ...(item.reactions ?? []).map((reaction) => reaction.creator)])),
   );
+
+  // The sketch player mounts below the
+  // memo body when the memo carries
+  // a `payload.sketch` envelope. The
+  // .p33 patch blob is one of the
+  // attachments; the .wav sample
+  // attachments drive the player
+  // (one sample per PO-33 slot). The
+  // "Push to my device" dialog sits
+  // alongside the player.
+  const sketchPayload = displayMemo?.payload?.sketch;
+  const sketchSamples = useReactMemo(() => {
+    if (!sketchPayload || !displayMemo) {
+      return [];
+    }
+    return (displayMemo.attachments ?? [])
+      .filter((att) => att.filename.toLowerCase().endsWith(".wav"))
+      .map((att, index) => ({
+        id: att.name,
+        url: att.externalLink ?? "",
+        slot: index % 16,
+        label: att.filename,
+      }));
+  }, [sketchPayload, displayMemo]);
+
+  const t = useTranslate();
+  const sketchDialog = useDialog(false);
   return (
     <section className="@container flex min-h-full w-full flex-col items-center pb-8 pt-3 md:pt-6">
       <MentionResolutionProvider contents={mentionResolutionContents} userNames={userResolutionNames}>
@@ -269,6 +301,24 @@ const MemoDetail = () => {
               showSpace
               onShareImageDialogOpenChange={setShareImageDialogOpen}
             />
+            {sketchPayload ? (
+              <div className="mt-4 w-full">
+                <SketchPlayer
+                  samples={sketchSamples}
+                  bpm={sketchPayload.bpm ?? 0}
+                  version={sketchPayload.versionNo ?? 0}
+                  deviceFingerprint={sketchPayload.deviceFingerprint ?? ""}
+                />
+                {!isShareMode && currentUser ? (
+                  <div className="mt-2 flex justify-end">
+                    <Button type="button" size="sm" variant="outline" onClick={sketchDialog.open}>
+                      {t("memo.sketch.push.open")}
+                    </Button>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+            <PushToDeviceDialog memoName={displayMemo.name} open={sketchDialog.isOpen} onOpenChange={sketchDialog.setOpen} />
             {!isShareMode && (
               <MemoCommentSection
                 ref={commentSectionRef}
