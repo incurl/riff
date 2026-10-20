@@ -207,7 +207,8 @@ func WithAuth(app core.App) connect.ServerInterceptor {
 	return func(next connect.ServerFunc) connect.ServerFunc {
 		return connect.ServerFunc(func(ctx context.Context, spec connect.Spec, stream connect.ServerStream) error {
 			if info, ok := connect.CallInfoForServerContext(ctx); ok {
-				tok := bearerToken(info.RequestHeader().Get("Authorization"))
+				hdr := info.RequestHeader()
+				tok := bearerToken(hdr.Get("Authorization"))
 				if tok != "" {
 					rec, err := app.FindAuthRecordByToken(tok, core.TokenTypeAuth)
 					if err == nil {
@@ -220,6 +221,16 @@ func WithAuth(app core.App) connect.ServerInterceptor {
 						// CurrentUser(ctx).
 						ctx = context.WithValue(ctx, ctxKeyAuthRecord{}, pat)
 					}
+				}
+				// The user-facing origin is stashed in the
+				// same request slot — see ctxKeyRequestOrigin.
+				// Even when the request lands unauthenticated
+				// the handlers still want an absolute URL for
+				// `externalLink`, because MoeMemos iOS's
+				// host-equality check does not require an
+				// authenticated caller to be present.
+				if origin := requestOriginFromHTTP(hdr); origin != "" {
+					ctx = context.WithValue(ctx, ctxKeyRequestOrigin{}, origin)
 				}
 			}
 			return next(ctx, spec, stream)
@@ -240,6 +251,73 @@ func bearerToken(h string) string {
 // ctxKeyAuthRecord is the context key under which the auth
 // interceptor stashes the *core.Record.
 type ctxKeyAuthRecord struct{}
+
+// ctxKeyRequestOrigin is the context key under which the
+// request interceptor (see WithAuth) stashes the user-facing
+// origin (scheme + host) of the inbound request. The value is a
+// string of the form `https://example.com` with no trailing
+// slash; an empty string means the interceptor could not
+// determine the origin, and `requestOriginFromContext` returns
+// "" rather than guessing.
+//
+// The MoeMemos iOS client's auth middleware (see
+// Packages/Services/Sources/ServiceUtils/Auth.swift in the
+// `mudkipme/MoeMemos` repository) only attaches `Authorization:
+// Bearer …` when `request.url?.host == hostURL.host` — a host
+// comparison against the URL it sees the server emit. Relative
+// URLs from the server have `host == nil`, so the comparison is
+// always false and the bearer is dropped. Every PRIVATE memo's
+// attachment then 404s on the file surface, because the file
+// surface authorizes via the bearer it never received. Stashing
+// the origin here lets every `*v1.Attachment` returned by the
+// connect handlers carry an absolute `externalLink` whose host
+// matches what the iOS client configured, so the host check
+// passes and the bearer goes through.
+type ctxKeyRequestOrigin struct{}
+
+// requestOriginFromContext returns the user-facing origin
+// stashed by the request interceptor, or "" if none.
+func requestOriginFromContext(ctx context.Context) string {
+	v, _ := ctx.Value(ctxKeyRequestOrigin{}).(string)
+	return v
+}
+
+// requestOriginFromHTTP computes the user-facing origin from a
+// header set. It accepts connect-go's `*Header` (which is
+// `map[string][]string`, identical to `http.Header` in shape) and
+// the plain `http.Header` for tests. It trusts
+// `X-Forwarded-Proto` first (set by caddy per `scripts/Caddyfile`)
+// and falls back to plain `http` when absent — the only time
+// that branch fires is the bare-metal `localhost:8090`
+// development case.
+//
+// `Host` is the host the *client* addressed — what the iOS
+// MoeMemos client's `hostURL.absoluteString` carries and what
+// the host-equality check on the URL is compared against. We
+// MUST NOT derive it from `r.Host` for the *connect* path (the
+// connect server runs behind caddy, where `r.Host` is the
+// in-process loopback 8090); we MUST derive from the same
+// `info.RequestHeader()` PocketBase gives us.
+func requestOriginFromHTTP(h interface {
+	Get(string) string
+	Values(string) []string
+}) string {
+	scheme := h.Get("X-Forwarded-Proto")
+	if scheme == "" {
+		scheme = h.Get("X-Forwarded-Protocol")
+	}
+	if scheme == "" {
+		scheme = "http"
+	}
+	host := h.Get("Host")
+	if host == "" {
+		return ""
+	}
+	if i := strings.IndexByte(host, '/'); i >= 0 {
+		host = host[:i]
+	}
+	return scheme + "://" + host
+}
 
 // CurrentUser returns the auth record stashed by the
 // interceptor, or nil if the request was unauthenticated.

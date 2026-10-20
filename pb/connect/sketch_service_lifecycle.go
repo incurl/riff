@@ -98,7 +98,7 @@ func (s *SketchServer) PublishSketch(ctx context.Context, req *v1.PublishSketchR
 	if err := s.app.Save(rec); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
 	}
-	return recordToMemo(s.app, rec), nil
+	return recordToMemo(ctx, s.app, rec), nil
 }
 
 // ArchiveSketch flips a sketch memo from NORMAL
@@ -143,7 +143,7 @@ func (s *SketchServer) ArchiveSketch(ctx context.Context, req *v1.ArchiveSketchR
 		// memo returns the same memo the client
 		// already has, with no error. The SPA
 		// then renders the same ARCHIVED chip.
-		return recordToMemo(s.app, rec), nil
+		return recordToMemo(ctx, s.app, rec), nil
 	}
 	if rec.GetString("state") != "NORMAL" {
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
@@ -153,7 +153,7 @@ func (s *SketchServer) ArchiveSketch(ctx context.Context, req *v1.ArchiveSketchR
 	if err := s.app.Save(rec); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
 	}
-	return recordToMemo(s.app, rec), nil
+	return recordToMemo(ctx, s.app, rec), nil
 }
 
 // isMemoIDShape reports whether s looks like a

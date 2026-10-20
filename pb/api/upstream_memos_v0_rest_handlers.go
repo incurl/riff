@@ -149,7 +149,7 @@ func v0MemoListHandler(app core.App) func(*core.RequestEvent) error {
 		}
 		e.Request = e.Request.WithContext(withV0IDMap(e.Request.Context(), idMap))
 
-		shaped, err := v0ShapeMemoList(v1Body)
+		shaped, err := v0ShapeMemoList(v1Body, requestOriginFromEvent(e))
 		if err != nil {
 			return crudError(e, http.StatusInternalServerError,
 				"shape V0 memo list: "+err.Error())
@@ -190,7 +190,7 @@ func v0MemoAllListHandler(app core.App) func(*core.RequestEvent) error {
 			return crudError(e, http.StatusInternalServerError,
 				"connect response was not JSON: "+err.Error())
 		}
-		shaped, err := v0ShapeMemoList(v1Body)
+		shaped, err := v0ShapeMemoList(v1Body, requestOriginFromEvent(e))
 		if err != nil {
 			return crudError(e, http.StatusInternalServerError,
 				"shape V0 memo list: "+err.Error())
@@ -264,13 +264,13 @@ func v0MemoCreateHandler(app core.App) func(*core.RequestEvent) error {
 			// The memo proto the client gets back must show the files it just
 			// asked for, or the next edit's `resourceList` would be built from
 			// an empty list and the client could drop them again.
-			v1Body, err = v0ShapeSingleMemoAttachments(e.App, memoID, v1Body)
+			v1Body, err = v0ShapeSingleMemoAttachments(e.App, e, memoID, v1Body)
 			if err != nil {
 				return crudError(e, http.StatusInternalServerError,
 					"shape V0 memo attachments: "+err.Error())
 			}
 		}
-		shaped, err := v0ShapeSingleMemo(v1Body)
+		shaped, err := v0ShapeSingleMemo(v1Body, requestOriginFromEvent(e))
 		if err != nil {
 			return crudError(e, http.StatusInternalServerError,
 				"shape V0 memo: "+err.Error())
@@ -340,7 +340,7 @@ func v0MemoOrganizerHandler(app core.App) func(*core.RequestEvent) error {
 			return crudError(e, http.StatusInternalServerError,
 				"connect response was not JSON: "+err.Error())
 		}
-		shaped, err := v0ShapeSingleMemo(v1Body)
+		shaped, err := v0ShapeSingleMemo(v1Body, requestOriginFromEvent(e))
 		if err != nil {
 			return crudError(e, http.StatusInternalServerError,
 				"shape V0 memo: "+err.Error())
@@ -436,13 +436,13 @@ func v0MemoPatchHandler(app core.App) func(*core.RequestEvent) error {
 		// columns, so the attachment list is read back from the store
 		// here, the same pass the create path uses.
 		if len(resourceIDs) > 0 {
-			v1Body, err = v0ShapeSingleMemoAttachments(e.App, v1ID, v1Body)
+			v1Body, err = v0ShapeSingleMemoAttachments(e.App, e, v1ID, v1Body)
 			if err != nil {
 				return crudError(e, http.StatusInternalServerError,
 					"shape V0 memo attachments: "+err.Error())
 			}
 		}
-		shaped, err := v0ShapeSingleMemo(v1Body)
+		shaped, err := v0ShapeSingleMemo(v1Body, requestOriginFromEvent(e))
 		if err != nil {
 			return crudError(e, http.StatusInternalServerError,
 				"shape V0 memo: "+err.Error())
@@ -547,7 +547,7 @@ func v0ResourceListHandler(app core.App) func(*core.RequestEvent) error {
 			return crudError(e, http.StatusInternalServerError,
 				"connect response was not JSON: "+err.Error())
 		}
-		shaped := v0ShapeResourceList(v1Body)
+		shaped := v0ShapeResourceList(v1Body, requestOriginFromEvent(e))
 		return e.JSON(http.StatusOK, shaped)
 	}
 }
@@ -742,7 +742,7 @@ func v0ResourceUploadHandler(app core.App) func(*core.RequestEvent) error {
 		if att == nil {
 			att = v1Body
 		}
-		shaped := v0ShapeResource(att)
+		shaped := v0ShapeResource(att, requestOriginFromEvent(e))
 		return e.JSON(http.StatusOK, shaped)
 	}
 }
@@ -881,6 +881,16 @@ func v0DispatchConnect(
 	upstream.URL.RawQuery = e.Request.URL.RawQuery
 	upstream.Header.Set("Content-Type", "application/json")
 	upstream.Header.Set("Accept", "application/json")
+	// Mirror the Host into the header map so the connect-side
+	// `WithAuth` interceptor, which reads `info.RequestHeader()`
+	// (and so does NOT see `req.Host` directly), can derive the
+	// user-facing origin for absolute `externalLink`s. Without
+	// this every V0 connect-dispatch response carries a
+	// relative `/file/...` URL and the iOS MoeMemos client's
+	// host-equality auth check drops the bearer — see
+	// `pb/connect/connect.go::ctxKeyRequestOrigin`.
+	upstream.Header.Set("Host", e.Request.Host)
+	upstream.Host = e.Request.Host
 	// Strip the inbound Accept-Encoding (e.g. the
 	// gzip caddy forwards from MoeMemos) so the
 	// connect server returns plain JSON we can

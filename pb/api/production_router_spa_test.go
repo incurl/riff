@@ -454,7 +454,22 @@ func TestProductionSpaMoeMemosDownloadStreamCompletes(t *testing.T) {
 	feedExt, _ := feedAtt["externalLink"].(string)
 	require.NotEmpty(t, feedExt)
 
-	dlURL := httpSrv.URL + feedExt
+	dlURL := feedExt
+	if !strings.HasPrefix(feedExt, "http://") && !strings.HasPrefix(feedExt, "https://") {
+		// The connect layer now emits an absolute
+		// `externalLink` matching the inbound host
+		// (see `pb/connect/connect.go::ctxKeyRequestOrigin`),
+		// so the previous relative-form concatenation
+		// `httpSrv.URL + feedExt` duplicates the host
+		// when the upstream go test server's URL also
+		// carries one. Concatenate only when the
+		// shaper actually returns a relative path —
+		// a self-hosted dev path the `riff` operator
+		// can still trip into if they have a custom
+		// origin resolver that returns an empty
+		// string.
+		dlURL = httpSrv.URL + feedExt
+	}
 	dlResp, err := httpGetWithProgress(t.Context(), dlURL, pat, 5*time.Second)
 	require.NoError(t, err, "download must complete within 5s — a hang here is the user-reported symptom")
 	defer dlResp.Body.Close()

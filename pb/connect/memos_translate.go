@@ -1,6 +1,7 @@
 package connect
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 
@@ -35,7 +36,7 @@ import (
 // Each of these costs one extra query per memo, which the feed can
 // afford while it is small; a batched pre-join is the natural next
 // step if list latency starts to matter.
-func recordToMemo(app core.App, rec *core.Record) *v1.Memo {
+func recordToMemo(ctx context.Context, app core.App, rec *core.Record) *v1.Memo {
 	if rec == nil {
 		return nil
 	}
@@ -54,7 +55,7 @@ func recordToMemo(app core.App, rec *core.Record) *v1.Memo {
 		Pinned:      rec.GetBool("pinned"),
 		Reactions:   memoReactions(app, rec.Id),
 		Relations:   memoReferenceRelations(app, rec.Id),
-		Attachments: memoAttachments(app, rec.Id),
+		Attachments: memoAttachments(ctx, app, rec.Id),
 	}
 
 	if spaceID := rec.GetString("space"); spaceID != "" {
@@ -281,14 +282,15 @@ func memoParentID(app core.App, memoID string) string {
 // stores one row per file, so a single filter is enough;
 // the SPA sees a single ordered list regardless of the
 // underlying file kind.
-func memoAttachments(app core.App, memoID string) []*v1.Attachment {
+func memoAttachments(ctx context.Context, app core.App, memoID string) []*v1.Attachment {
+	origin := requestOriginFromContext(ctx)
 	out := []*v1.Attachment{}
 
 	rows, err := app.FindRecordsByFilter("attachments",
 		"memo={:id}", "-created", 0, 0, map[string]any{"id": memoID})
 	if err == nil {
 		for _, r := range rows {
-			if a := resourceToAttachment(app, r); a != nil {
+			if a := resourceToAttachmentWithOrigin(app, r, origin); a != nil {
 				out = append(out, a)
 			}
 		}

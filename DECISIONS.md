@@ -5683,3 +5683,72 @@ never reaches `WriteFunc`; and `runLogsWrite` carries its own
 No test in the repo asserts on persisted log rows, so the only behaviour
 change is that `logs.db` stays empty under test. Production is untouched —
 `main.go` never calls this.
+
+## MoeMemos iOS `externalLink` absolute form
+
+The MoeMemos iOS client's auth middleware (`mudkipme/MoeMemos`
+Packages/Services/Sources/ServiceUtils/Auth.swift::`rawAccessTokenMiddlware`)
+only attaches `Authorization: Bearer …` when `request.url?.host ==
+hostURL.host`. A *relative* URL has `host == nil`, so the
+comparison is always false and the bearer is dropped — every
+PRIVATE memo's attachment then 404s on the file surface, because
+the file surface authorizes via the bearer it never received.
+
+riff's previous shape (a relative-path `/file/attachments/...`)
+shipped through every connect RPC's `externalLink` and every V0
+shaper fallback. The V0 client built the resource model from the
+response and put the URL straight into its Core Data store; the
+next render hit `URLSession.download(url:)` and lost the bearer.
+
+`mortis` (mudkipme/mortis, the Memos 0.21↔0.31 reverse proxy)
+ships the same relative `externalLink` (`server.go::convertResource`)
+and has the same gap for PRIVATE memos. Its `/o/r/{uid}` proxy also
+stays auth-gated; mortis effectively only helps for PUBLIC memos.
+
+**Fix.** Three layers in riff:
+
+1. `pb/connect/connect.go::WithAuth` now stashes the user-facing
+   origin (`scheme://host[:port]`) on `ctx` after reading the
+   `info.RequestHeader()`. The helper recognises connect-go's
+   `*Header` and the plain `http.Header` via a small interface,
+   so tests can drive it without an in-process mux. Empty origin
+   (no `Host` header, no `X-Forwarded-Proto`) is reported as `""`,
+   not "guess http from a missing header".
+2. `pb/connect/attachment.go::resourceToAttachment` now takes an
+   origin parameter; the rpc-handler callers thread the ctx
+   origin through `recordToAttachmentWithOrigin(ctx, app, rec)`.
+   Request-less callers (record hooks, the V0 stub-bind path)
+   use the legacy relative form. The new
+   `buildAttachmentExternalLink(collection, recordID, filename,
+   origin)` is the testable seam.
+3. `pb/api/file_authz.go::requestOriginFromEvent` mirrors the
+   connect-side helper for the REST surface; the V0 shapers
+   (`v0ShapeResource`, `v0ShapeMemo`, `v0ShapeMemoList`,
+   `v0ShapeResourceList`, `v0ShapeSingleMemo`,
+   `v0ShapeSingleMemoAttachments`) now thread it through, and
+   the two V0 dispatch helpers (`connectProxyHandler`,
+   `v0DispatchConnect`) lift `Host` from `e.Request.Host` into
+   the upstream `Header` map so the connect-go dispatcher
+   produces a `CallInfo` whose `RequestHeader()` carries it.
+
+   `requestOriginFromContext` is nil when no interceptor ran
+   (record hooks, the V0 stub-bind path before the response has
+   gone out), in which case every layer still emits the relative
+   form — the test fixtures in `pb/connect/recordToAttachment`
+   continue to work without a request event.
+
+The regression pin is
+`pb/api/upstream_memos_v0_resource_download_internal_test.go::TestV0ExternalLinkEmittedAsAbsoluteURL`
+plus the keep-as-is fixture test
+`TestV0RelativeExternalLinkEmptyOriginKeptForFixtures`. The
+existing `TestProductionSpaMoeMemosDownloadStreamCompletes`
+was updated to handle the new absolute form
+(`httpSrv.URL + feedExt` duplicated the host when `feedExt` is
+already absolute).
+
+**Side effects.** The SPA-side `web/src/utils/attachment.ts`
+already accepts both forms (`new URL(externalLink,
+window.location.origin)` is format-agnostic); absolute URLs
+short-circuit one hop and survive being pasted into a non-SPA
+context. Existing mime-type, share-token and thumbnail paths
+are unchanged.

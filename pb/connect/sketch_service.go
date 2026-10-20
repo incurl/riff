@@ -76,7 +76,7 @@ func (s *SketchServer) ListMySketches(ctx context.Context, req *v1.ListMySketche
 	}
 	out := make([]*v1.Memo, 0, len(rows))
 	for _, r := range rows {
-		if m := recordToMemo(s.app, r); m != nil {
+		if m := recordToMemo(ctx, s.app, r); m != nil {
 			out = append(out, m)
 		}
 	}
@@ -114,5 +114,5 @@ func (s *SketchServer) GetSketch(ctx context.Context, req *v1.GetSketchRequest) 
 		// 404 is the safety net.
 		return nil, connect.NewError(connect.CodeNotFound, "sketch not found")
 	}
-	return recordToMemo(s.app, rec), nil
+	return recordToMemo(ctx, s.app, rec), nil
 }

@@ -201,7 +201,7 @@ func (s *AttachmentServer) continueSession(ctx context.Context, sess *uploadSess
 	if sess.recordID != "" {
 		resp.CommittedSize = sess.bytesReceived
 		if rec, err := s.app.FindRecordById("attachments", sess.recordID); err == nil {
-			resp.Attachment = recordToAttachment(s.app, rec)
+			resp.Attachment = recordToAttachmentWithOrigin(ctx, s.app, rec)
 		}
 		return resp, nil
 	}
@@ -358,7 +358,7 @@ func (s *AttachmentServer) finalizeSession(ctx context.Context, sess *uploadSess
 	sess.recordID = rec.Id
 	sess.bytesReceived = sess.expectedSize
 	resp.CommittedSize = sess.expectedSize
-	resp.Attachment = recordToAttachment(s.app, rec)
+	resp.Attachment = recordToAttachmentWithOrigin(ctx, s.app, rec)
 	return resp, nil
 }
 

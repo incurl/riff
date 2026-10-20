@@ -156,7 +156,7 @@ func TestV0ShapeMemo_List(t *testing.T) {
 			},
 		},
 	}
-	out, err := v0ShapeMemoList(v1)
+	out, err := v0ShapeMemoList(v1, "")
 	require.NoError(t, err)
 	require.Len(t, out, 1)
 	m, ok := out[0].(map[string]any)
@@ -193,7 +193,7 @@ func TestV0ShapeMemo_PinnedFlip(t *testing.T) {
 		"updateTime": map[string]any{"seconds": float64(1700000001)},
 		"tags":       []any{},
 	}
-	out, err := v0ShapeSingleMemo(v1)
+	out, err := v0ShapeSingleMemo(v1, "")
 	require.NoError(t, err)
 	assert.Equal(t, false, out["pinned"])
 }
@@ -321,7 +321,7 @@ func TestV0ShapeResource(t *testing.T) {
 		"externalLink": "/api/files/attachments/att123def456789/kick.wav",
 		"createTime":   map[string]any{"seconds": float64(1700000000)},
 	}
-	out := v0ShapeResource(v1)
+	out := v0ShapeResource(v1, "")
 	id, ok := out["id"].(int64)
 	require.True(t, ok, "v0 resource id must be int64")
 	assert.NotZero(t, id)

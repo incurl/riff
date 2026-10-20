@@ -43,11 +43,12 @@ func (s *AttachmentServer) ListAttachments(ctx context.Context, req *v1.ListAtta
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
 	}
 	out := make([]*v1.Attachment, 0, len(rows))
+	origin := requestOriginFromContext(ctx)
 	for _, r := range rows {
 		if !canAccessAttachment(s.app, ctx, r) {
 			continue
 		}
-		if a := resourceToAttachment(s.app, r); a != nil {
+		if a := resourceToAttachmentWithOrigin(s.app, r, origin); a != nil {
 			out = append(out, a)
 		}
 	}
@@ -148,13 +149,71 @@ func canAccessAttachment(app core.App, ctx context.Context, rec *core.Record) bo
 // record→proto attachment conversion (`resourceToAttachment`, including the
 // `/file/...` URL and the uploader-vs-memo-author distinction) is `pb/connect`'s
 // to own; a second copy in the shaper would be free to drift from it.
+//
+// This variant returns `externalLink` as a relative path — the only caller
+// is `pb/api`'s V0 stub-bind flow, which has no request in scope when the
+// row needs to be presented to the connect server (the request event has
+// already returned the response by then). For request-aware callers use
+// `MemoAttachmentsAsProtoWithOrigin` instead.
 func MemoAttachmentsAsProto(app core.App, memoID string) []*v1.Attachment {
-	return memoAttachments(app, memoID)
+	return memoAttachmentsWithOrigin(app, memoID, "")
+}
+
+// MemoAttachmentsAsProtoWithOrigin is the request-aware form of
+// MemoAttachmentsAsProto. It threads the user-facing origin stashed
+// on `ctx` through to every emitted attachment so the
+// `externalLink` is absolute — see the request-origin comment in
+// connect.go for why the connect handlers want this.
+func MemoAttachmentsAsProtoWithOrigin(ctx context.Context, app core.App, memoID string) []*v1.Attachment {
+	origin := requestOriginFromContext(ctx)
+	return memoAttachmentsWithOrigin(app, memoID, origin)
+}
+
+// MemoAttachmentsAsProtoWithOriginString is the same form for callers
+// that have a string origin (e.g. an upstream REST handler
+// computing the origin via `requestOriginFromEvent`) but no
+// `context.Context`. Useful for code paths in `pb/api` that
+// derive the origin from a `*core.RequestEvent` rather than a
+// connect-side interceptor.
+func MemoAttachmentsAsProtoWithOriginString(app core.App, memoID, origin string) []*v1.Attachment {
+	return memoAttachmentsWithOrigin(app, memoID, origin)
+}
+
+func memoAttachmentsWithOrigin(app core.App, memoID, origin string) []*v1.Attachment {
+	out := []*v1.Attachment{}
+	rows, err := app.FindRecordsByFilter("attachments",
+		"memo={:id}", "-created", 0, 0, map[string]any{"id": memoID})
+	if err != nil {
+		return out
+	}
+	for _, r := range rows {
+		if a := resourceToAttachmentWithOrigin(app, r, origin); a != nil {
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 // resourceToAttachment converts one `attachments` row into the V1 wire
 // shape.
 func resourceToAttachment(app core.App, rec *core.Record) *v1.Attachment {
+	return resourceToAttachmentWithOrigin(app, rec, "")
+}
+
+// resourceToAttachmentWithOrigin is the request-aware form of
+// resourceToAttachment. When `origin` is non-empty, `externalLink`
+// is built as an absolute URL with that origin (used by every
+// Connect RPC handler); when it is empty, `externalLink` falls
+// back to the relative-path form `buildFileURL` returns (used by
+// record hooks and batch code paths that have no request in
+// scope).
+//
+// The absolute form is what the MoeMemos iOS client's host
+// comparison (see request-origin comment in connect.go) needs to
+// pass — a relative URL has `host == nil` and the comparison is
+// always false, so the bearer is dropped before `/file/...` ever
+// sees it.
+func resourceToAttachmentWithOrigin(app core.App, rec *core.Record, origin string) *v1.Attachment {
 	if rec == nil {
 		return nil
 	}
@@ -162,7 +221,7 @@ func resourceToAttachment(app core.App, rec *core.Record) *v1.Attachment {
 	a := &v1.Attachment{
 		Name:         "attachments/" + rec.Id,
 		Filename:     filename,
-		ExternalLink: buildFileURL(rec.Collection().Name, rec.Id, filename),
+		ExternalLink: buildAttachmentExternalLink(rec.Collection().Name, rec.Id, filename, origin),
 		Type:         guessMime(filename, "application/octet-stream"),
 		Size:         int64(rec.GetInt("size")),
 	}
@@ -210,6 +269,17 @@ func recordToAttachment(app core.App, rec *core.Record) *v1.Attachment {
 	return resourceToAttachment(app, rec)
 }
 
+// recordToAttachmentWithOrigin is the ctx-aware form of
+// `recordToAttachment`, used by Connect RPC handlers that
+// have a request in scope. The origin is the user-facing
+// `scheme://host[:port]` the caller addressed — see
+// `requestOriginFromContext`. With an empty origin (no
+// interceptor ran, or the request landed outside Connect) the
+// caller falls back to the relative-path form.
+func recordToAttachmentWithOrigin(ctx context.Context, app core.App, rec *core.Record) *v1.Attachment {
+	return resourceToAttachmentWithOrigin(app, rec, requestOriginFromContext(ctx))
+}
+
 // buildFileURL composes the file URL for a record.
 //
 // The URL points at riff's own `/file/...` surface (see
@@ -230,11 +300,48 @@ func recordToAttachment(app core.App, rec *core.Record) *v1.Attachment {
 // (`/file/{collection}/{id}/{filename}`) so the two are
 // recognisable; the `attachments` collection is the only one
 // with a file field on the public surface.
+//
+// `buildFileURL` returns a *relative* path. That is the right
+// shape for callers with no request in scope (record hooks,
+// batch jobs, share-link composers that know the SPA's base)
+// and matches every existing consumer. Callers that have a
+// request in scope MUST go through `buildAttachmentExternalLink`
+// instead — see the request-origin comment in connect.go for
+// why a relative URL fails the MoeMemos iOS host comparison
+// that gates the bearer token.
 func buildFileURL(collection, recordID, filename string) string {
 	if filename == "" {
 		return ""
 	}
 	return "/file/" + collection + "/" + recordID + "/" + filename
+}
+
+// buildAttachmentExternalLink is the request-aware form of
+// `buildFileURL`. With an empty `origin` it is equivalent to
+// `buildFileURL`; with a non-empty `origin` (the user-facing
+// `https://host[:port]` the inbound request addressed) it
+// prefixes that origin to the relative path, producing an
+// absolute URL that the MoeMemos iOS client's host-equality
+// auth check (`request.url?.host == hostURL.host`) matches.
+//
+// The origin MUST come from the same inbound request the
+// V1/V0 client addressed — `e.OriginalRequest().Host` plus
+// `X-Forwarded-Proto` for the connect path, the request event
+// for the REST path. Two requests behind the same caddy
+// proxy can carry different hosts (the SPA at `riff.example`,
+// a community subtree at `riff.example/community/` — same
+// origin here, but a second instance behind a different host
+// header would diverge) and a per-request origin keeps the URL
+// honest. Tests can pass a fixed origin string.
+func buildAttachmentExternalLink(collection, recordID, filename, origin string) string {
+	if filename == "" {
+		return ""
+	}
+	rel := buildFileURL(collection, recordID, filename)
+	if origin == "" {
+		return rel
+	}
+	return origin + rel
 }
 
 // guessMime maps a filename extension to a MIME type. Falls
@@ -332,7 +439,7 @@ func (s *AttachmentServer) GetAttachment(ctx context.Context, req *v1.GetAttachm
 	if !canAccessAttachment(s.app, ctx, rec) {
 		return nil, connect.NewError(connect.CodeNotFound, "attachment not found")
 	}
-	return recordToAttachment(s.app, rec), nil
+	return recordToAttachmentWithOrigin(ctx, s.app, rec), nil
 }
 
 // DeleteAttachment removes a single attachment by resource name.
@@ -413,7 +520,7 @@ func (s *AttachmentServer) CreateAttachment(ctx context.Context, req *v1.CreateA
 	if err := createRecordRequest(ctx, s.app, rec); err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err.Error())
 	}
-	return recordToAttachment(s.app, rec), nil
+	return recordToAttachmentWithOrigin(ctx, s.app, rec), nil
 }
 
 // UpdateAttachment is a metadata round-trip. The proto's optional
@@ -438,5 +545,5 @@ func (s *AttachmentServer) UpdateAttachment(ctx context.Context, req *v1.UpdateA
 	if err := updateRecordRequest(ctx, s.app, rec); err != nil {
 		return nil, connect.NewError(connect.CodeFailedPrecondition, err.Error())
 	}
-	return recordToAttachment(s.app, rec), nil
+	return recordToAttachmentWithOrigin(ctx, s.app, rec), nil
 }

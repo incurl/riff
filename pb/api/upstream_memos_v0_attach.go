@@ -219,10 +219,16 @@ func decodeV0Object(body []byte) (map[string]any, error) {
 // from what it was told — an empty one — dropping the files it just
 // successfully attached. Re-reading after the bind closes that loop.
 //
+// `e` is the originating request event; the user-facing origin
+// it carries (scheme + host[:port]) is forwarded to every
+// attachment row, producing absolute `externalLink`s the iOS
+// MoeMemos client's host comparison trusts (see the
+// request-origin comment in `pb/connect/connect.go`).
+//
 // The returned map is a fresh copy; the caller may keep using the original for
 // its other fields.
-func v0ShapeSingleMemoAttachments(app core.App, memoID string, memo map[string]any) (map[string]any, error) {
-	atts := connect.MemoAttachmentsAsProto(app, memoID)
+func v0ShapeSingleMemoAttachments(app core.App, e *core.RequestEvent, memoID string, memo map[string]any) (map[string]any, error) {
+	atts := connect.MemoAttachmentsAsProtoWithOriginString(app, memoID, requestOriginFromEvent(e))
 	if len(atts) == 0 {
 		return memo, nil
 	}

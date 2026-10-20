@@ -186,6 +186,58 @@ func isLoopbackHost(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+// requestOriginFromEvent computes the user-facing origin (scheme
+// + host[:port]) of the inbound request, honouring
+// `X-Forwarded-Proto` from the proxy that fronts riff when the
+// request reached the listener over plain HTTP. It returns the
+// empty string when `Host` is not set on the request.
+//
+// This is the REST-side companion of
+// `pb/connect.connect.requestOriginFromHTTP`. The connect path
+// reads the headers through `connect.CallInfoForServerContext`;
+// the REST path reads them straight off `e.Request`.
+//
+// Trusting the `X-Forwarded-Proto` header from a trusted
+// proxy is the same posture as `fileCookieTransportAllowed`
+// above: caddy is what fronts riff in every production
+// deployment, and a forged `https` only lets the attacker
+// downgrade their *own* requests to anonymous — they still
+// need a token they hold to load any non-PUBLIC attachment,
+// so the header cannot escalate access.
+func requestOriginFromEvent(e *core.RequestEvent) string {
+	if e == nil || e.Request == nil {
+		return ""
+	}
+	hdr := e.Request.Header
+	scheme := hdr.Get("X-Forwarded-Proto")
+	if scheme == "" {
+		scheme = hdr.Get("X-Forwarded-Protocol")
+	}
+	if scheme == "" {
+		// Plain HTTP from the loopback listener (development
+		// or a transparent proxy that does not set the header)
+		// — fall through to the request's own TLS state.
+		if e.Request.TLS != nil {
+			scheme = "https"
+		} else {
+			scheme = "http"
+		}
+	}
+	host := hdr.Get("Host")
+	if host == "" {
+		host = e.Request.Host
+	}
+	if host == "" {
+		return ""
+	}
+	// Trim a path if the header somehow carries one (rare;
+	// real listeners send only host[:port]).
+	if i := strings.IndexByte(host, '/'); i >= 0 {
+		host = host[:i]
+	}
+	return scheme + "://" + host
+}
+
 // resolveFileToken maps one token string onto the user record it
 // authenticates, trying a PocketBase auth token first and then a
 // riff personal access token. A nil result means the string is not

@@ -100,7 +100,7 @@ func TestV0ShapeMemoCarriesCreationMetadata(t *testing.T) {
 	var body map[string]any
 	require.NoError(t, json.Unmarshal(raw, &body))
 
-	shaped, err := v0ShapeMemo(body)
+	shaped, err := v0ShapeMemo(body, "")
 	require.NoError(t, err)
 
 	assert.EqualValues(t, 1700000000, shaped["createdTs"],
@@ -122,7 +122,7 @@ func TestV0ShapeMemoTimestampsZeroTimestamp(t *testing.T) {
 		"name":       "memos/wdq85xegrxio2cs",
 		"content":    "no timestamps at all",
 		"visibility": "PUBLIC",
-	})
+	}, "")
 	require.NoError(t, err)
 	assert.EqualValues(t, 0, shaped["createdTs"],
 		"a missing createTime degrades to 0, not a panic or a bogus date")
@@ -152,7 +152,7 @@ func TestV0ShapeResourceCarriesMetadata(t *testing.T) {
 	var body map[string]any
 	require.NoError(t, json.Unmarshal(raw, &body))
 
-	shaped := v0ShapeResource(body)
+	shaped := v0ShapeResource(body, "")
 
 	assert.EqualValues(t, 4096, shaped["size"],
 		"V0 resource must report its real byte count")
@@ -184,7 +184,7 @@ func TestV0ShapeResourceUnlinkedMemoIDIsZero(t *testing.T) {
 	var body map[string]any
 	require.NoError(t, json.Unmarshal(raw, &body))
 
-	shaped := v0ShapeResource(body)
+	shaped := v0ShapeResource(body, "")
 	assert.EqualValues(t, 0, shaped["memoId"],
 		"an unlinked upload has no owning memo and must report 0")
 }
@@ -206,7 +206,7 @@ func TestV0ShapeResourceUpdatedTsFallsBackToCreated(t *testing.T) {
 	var body map[string]any
 	require.NoError(t, json.Unmarshal(raw, &body))
 
-	shaped := v0ShapeResource(body)
+	shaped := v0ShapeResource(body, "")
 	assert.EqualValues(t, 1700000000, shaped["updatedTs"],
 		"updatedTs must fall back to createTime, not the epoch")
 }

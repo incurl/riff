@@ -656,7 +656,7 @@ func v0ShapeUser(v1Body map[string]any) (map[string]any, error) {
 // a memo with the sentinel content, so the filter
 // is a safe "stub detector" without requiring a
 // payload sentinel.
-func v0ShapeMemoList(v1Body map[string]any) ([]any, error) {
+func v0ShapeMemoList(v1Body map[string]any, origin string) ([]any, error) {
 	memos, _ := v1Body["memos"].([]any)
 	out := make([]any, 0, len(memos))
 	for _, m := range memos {
@@ -667,7 +667,7 @@ func v0ShapeMemoList(v1Body map[string]any) ([]any, error) {
 		if isV0StubMemo(row) {
 			continue
 		}
-		shaped, err := v0ShapeMemo(row)
+		shaped, err := v0ShapeMemo(row, origin)
 		if err != nil {
 			return nil, err
 		}
@@ -691,10 +691,11 @@ func isV0StubMemo(m map[string]any) bool {
 }
 
 // v0ShapeMemo converts one V1 `Memo` JSON object
-// into the V0 `MemosV0Memo` shape. The V0 id is
-// derived from the V1 resource name's last
-// segment (the 15-char PocketBase id).
-func v0ShapeMemo(m map[string]any) (map[string]any, error) {
+// into a V0-shaped JSON body. Pass the request's
+// user-facing origin so the embedded `externalLink`s
+// in `resourceList` match the host the iOS MoeMemos
+// client compares against; tests pass "".
+func v0ShapeMemo(m map[string]any, origin string) (map[string]any, error) {
 	name, _ := m["name"].(string)
 	// `memos/<id>` — strip the prefix.
 	v1id := strings.TrimPrefix(name, "memos/")
@@ -728,7 +729,7 @@ func v0ShapeMemo(m map[string]any) (map[string]any, error) {
 		if !ok {
 			continue
 		}
-		resources = append(resources, v0ShapeResource(am))
+		resources = append(resources, v0ShapeResource(am, origin))
 	}
 
 	return map[string]any{
@@ -759,7 +760,15 @@ func v0ShapeMemo(m map[string]any) (map[string]any, error) {
 // V0 id is derived from the V1 resource name; the
 // V0 client treats the `externalLink` and
 // `filename` as the only required fields.
-func v0ShapeResource(a map[string]any) map[string]any {
+//
+// `origin` is the user-facing origin
+// (`https://host[:port]`) of the V0 REST request that
+// the shaper is answering; an empty origin leaves the
+// fallback `externalLink` as the relative path. The
+// V0 handler constructors pass
+// `requestOriginFromEvent(e)`; tests pass an empty
+// string and stay with the relative form.
+func v0ShapeResource(a map[string]any, origin string) map[string]any {
 	name, _ := a["name"].(string)
 	v1id := strings.TrimPrefix(name, "attachments/")
 	v0id := v0IDFromV1(v1id)
@@ -776,6 +785,19 @@ func v0ShapeResource(a map[string]any) map[string]any {
 		// surface authorizes with the caller's normal
 		// bearer token.
 		externalLink = "/file/attachments/" + v1id + "/" + filename
+		if origin != "" {
+			// Without the absolute form, the MoeMemos iOS
+			// auth middleware (`mudkipme/MoeMemos`
+			// Packages/Services/Sources/ServiceUtils/Auth.swift)
+			// drops the bearer because the host comparison
+			// (`request.url?.host == hostURL.host`) is `nil`
+			// for any relative URL. Prefix the origin so
+			// the equality holds and `/file/...` actually
+			// receives the bearer — without this every
+			// PRIVATE memo's attachment 404s on the iOS
+			// client's AsyncImage.
+			externalLink = origin + externalLink
+		}
 	}
 	contentType, _ := a["type"].(string)
 	if contentType == "" {
@@ -841,8 +863,11 @@ func v0ShapeResource(a map[string]any) map[string]any {
 
 // v0ShapeResourceList converts a V1
 // `ListAttachmentsResponse` body into a top-level
-// V0 array of `MemosV0Resource` shapes.
-func v0ShapeResourceList(v1Body map[string]any) []any {
+// V0 array of `MemosV0Resource` shapes. Pass the
+// request's user-facing origin so the embedded
+// `externalLink`s match what the iOS client's host
+// comparison expects; tests pass "".
+func v0ShapeResourceList(v1Body map[string]any, origin string) []any {
 	atts, _ := v1Body["attachments"].([]any)
 	out := make([]any, 0, len(atts))
 	for _, a := range atts {
@@ -850,7 +875,7 @@ func v0ShapeResourceList(v1Body map[string]any) []any {
 		if !ok {
 			continue
 		}
-		out = append(out, v0ShapeResource(am))
+		out = append(out, v0ShapeResource(am, origin))
 	}
 	return out
 }
@@ -887,12 +912,12 @@ func v0ShapeTagList(v1Body map[string]any) []any {
 // into the V0 shape. The connect handler returns
 // `{memo: {...}}` for the create / get / patch
 // paths; we unwrap and shape.
-func v0ShapeSingleMemo(v1Body map[string]any) (map[string]any, error) {
+func v0ShapeSingleMemo(v1Body map[string]any, origin string) (map[string]any, error) {
 	// Create returns the Memo directly (not
 	// wrapped). PATCH also returns the Memo
 	// directly. GET returns the Memo directly. So
 	// the connect response is the memo itself.
-	return v0ShapeMemo(v1Body)
+	return v0ShapeMemo(v1Body, origin)
 }
 
 // ============================================================

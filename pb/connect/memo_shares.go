@@ -221,7 +221,7 @@ func (s *MemoServer) GetSharedMemo(ctx context.Context, req *v1.GetSharedMemoReq
 	if !canViewMemo(s.app, ctx, memo) {
 		return nil, connect.NewError(connect.CodeNotFound, "memo not found")
 	}
-	return recordToMemo(s.app, memo), nil
+	return recordToMemo(ctx, s.app, memo), nil
 }
 
 // canManageMemoShares reports whether the caller can create,

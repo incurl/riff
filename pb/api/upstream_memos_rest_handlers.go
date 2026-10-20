@@ -141,6 +141,19 @@ func connectProxyHandler(app core.App, procedure string) func(*core.RequestEvent
 		// Clone the headers (so the Authorization header
 		// is forwarded verbatim) and the query string.
 		upstream.Header = e.Request.Header.Clone()
+		// `Header.Clone()` does NOT carry the Host header —
+		// Go keeps `Host` on `http.Request`, not on the
+		// header map. The connect-side `WithAuth` interceptor
+		// reads `info.RequestHeader().Get("Host")` to derive
+		// the user-facing origin for absolute `externalLink`s
+		// (see `pb/connect/connect.go::requestOriginFromHTTP`).
+		// Mirror it into the header map so the connect-go
+		// dispatcher, which builds `CallInfo` from `req.Header`,
+		// picks the value up. Setting it AFTER the clone preserves
+		// the original Host value (`e.Request.Host`) over anything
+		// the client might have tried to forge in `Host:` headers.
+		upstream.Header.Set("Host", e.Request.Host)
+		upstream.Host = e.Request.Host
 		upstream.URL.RawQuery = e.Request.URL.RawQuery
 		// Connect's Content-Type negotiation. Without
 		// one of `application/json`,

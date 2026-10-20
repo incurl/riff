@@ -102,7 +102,7 @@ func (s *MemoServer) ListMemos(ctx context.Context, req *v1.ListMemosRequest) (*
 		if IsStubMemoContent(r.GetString("content")) {
 			continue
 		}
-		out = append(out, recordToMemo(s.app, r))
+		out = append(out, recordToMemo(ctx, s.app, r))
 	}
 	return &v1.ListMemosResponse{Memos: out, NextPageToken: ""}, nil
 }
@@ -146,7 +146,7 @@ func (s *MemoServer) GetMemo(ctx context.Context, req *v1.GetMemoRequest) (*v1.M
 	if !canViewMemo(s.app, ctx, rec) {
 		return nil, connect.NewError(connect.CodeNotFound, "memo not found")
 	}
-	return recordToMemo(s.app, rec), nil
+	return recordToMemo(ctx, s.app, rec), nil
 }
 
 // CreateMemo inserts a new memo. The OnRecordCreateRequest hook in
@@ -207,7 +207,7 @@ func (s *MemoServer) CreateMemo(ctx context.Context, req *v1.CreateMemoRequest) 
 		}
 	}
 
-	return recordToMemo(s.app, rec), nil
+	return recordToMemo(ctx, s.app, rec), nil
 }
 
 // UpdateMemo updates a memo's content, visibility and/or space. Only the
@@ -295,7 +295,7 @@ func (s *MemoServer) UpdateMemo(ctx context.Context, req *v1.UpdateMemoRequest) 
 	if err := updateRecordRequest(ctx, s.app, rec); err != nil {
 		return nil, connect.NewError(connect.CodePermissionDenied, err.Error())
 	}
-	return recordToMemo(s.app, rec), nil
+	return recordToMemo(ctx, s.app, rec), nil
 }
 
 // DeleteMemo removes a memo. Only the author may delete; the
@@ -361,7 +361,7 @@ func (s *MemoServer) ListMemoComments(ctx context.Context, req *v1.ListMemoComme
 		if !canViewMemo(s.app, ctx, comment) {
 			continue
 		}
-		out = append(out, recordToMemo(s.app, comment))
+		out = append(out, recordToMemo(ctx, s.app, comment))
 	}
 	return &v1.ListMemoCommentsResponse{Memos: out, NextPageToken: ""}, nil
 }
@@ -442,7 +442,7 @@ func (s *MemoServer) CreateMemoComment(ctx context.Context, req *v1.CreateMemoCo
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err.Error())
 	}
-	return recordToMemo(s.app, comment), nil
+	return recordToMemo(ctx, s.app, comment), nil
 }
 
 // ListMemoAttachments returns the attachments hanging off a memo. In riff's
@@ -461,7 +461,7 @@ func (s *MemoServer) ListMemoAttachments(ctx context.Context, req *v1.ListMemoAt
 		return nil, connect.NewError(connect.CodeNotFound, "memo not found")
 	}
 	return &v1.ListMemoAttachmentsResponse{
-		Attachments:   memoAttachments(s.app, id),
+		Attachments:   memoAttachments(ctx, s.app, id),
 		NextPageToken: "",
 	}, nil
 }

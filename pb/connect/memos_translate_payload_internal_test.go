@@ -1,6 +1,7 @@
 package connect
 
 import (
+	"context"
 	"testing"
 
 	"github.com/pocketbase/pocketbase/core"
@@ -147,7 +148,7 @@ func TestRecordToMemo_PopulatesPayload(t *testing.T) {
 	testutil.DisableLogPersistence(app)
 	t.Cleanup(func() { _ = app.ClearBootstrap() })
 
-	got := recordToMemo(app, rec)
+	got := recordToMemo(context.Background(), app, rec)
 	require.NotNil(t, got)
 	require.NotNil(t, got.Payload, "recordToMemo must surface MemoPayload when the column is set")
 	require.NotNil(t, got.Payload.Property)

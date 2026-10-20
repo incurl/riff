@@ -8,6 +8,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -929,4 +930,141 @@ func (t bearerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 func newBearerClient(token string) *http.Client {
 	return &http.Client{Transport: bearerTransport{token: token}}
+}
+
+// TestV0ExternalLinkEmittedAsAbsoluteURL pins the host-origin
+// contract that the MoeMemos iOS client requires to download
+// PRIVATE attachments. The client's auth middleware in
+// `mudkipme/MoeMemos` (Packages/Services/Sources/ServiceUtils/Auth.swift,
+// `rawAccessTokenMiddlware`) only attaches `Authorization: Bearer …`
+// when `request.url?.host == hostURL.host`. A *relative* URL has
+// `host == nil`, so the bearer is dropped — every PRIVATE memo's
+// file then 404s on the file surface.
+//
+// The shaper MUST therefore emit `externalLink` as an absolute URL
+// whose host matches what the V0 REST request arrived at. The
+// relative `/file/...` form is only acceptable from connect RPCs
+// that have no inbound request (and from tests asserting wire-
+// shape in isolation); every V0 response that goes through a
+// handler with a real `*core.RequestEvent` uses the absolute
+// form. See DECISIONS.md "MoeMemos iOS `externalLink` absolute
+// form" for the full trace.
+func TestV0ExternalLinkEmittedAsAbsoluteURL(t *testing.T) {
+	app := newTestApp(t)
+	hooks.Register(app)
+
+	srv := connectrpc.NewServer(connect.WithAuth(app))
+	apiv1connect.RegisterAuthServiceHandler(srv, connect.NewAuthServer(app, nil))
+	apiv1connect.RegisterInstanceServiceHandler(srv, connect.NewInstanceServer(app))
+	apiv1connect.RegisterUserServiceHandler(srv, connect.NewUserServer(app))
+	apiv1connect.RegisterMemoServiceHandler(srv, connect.NewMemoServer(app))
+	apiv1connect.RegisterAttachmentServiceHandler(srv, connect.NewAttachmentServer(app))
+
+	// Use the same connect_mux / proxy-glob that
+	// `makeTestRouter` (top of file) wires: every connect path
+	// lands in `connectMux` keyed by its procedure path, which
+	// is what `connectProxy` uses to forward the body.
+	connectMux := http.NewServeMux()
+	connecthttp.Mount(connectMux, srv)
+	connect.SetConnectMux(connectMux)
+	t.Cleanup(func() { connect.SetConnectMux(nil) })
+
+	r := router.NewRouter[*core.RequestEvent](eventFactoryFor(app))
+	mountUpstreamMemosV0Routes(r, app, nil)
+	mountFileRoutes(r, app)
+	mountTestSpaFallback(r)
+	mux, err := r.BuildMux()
+	require.NoError(t, err)
+
+	users, perr := app.FindCollectionByNameOrId("users")
+	require.NoError(t, perr)
+	rec := core.NewRecord(users)
+	rec.Set("username", "isostest")
+	rec.Set("email", "isostest@example.invalid")
+	rec.Set("password", "passw0rd!")
+	require.NoError(t, app.Save(rec))
+
+	patRaw, perr := random.String(24)
+	require.NoError(t, perr)
+	pat := "memos_pat_" + patRaw
+	patHash, perr := bcrypt.GenerateFromPassword([]byte(pat), bcrypt.MinCost)
+	require.NoError(t, perr)
+	pats, perr := app.FindCollectionByNameOrId("personal_access_tokens")
+	require.NoError(t, perr)
+	patRec := core.NewRecord(pats)
+	patRec.Set("user", rec.Id)
+	patRec.Set("description", "iso-host-contract")
+	patRec.Set("token_hash", string(patHash))
+	require.NoError(t, app.Save(patRec))
+
+	doReq := func(method, target, contentType string, body []byte) *httptest.ResponseRecorder {
+		var req *http.Request
+		if body == nil {
+			req = httptest.NewRequest(method, target, nil)
+		} else {
+			req = httptest.NewRequest(method, target, bytes.NewReader(body))
+		}
+		req.Header.Set("Authorization", "Bearer "+pat)
+		req.Header.Set("X-Forwarded-Proto", "https")
+		req.Host = "riff.example.invalid"
+		if contentType != "" {
+			req.Header.Set("Content-Type", contentType)
+		}
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+		return w
+	}
+
+	const fileBytes = "RIFF\x00\x00isolation-test-payload"
+	var b bytes.Buffer
+	mw := multipart.NewWriter(&b)
+	fw, err := mw.CreateFormFile("file", "iso.wav")
+	require.NoError(t, err)
+	_, _ = fw.Write([]byte(fileBytes))
+	require.NoError(t, mw.Close())
+
+	wPost := doReq(http.MethodPost, "/api/v1/resource/blob", mw.FormDataContentType(), b.Bytes())
+	require.Equal(t, http.StatusOK, wPost.Code,
+		"V0 resource upload must answer 200, got %d: %s", wPost.Code, wPost.Body.String())
+
+	var uploaded map[string]any
+	dec := json.NewDecoder(bytes.NewReader(wPost.Body.Bytes()))
+	dec.UseNumber()
+	require.NoError(t, dec.Decode(&uploaded))
+
+	externalLink, _ := uploaded["externalLink"].(string)
+	require.NotEmpty(t, externalLink,
+		"V0 resource upload must return an externalLink: %s", wPost.Body.String())
+	require.True(t, strings.HasPrefix(externalLink, "https://"),
+		"V0 externalLink must be absolute with the X-Forwarded-Proto-honoured origin; got %q",
+		externalLink)
+	require.Contains(t, externalLink, "riff.example.invalid",
+		"V0 externalLink must echo the request Host header, got %q", externalLink)
+	require.Contains(t, externalLink, "/file/attachments/",
+		"V0 externalLink must point at riff's /file surface, got %q", externalLink)
+
+	linkURL, perr := url.Parse(externalLink)
+	require.NoError(t, perr)
+	require.Equal(t, "https", linkURL.Scheme,
+		"absolute externalLink must round-trip the X-Forwarded-Proto scheme, got %q", externalLink)
+	require.Equal(t, "riff.example.invalid", linkURL.Host,
+		"absolute externalLink must round-trip the Host header, got %q", externalLink)
+}
+
+// TestV0RelativeExternalLinkEmptyOriginKeptForFixtures asserts the
+// *test-only* contract: the shaper functions accept an empty
+// `origin` and behave exactly as the pre-iOS bug version did,
+// keeping pre-existing fixture tests meaningful without going
+// through a request event.
+func TestV0RelativeExternalLinkEmptyOriginKeptForFixtures(t *testing.T) {
+	body := map[string]any{
+		"name":       "attachments/abc123456789012",
+		"filename":   "note.po33",
+		"createTime": "2025-01-01T00:00:00Z",
+		"size":       "1024",
+	}
+	shaped := v0ShapeResource(body, "")
+	require.Equal(t, "/file/attachments/abc123456789012/note.po33",
+		shaped["externalLink"],
+		"with origin == \"\" the shaper must keep emitting the relative form for test fixture purposes")
 }
