@@ -68,13 +68,24 @@ func (s *AttachmentServer) ListAttachments(ctx context.Context, req *v1.ListAtta
 // gate. Superusers are admitted for both cases, mirroring
 // upstream's `access.CanManageAttachment`, which admits an
 // admin for a row of any uploader.
+//
+// An anonymous caller (viewer == nil) is NOT refused up front.
+// memos.ViewRule decides: a PUBLIC memo passes its rule with no
+// auth record, so the anonymous feed sees its attachments, while
+// a PRIVATE one still fails. Refusing anonymous callers here used
+// to make every attachment invisible to the logged-out SPA feed
+// even though the same caller's file GET (`/file/attachments/...`,
+// which goes through pb/api's `authorizeAttachment`) happily
+// served the bytes — the API and the file surface disagreed about
+// who a PUBLIC attachment was for. An unlinked row still has no
+// anonymous reader: the uploader check below needs an identity.
 func canAccessAttachment(app core.App, ctx context.Context, rec *core.Record) bool {
 	viewer := CurrentUser(ctx)
-	if viewer == nil {
-		return false
-	}
 	memoID := rec.GetString("memo")
 	if memoID == "" {
+		if viewer == nil {
+			return false
+		}
 		return viewer.IsSuperuser() ||
 			(rec.GetString("creator") != "" && rec.GetString("creator") == viewer.Id)
 	}
@@ -82,11 +93,12 @@ func canAccessAttachment(app core.App, ctx context.Context, rec *core.Record) bo
 	if err != nil {
 		return false
 	}
-	memos, _ := app.FindCollectionByNameOrId("memos")
-	requestInfo := &core.RequestInfo{Method: "GET"}
-	if viewer := CurrentUser(ctx); viewer != nil {
-		requestInfo.Auth = viewer
+	memos, err := app.FindCollectionByNameOrId("memos")
+	if err != nil {
+		return false
 	}
+	requestInfo := &core.RequestInfo{Method: "GET"}
+	requestInfo.Auth = viewer
 	ok, err := app.CanAccessRecord(memo, requestInfo, memos.ViewRule)
 	if err != nil {
 		return false

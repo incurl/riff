@@ -10,6 +10,7 @@ import (
 	"github.com/pocketbase/pocketbase/tools/router"
 	"github.com/stretchr/testify/require"
 
+	"github.com/incurl/riff/internal/testutil"
 	_ "github.com/incurl/riff/pb/migrations"
 )
 
@@ -31,6 +32,7 @@ func newHookedAppForHooks(t *testing.T) core.App {
 	t.Cleanup(func() { _ = app.ClearBootstrap() })
 
 	require.NoError(t, app.Bootstrap(), "Bootstrap should succeed")
+	testutil.DisableLogPersistence(app)
 	require.NoError(t, app.RunAllMigrations(), "RunAllMigrations should succeed")
 	Register(app)
 	return app

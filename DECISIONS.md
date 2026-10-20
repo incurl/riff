@@ -5611,3 +5611,75 @@ The two tests that pin the regression are
 compatibility check would read the riff build CalVer (e.g. "25.10") and
 flag the server as "higher than supported"; advertising "0.31.0" (or
 whatever the current maximum is) makes the V1 client fully compatible.
+
+## Anonymous callers and `canAccessAttachment` (the invisible-attachment bug)
+
+`canAccessAttachment` in `pb/connect/attachment.go` opened with
+
+```go
+viewer := CurrentUser(ctx)
+if viewer == nil {
+    return false
+}
+```
+
+which refused **every** anonymous caller before it ever consulted
+`memos.ViewRule`. A PUBLIC memo's attachment was therefore invisible to
+the logged-out SPA feed (`ListAttachments` is the one handler that passes
+an anonymous context — the other four call sites already return
+`Unauthenticated` first).
+
+The tell was that the file surface disagreed. The very same bytes were
+reachable: `/file/attachments/{id}` goes through `pb/api`'s
+`authorizeAttachment`, which has no such up-front refusal — it builds a
+`core.RequestInfo` with a nil `Auth` and lets `memos.ViewRule` decide, so
+an anonymous GET on a PUBLIC memo's attachment returned 200. The SPA
+rendered the image (the `<img>` src carried the cookie) while the feed
+that produced the `<img>` had been told there was nothing to render.
+
+**Fix.** The up-front refusal is gone. A linked attachment delegates to
+`memos.ViewRule` with a possibly-nil `Auth`; PUBLIC passes, PRIVATE still
+fails. The orphan branch (`memo == ""`) keeps its own `viewer == nil →
+false` guard, because the `creator` uploader check needs an identity and
+an anonymous caller has none. `TestAttachmentService_OrphanHiddenAnonymously`
+is the guard on that side of the change.
+
+`authorizeAttachment` in `pb/api/file_authz.go` is now the single
+statement of the rule for both surfaces: share token, then identity, then
+the memo's visibility rule.
+
+## `Logs.MaxDays = 0` in tests: the teardown race
+
+Two intermittent failures shared a root cause in PocketBase's
+`core.initLogger`, not in riff:
+
+* under `-race`, a DATA RACE between `ClearBootstrap` nil-ing
+  `app.concurrentDB` (`core/base.go:506`) and the logger's flush goroutine
+  reading the same field in `createTxApp` (`core/db_tx.go:53`);
+* in long runs, `TempDir RemoveAll cleanup: directory not empty`.
+
+`initLogger` runs a 3-second `time.Ticker` and a 200-entry
+`BatchHandler`; on each flush `WriteFunc` hands the batch to
+`routine.FireAndForget(runLogsWrite)`, which opens an **aux** DB
+transaction. The `OnBootstrapClear` hook (priority -999) flushes what is
+already queued and signals the ticker, but a tick that has already fired
+hands its batch to a goroutine nobody joins. That goroutine then reads
+`app.concurrentDB`/`app.auxConcurrentDB` concurrently with the write
+`ClearBootstrap` performs — the race above — and, in the window between
+the test body returning and the temp dir being removed, writes into a
+directory that is being deleted — the second failure. Both landed on
+whichever test happened to be running, which is why neither had an
+attributable owner.
+
+**Fix.** `testutil.DisableLogPersistence(app)` sets
+`app.Settings().Logs.MaxDays = 0`, and every `core.NewBaseApp` in a test
+calls it immediately after `Bootstrap()` (settings load during bootstrap,
+so a mutation made earlier is discarded). That shuts the writer off at the
+source: `BeforeAddFunc` returns false for every record, so nothing is
+queued, `BatchHandler.WriteAll` short-circuits on an empty batch and
+never reaches `WriteFunc`; and `runLogsWrite` carries its own
+`MaxDays == 0` guard, so a tick already in flight becomes a no-op.
+
+No test in the repo asserts on persisted log rows, so the only behaviour
+change is that `logs.db` stays empty under test. Production is untouched —
+`main.go` never calls this.

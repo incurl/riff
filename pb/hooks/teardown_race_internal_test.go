@@ -8,6 +8,8 @@ import (
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/incurl/riff/internal/testutil"
 )
 
 // Regression tests for the per-app teardown state shared by
@@ -146,6 +148,7 @@ func TestStopSchedulerLoopsIsIdempotentAndRemovesEntry(t *testing.T) {
 		EncryptionEnv: "pb_test_env_riff_teardown",
 	})
 	require.NoError(t, app.Bootstrap())
+	testutil.DisableLogPersistence(app)
 	t.Cleanup(func() { _ = app.ClearBootstrap() })
 
 	registerScheduler(app)
@@ -184,6 +187,7 @@ func TestStopSchedulerLoopsConcurrentWithRegister(t *testing.T) {
 		EncryptionEnv: "pb_test_env_riff_teardown2",
 	})
 	require.NoError(t, base.Bootstrap())
+	testutil.DisableLogPersistence(base)
 	t.Cleanup(func() { _ = base.ClearBootstrap() })
 
 	var wg sync.WaitGroup
@@ -213,6 +217,7 @@ func TestMotionMediaStateGateRejectsAddsAfterTeardown(t *testing.T) {
 		EncryptionEnv: "pb_test_env_riff_teardown3",
 	})
 	require.NoError(t, app.Bootstrap())
+	testutil.DisableLogPersistence(app)
 	t.Cleanup(func() { _ = app.ClearBootstrap() })
 
 	st := motionMediaStateFor(app)

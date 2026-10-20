@@ -6,6 +6,8 @@ import (
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/incurl/riff/internal/testutil"
 )
 
 // memoRecordWithPayload builds a `memos` collection + record in
@@ -142,6 +144,7 @@ func TestRecordToMemo_PopulatesPayload(t *testing.T) {
 		EncryptionEnv: "memos_translate_payload_test",
 	})
 	require.NoError(t, app.Bootstrap(), "Bootstrap should succeed without migrations")
+	testutil.DisableLogPersistence(app)
 	t.Cleanup(func() { _ = app.ClearBootstrap() })
 
 	got := recordToMemo(app, rec)

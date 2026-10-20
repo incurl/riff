@@ -22,6 +22,7 @@ import (
 	v1 "github.com/incurl/riff/proto/gen/api/v1"
 	"github.com/incurl/riff/proto/gen/api/v1/apiv1connect"
 
+	"github.com/incurl/riff/internal/testutil"
 	_ "github.com/incurl/riff/pb/migrations"
 )
 
@@ -40,6 +41,7 @@ func newTestApp(t *testing.T) core.App {
 	})
 
 	require.NoError(t, app.Bootstrap(), "Bootstrap should succeed")
+	testutil.DisableLogPersistence(app)
 	require.NoError(t, app.RunAllMigrations(), "RunAllMigrations should succeed")
 	return app
 }

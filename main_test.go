@@ -22,6 +22,7 @@ import (
 
 	_ "github.com/incurl/riff/pb/migrations"
 
+	"github.com/incurl/riff/internal/testutil"
 	"github.com/incurl/riff/server/mcp"
 )
 
@@ -130,6 +131,7 @@ func newTestApp(t *testing.T) core.App {
 	})
 
 	require.NoError(t, app.Bootstrap(), "Bootstrap should succeed")
+	testutil.DisableLogPersistence(app)
 	_, err := app.DB().NewQuery("SELECT 1").Execute()
 	require.NoError(t, err, "DB should be reachable after Bootstrap")
 	_, err = app.AuxDB().NewQuery("SELECT 1").Execute()

@@ -7,6 +7,8 @@ import (
 	"github.com/pocketbase/pocketbase/tools/filesystem"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/incurl/riff/internal/testutil"
 )
 
 // TestCopyAttachmentRow_CopiesBytes pins the data
@@ -132,6 +134,7 @@ func newTestApp(t *testing.T) core.App {
 	})
 	t.Cleanup(func() { _ = app.ClearBootstrap() })
 	require.NoError(t, app.Bootstrap())
+	testutil.DisableLogPersistence(app)
 	require.NoError(t, app.RunAllMigrations())
 	return app
 }

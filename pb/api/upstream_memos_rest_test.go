@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/incurl/riff/internal/testutil"
 	"github.com/incurl/riff/pb/connect"
 	_ "github.com/incurl/riff/pb/migrations"
 )
@@ -226,6 +227,7 @@ func newTestApp(t *testing.T) core.App {
 	})
 	t.Cleanup(func() { _ = app.ClearBootstrap() })
 	require.NoError(t, app.Bootstrap(), "Bootstrap should succeed")
+	testutil.DisableLogPersistence(app)
 	require.NoError(t, app.RunAllMigrations(), "RunAllMigrations should succeed")
 	return app
 }

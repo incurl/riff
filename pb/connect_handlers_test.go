@@ -150,6 +150,40 @@ func TestAttachmentService_PrivateMemoHiddenAnonymously(t *testing.T) {
 	assert.Empty(t, resp.GetAttachments(), "a PRIVATE memo's attachment must not leak to anonymous callers")
 }
 
+// TestAttachmentService_OrphanHiddenAnonymously pins the one case
+// where an anonymous caller still gets nothing: an attachment with
+// no parent memo (`memo == ""`) is an orphan whose only reader is the
+// uploader recorded in `creator`, so admitting anonymous callers to
+// the linked branch must NOT extend to this one.
+//
+// The linked branch stops refusing anonymous callers outright —
+// memos.ViewRule decides, so a PUBLIC memo's attachment is visible on
+// the logged-out feed. This test is the guard on the other side of
+// that change: the uploader check needs an identity, and an
+// anonymous caller has none.
+func TestAttachmentService_OrphanHiddenAnonymously(t *testing.T) {
+	app := newPhase2App(t)
+
+	cols := mustCols(t, app, "users", "attachments")
+	_, attachments := cols[0], cols[1]
+
+	// No `memo` set: the row is an orphan.
+	f, err := filesystem.NewFileFromBytes([]byte{0x09, 0x08, 0x07}, "orphan.po33")
+	require.NoError(t, err)
+	rec := core.NewRecord(attachments)
+	rec.Set("filename", "orphan.po33")
+	rec.Set("size", int64(3))
+	rec.Set("storage", "local")
+	rec.Set("blob", f)
+	require.NoError(t, app.Save(rec))
+
+	srv := connect.NewAttachmentServer(app)
+	resp, err := srv.ListAttachments(context.Background(), &v1.ListAttachmentsRequest{})
+	require.NoError(t, err)
+	assert.Empty(t, resp.GetAttachments(),
+		"an orphan attachment has no anonymous reader even though a PUBLIC memo's attachment does")
+}
+
 // TestAttachmentService_ArchiveAttachmentVisible asserts that a
 // single-file archive (an application/zip) lands in the unified
 // `attachments` collection and surfaces the right MIME on the wire.

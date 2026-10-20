@@ -6,6 +6,8 @@ import (
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/incurl/riff/internal/testutil"
 )
 
 // freshApp spins up a migrated app on a temp dir and
@@ -19,6 +21,7 @@ func freshApp(t *testing.T) core.App {
 	})
 	t.Cleanup(func() { _ = app.ClearBootstrap() })
 	require.NoError(t, app.Bootstrap())
+	testutil.DisableLogPersistence(app)
 	require.NoError(t, app.RunAllMigrations())
 	return app
 }

@@ -8,6 +8,8 @@ import (
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/incurl/riff/internal/testutil"
 )
 
 // TestNormaliseLinkURL pins the URL filter. The hook uses this to
@@ -137,5 +139,6 @@ func newUnmigratedApp(t *testing.T) core.App {
 		_ = app.ClearBootstrap()
 	})
 	require.NoError(t, app.Bootstrap())
+	testutil.DisableLogPersistence(app)
 	return app
 }

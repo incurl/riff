@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/incurl/riff/internal/ed25519verify"
+	"github.com/incurl/riff/internal/testutil"
 	"github.com/incurl/riff/pb/hooks"
 )
 
@@ -33,6 +34,7 @@ func newAPIApp(t *testing.T) core.App {
 	})
 	t.Cleanup(func() { _ = app.ClearBootstrap() })
 	require.NoError(t, app.Bootstrap())
+	testutil.DisableLogPersistence(app)
 	require.NoError(t, app.RunAllMigrations())
 	hooks.Register(app)
 	return app

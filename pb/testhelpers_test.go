@@ -5,6 +5,8 @@ import (
 
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/stretchr/testify/require"
+
+	"github.com/incurl/riff/internal/testutil"
 )
 
 // newPhase2App builds a fresh PocketBase app in a per-test temp dir,
@@ -21,6 +23,7 @@ func newPhase2App(t *testing.T) core.App {
 	})
 
 	require.NoError(t, app.Bootstrap(), "Bootstrap should succeed")
+	testutil.DisableLogPersistence(app)
 	_, err := app.DB().NewQuery("SELECT 1").Execute()
 	require.NoError(t, err, "DB should be reachable after Bootstrap")
 	_, err = app.AuxDB().NewQuery("SELECT 1").Execute()
