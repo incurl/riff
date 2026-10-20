@@ -73,9 +73,10 @@ var v1BodyWrappers = map[string]bodyWrapper{
 	"v1_set_memo_attachments":  wrapV1SetMemoAttachmentsBody,
 	"v1_get_attachment":        wrapV1PathInjectBody("name", "attachments/{attachment}"),
 	"v1_delete_attachment":     wrapV1PathInjectBody("name", "attachments/{attachment}"),
-	"v1_get_user":              wrapV1PathInjectBody("name", "users/{user}"),
+	"v1_get_user":              wrapV1GetUserBody,
 	"v1_get_user_setting":      wrapV1PathInjectBody("name", "users/{user}/settings/{setting}"),
 	"v1_update_user_setting":   wrapV1UpdateUserSettingBody,
+	"v1_list_user_settings":    wrapV1ListUserSettingsBody,
 	"v1_create_attachment":     wrapV1CreateAttachmentBody,
 	"v1_update_attachment":     wrapV1UpdateAttachmentBody,
 	"v1_list_attachments":      passthroughBody,
@@ -183,6 +184,63 @@ func wrapV1PathInjectBody(nameField, pattern string) bodyWrapper {
 		}
 		return jsonMarshal(map[string]any{nameField: name})
 	}
+}
+
+// wrapV1ListUserSettingsBody injects the path variable `{user}`
+// as `parent: "users/{user}"` for
+// `GET /api/v1/users/{user}/settings` (`get:
+// "/api/v1/{parent=users/*}/settings"`). The client sends an
+// empty body, and the proto's `method_signature = "parent"`
+// means the request has exactly one field.
+//
+// Without this route the path fell through to the
+// `/api/v1/users/{user}/{rest...}` custom-verb route, whose
+// handler saw `rest == "settings"` and answered `404
+// unsupported custom verb: settings` — the settings list was
+// simply unreachable for the V1 client.
+func wrapV1ListUserSettingsBody(_ []byte, path map[string]string, _ url.Values) ([]byte, error) {
+	user, ok := path["user"]
+	if !ok || user == "" {
+		return nil, newWrapErr(400, "missing path variable {user}")
+	}
+	return jsonMarshal(map[string]any{"parent": "users/" + user})
+}
+
+// wrapV1GetUserBody injects the path variable `{user}` as
+// `name: "users/{user}"` for `GET /api/v1/users/{user}`
+// (`get: "/api/v1/{name=users/*}"`, `body: "*"` but the client
+// sends an empty body).
+//
+// It differs from the generic `wrapV1PathInjectBody("name",
+// "users/{user}")` in one respect: the `{user}` segment may
+// carry an AIP custom verb glued on with a colon and **no
+// slash** — the client sends `GET /api/v1/users/alice:getStats`
+// because `MemosV1Service.getId()` strips the resource name
+// down to the bare id before filling `path.user`, and
+// Go's `ServeMux` cannot register a `{var}:` pattern.
+//
+// Without the split, `{user}` arrives as `alice:getStats`, the
+// injected name becomes `users/alice:getStats`, and `GetUser`
+// looks up a user literally named `alice:getStats` — which is
+// why every `:getStats` call used to answer `not_found`. The
+// verb is dropped here and the real custom-verb route
+// (`/api/v1/users/{user}/{rest...}`) owns the dispatch; this
+// route answers the bare-user form, and a colon-bearing request
+// that reaches it is treated as the bare-user read of the part
+// before the colon so the client's own trailing `:getStats`
+// read degrades to "the user's record" rather than a 404.
+func wrapV1GetUserBody(_ []byte, path map[string]string, _ url.Values) ([]byte, error) {
+	user := path["user"]
+	if user == "" {
+		return nil, newWrapErr(400, "missing path variable {user}")
+	}
+	if i := strings.LastIndex(user, ":"); i >= 0 {
+		user = user[:i]
+	}
+	if user == "" {
+		return nil, newWrapErr(400, "missing path variable {user}")
+	}
+	return jsonMarshal(map[string]any{"name": "users/" + user})
 }
 
 // wrapV1CreateMemoCommentBody wraps the V1 body
@@ -326,10 +384,64 @@ func wrapV1UpdateUserSettingBody(body []byte, path map[string]string, query url.
 	if mask == "" {
 		mask = "*"
 	}
+	// `UserSetting.value` is a **oneof** (`general_setting` /
+	// `webhooks_setting` / `tags_setting`), and the client's
+	// openapi models the same oneof (`generalSetting`,
+	// `webhooksSetting`, `tagsSetting`). Nesting the inner body
+	// under the right oneof key is what populates it; leaving it
+	// flat decodes to a `UserSetting` whose `Value` is nil, and
+	// `marshalSettingPayload` then answers
+	// `"setting body is required"` — so the PATCH worked for no
+	// setting at all before this. The oneof key comes from the
+	// `{setting}` path segment, which is the enum name
+	// (`GENERAL`, `WEBHOOKS`, `TAGS`); a body that already nests
+	// its own oneof key is passed through untouched so a client
+	// that sends the full `UserSetting` also works.
+	if oneofKey, ok := v1UserSettingOneofKey(setting); ok {
+		if _, alreadyNested := inner[oneofKey]; !alreadyNested {
+			// Drop the envelope keys the wrapper itself may
+			// have been handed (a client sending the full
+			// `UserSetting` rather than the bare payload), so
+			// the oneof payload is exactly what the client sent.
+			payload := map[string]any{}
+			for k, v := range inner {
+				if k == "name" {
+					continue
+				}
+				payload[k] = v
+			}
+			nested := map[string]any{}
+			for k, v := range inner {
+				if k != "name" {
+					continue
+				}
+				nested[k] = v
+			}
+			nested[oneofKey] = payload
+			inner = nested
+		}
+	}
 	return jsonMarshal(map[string]any{
 		"setting":     inner,
 		"update_mask": mask,
 	})
+}
+
+// v1UserSettingOneofKey maps a `{setting}` path segment (the
+// `UserSetting.Key` enum name) onto the JSON key of the matching
+// oneof arm, which is what the client's openapi emits and what
+// protojson needs in order to populate the oneof.
+func v1UserSettingOneofKey(setting string) (string, bool) {
+	switch strings.ToUpper(strings.TrimSpace(setting)) {
+	case "GENERAL":
+		return "generalSetting", true
+	case "WEBHOOKS":
+		return "webhooksSetting", true
+	case "TAGS":
+		return "tagsSetting", true
+	default:
+		return "", false
+	}
 }
 
 // ============================================================

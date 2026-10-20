@@ -103,7 +103,18 @@ func upstreamMemosV1Routes() []upstreamMemosV1RouteEntry {
 		// ============================================================
 		// V1 users (resource-name identity)
 		// ============================================================
-		{Method: http.MethodGet, Path: "/api/v1/users/{user}", Flavor: "connect_proxy_wrap", Builder: "v1_get_user", Target: memosConnectUserGetUserProcedure, Scope: ratelimit.ScopeAuthenticated},
+		// AIP custom verb. The V1 client sends
+		// `GET /api/v1/users/{user}:getStats`, glued on with a
+		// colon and no slash (`MemosV1Service.getId()` strips
+		// the resource name down to a bare id before it fills
+		// `path.user`). Go's ServeMux **panics** on a `{var}:`
+		// pattern, so the verb cannot be expressed in the route
+		// table; `v1_get_user_or_stats` therefore receives
+		// `{user}` verbatim (possibly `alice:getStats`) and
+		// splits the verb itself. The slash-shaped form stays
+		// registered below so a URL written by hand still
+		// resolves.
+		{Method: http.MethodGet, Path: "/api/v1/users/{user}", Flavor: "custom", Builder: "v1_get_user_or_stats", Scope: ratelimit.ScopeAuthenticated},
 		// AIP-style custom verb. The V1 client uses
 		// `/api/v1/users/{user}:getStats`; Go's
 		// ServeMux rejects `{var}` followed by `:`
@@ -111,6 +122,7 @@ func upstreamMemosV1Routes() []upstreamMemosV1RouteEntry {
 		// `{rest...}` segment and let the custom
 		// handler dispatch on the trailing verb.
 		{Method: http.MethodGet, Path: "/api/v1/users/{user}/{rest...}", Flavor: "custom", Builder: "v1_user_stats", Scope: ratelimit.ScopeAuthenticated},
+		{Method: http.MethodGet, Path: "/api/v1/users/{user}/settings", Flavor: "connect_proxy_wrap", Builder: "v1_list_user_settings", Target: memosConnectUserListUserSettingsProcedure, Scope: ratelimit.ScopeAuthenticated},
 		{Method: http.MethodGet, Path: "/api/v1/users/{user}/settings/{setting}", Flavor: "connect_proxy_wrap", Builder: "v1_get_user_setting", Target: memosConnectUserGetUserSettingProcedure, Scope: ratelimit.ScopeAuthenticated},
 		{Method: http.MethodPatch, Path: "/api/v1/users/{user}/settings/{setting}", Flavor: "connect_proxy_wrap", Builder: "v1_update_user_setting", Target: memosConnectUserUpdateUserSettingProcedure, Scope: ratelimit.ScopeWriteUser},
 

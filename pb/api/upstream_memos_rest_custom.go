@@ -31,6 +31,8 @@ func customBuilder(app core.App, builder string) func(*core.RequestEvent) error 
 		return v1PingHandler(app)
 	case "v1_user_stats":
 		return v1UserStatsHandler(app)
+	case "v1_get_user_or_stats":
+		return v1GetUserOrStatsHandler(app)
 	// V0 (Memos 0.21) handlers. See
 	// upstream_memos_v0_rest_handlers.go for
 	// the per-handler shape conversion.

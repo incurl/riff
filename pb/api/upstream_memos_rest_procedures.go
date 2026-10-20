@@ -25,6 +25,7 @@ const (
 	memosConnectUserGetUserProcedure                     = apiv1connect.UserServiceGetUserProcedure
 	memosConnectUserBatchGetUsersProcedure               = apiv1connect.UserServiceBatchGetUsersProcedure
 	memosConnectUserGetUserSettingProcedure              = apiv1connect.UserServiceGetUserSettingProcedure
+	memosConnectUserListUserSettingsProcedure            = apiv1connect.UserServiceListUserSettingsProcedure
 	memosConnectUserUpdateUserSettingProcedure           = apiv1connect.UserServiceUpdateUserSettingProcedure
 	memosConnectUserGetUserStatsProcedure                = apiv1connect.UserServiceGetUserStatsProcedure
 	memosConnectUserListAllUserStatsProcedure            = apiv1connect.UserServiceListAllUserStatsProcedure

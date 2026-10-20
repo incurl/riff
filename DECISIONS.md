@@ -5752,3 +5752,91 @@ window.location.origin)` is format-agnostic); absolute URLs
 short-circuit one hop and survive being pasted into a non-SPA
 context. Existing mime-type, share-token and thumbnail paths
 are unchanged.
+
+## V1 REST surface completeness audit (four routing/wire bugs)
+
+The MoeMemos V1 client (`MemosV1Service/openapi.yaml`) declares **25
+operations** across 13 paths. `TestV1PatPath_MoeMemosBoot` walked
+only three of them, so nothing caught a route wired to the wrong
+Builder or an unreachable path.
+`TestV1SurfaceEveryClientOpAnswers`
+(`pb/api/upstream_memos_v1_surface_audit_internal_test.go`) now
+drives all 29 riff-side ops against a live app with a real PAT and
+asserts the ones that must succeed do.
+
+**The audit's own first version was too weak** and is worth
+recording: asserting "not 404, not 501" passes even when every
+route is a `connect_proxy` that answers `200 {"code":3,"message":
+"memo is required"}`. The three shapes that actually mean "broken"
+are:
+
+* `404` with an **empty** body — the router matched no pattern;
+* `501 Not Implemented` — no handler;
+* **`2xx` carrying a connect error envelope** (`{"code","message"}`
+  with no payload) — the wrapper is missing, so the handler got a
+  body it could not unmarshal. This is the one the original
+  assertions missed entirely, and it is the shape the
+  `connect_proxy` → `connect_proxy_wrap` bug class produced.
+
+### Bug 1 — the settings PATCH oneof
+
+`UserSetting.value` is a **oneof** (`general_setting` /
+`webhooks_setting` / `tags_setting`). The wrapper left the inner
+body **flat**, so protojson decoded a `UserSetting` whose `Value`
+was nil and `marshalSettingPayload` answered `"setting body is
+required"` — **`PATCH /api/v1/users/{user}/settings/{setting}`
+never worked for any setting**.
+`wrapV1UpdateUserSettingBody` now nests the payload under the
+oneof key derived from the `{setting}` path segment
+(`v1UserSettingOneofKey`), and passes an already-nested body
+through untouched.
+
+### Bug 2 — `GET /api/v1/users/{user}/settings` was never routed
+
+The client's spec declares the path and the proto has
+`ListUserSettings`, but the route table only registered
+`/api/v1/users/{user}/settings/{setting}`. The list form fell
+into the `/api/v1/users/{user}/{rest...}` custom-verb route,
+whose handler read `rest == "settings"` and answered
+`404 unsupported custom verb: settings`. Added
+`v1_list_user_settings` + `wrapV1ListUserSettingsBody`
+(injecting `parent: "users/{user}"`).
+
+### Bug 3 — the AIP `:getStats` verb was unreachable
+
+The client sends `GET /api/v1/users/{user}:getStats` — a colon,
+**no slash**, bare id in `{user}` (`MemosV1Service.getId()`
+strips the resource name before filling `path.user`). Go's
+`ServeMux` **panics** on a `{var}:` pattern
+(`bad wildcard segment`), so the verb cannot live in the route
+table, and the `/api/v1/users/{user}/{rest...}` route cannot
+match it either: `{user}` is the more specific single-segment
+pattern and wins, swallowing `alice:getStats` whole. The handler
+then built `{"name":"users/alice:getStats"}` and `GetUserStats`
+looked up a user literally named `alice:getStats` — every
+`:getStats` call answered `not_found`.
+
+`GET /api/v1/users/{user}` is now the `v1_get_user_or_stats`
+dispatcher: it splits the trailing `:verb` off `{user}` and routes
+to `GetUserStats` (or the plain `GetUser` when there is no verb)
+**before** dispatch. Splitting it in the body wrapper instead was
+tried first and is wrong — it makes `:getStats` return a `User`,
+which the client decodes into an empty stats screen rather than an
+error. `v1UserStatsHandler` still serves the slash-shaped URL.
+
+`v1DispatchAndEcho` documents the contract the new handler relies
+on: `v0DispatchConnect` writes only the **error** body, so every
+caller must `e.JSON(...)` the success payload itself.
+
+### What was NOT a bug
+
+Four audit findings turned out to be **my fixtures**, not riff:
+`{passwordCredentials:…}` (not top-level `username`/`password`);
+the inner `Attachment` body for `POST /attachments` (the wrapper
+re-wraps it); the `users/{id}` resource **name** vs the bare
+username (riff emits `Name: "users/" + username`, and the client
+round-trips `user.name`, so the id never appears); and
+`settings/GENERAL` (an enum name, not `memos.defaultVisibility`).
+`AuthServer.verifyPassword` reads riff's bcrypt `password_hash`
+column, not PocketBase's auth `password`, so a harness record
+created by a bare `app.Save` has nothing to verify.

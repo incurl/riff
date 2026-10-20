@@ -87,7 +87,14 @@ func TestUpstreamMemosV1Routes_TableShape(t *testing.T) {
 			// of the known builders.
 			known := map[string]bool{
 				"v1_status": true, "v1_ping": true,
-				"v1_user_stats": true, "not_implemented": true,
+				"v1_user_stats": true,
+				// `GET /api/v1/users/{user}` is the colon-verb
+				// dispatcher: the client's `…/{user}:getStats`
+				// cannot be a separate pattern (ServeMux panics on
+				// `{var}:`), so the single-segment route splits the
+				// verb itself.
+				"v1_get_user_or_stats": true,
+				"not_implemented":      true,
 			}
 			if !known[r.Builder] {
 				t.Errorf("row %d references unknown custom builder %q", i, r.Builder)

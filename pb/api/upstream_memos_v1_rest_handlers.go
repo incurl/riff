@@ -28,6 +28,7 @@ package api
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
@@ -215,6 +216,89 @@ func v1PingHandler(app core.App) func(*core.RequestEvent) error {
 // today; other verbs produce a 404.
 //
 // Auth: the V1 client always sends a token.
+// v1GetUserOrStatsHandler serves `GET /api/v1/users/{user}` for
+// both the plain read and the AIP custom verb the client sends.
+//
+// The MoeMemos V1 client builds `GET /api/v1/users/{user}:getStats`
+// — a colon, **no slash**, and a bare id in `{user}` (its
+// `MemosV1Service.getId()` strips the resource name down before
+// filling `path.user`). Go's `ServeMux` refuses to register a
+// `{var}:` pattern (`panic: bad wildcard segment`), and the
+// `/api/v1/users/{user}/{rest...}` route cannot match it either
+// because `{user}` is the more specific single-segment pattern —
+// so the colon form always lands here, `{user}` intact, and this
+// handler splits the verb off before doing anything else.
+//
+// Splitting it here (rather than in the `v1_get_user` body
+// wrapper) is what makes the call return `UserStats` instead of a
+// `User`: the two procedures are different RPCs, so the routing
+// decision has to happen before the connect dispatch, not after
+// the request body is shaped.
+func v1GetUserOrStatsHandler(app core.App) func(*core.RequestEvent) error {
+	return func(e *core.RequestEvent) error {
+		segment := e.Request.PathValue("user")
+		if segment == "" {
+			return crudError(e, http.StatusBadRequest, "missing path variable {user}")
+		}
+		user, verb := segment, ""
+		if i := strings.LastIndex(segment, ":"); i >= 0 {
+			user, verb = segment[:i], segment[i+1:]
+		}
+		if user == "" {
+			return crudError(e, http.StatusBadRequest, "missing path variable {user}")
+		}
+		switch verb {
+		case "":
+			return v1DispatchAndEcho(e, memosConnectUserGetUserProcedure,
+				map[string]any{"name": "users/" + user})
+		case "getStats":
+			return v1DispatchAndEcho(e, memosConnectUserGetUserStatsProcedure,
+				map[string]any{"name": "users/" + user})
+		default:
+			return crudError(e, http.StatusNotFound, "unsupported custom verb: "+verb)
+		}
+	}
+}
+
+// v1DispatchAndEcho dispatches a literal request body to a connect
+// procedure and writes the response onto the request event as JSON.
+//
+// `v0DispatchConnect` does NOT write the success body (it only
+// writes the *error* body when the status is >= 400), so every
+// caller must emit the payload itself — see the same contract noted
+// on `v0ShapeSingleMemoAttachments` callers in the V0 handlers.
+func v1DispatchAndEcho(e *core.RequestEvent, procedure string, body map[string]any) error {
+	raw, status, err := v0DispatchConnect(e, procedure, mustJSON(body), nil, nil)
+	if err != nil {
+		return err
+	}
+	if status >= 400 {
+		// v0DispatchConnect already wrote the connect error body.
+		return nil
+	}
+	return e.JSON(http.StatusOK, json.RawMessage(raw))
+}
+
+// mustJSON is `jsonMarshal` for a literal request body the handler
+// itself constructs. A `map[string]any` of strings cannot fail to
+// marshal, so the error is discarded rather than threaded: there is
+// no branch that could act on it.
+func mustJSON(v any) []byte {
+	b, err := jsonMarshal(v)
+	if err != nil {
+		return []byte("{}")
+	}
+	return b
+}
+
+// v1UserStatsHandler serves the **slash-shaped** custom-verb URL
+// `GET /api/v1/users/{user}/{rest...}` (the form a hand-written
+// client or curl would use). The colon-shaped form the actual
+// MoeMemos client sends cannot reach this route — Go's ServeMux
+// panics on `{var}:`, and the more specific `/api/v1/users/{user}`
+// single-segment pattern always wins the match — so that path is
+// served by `v1GetUserOrStatsHandler` above. Both exist so either
+// spelling resolves.
 func v1UserStatsHandler(app core.App) func(*core.RequestEvent) error {
 	return func(e *core.RequestEvent) error {
 		name := e.Request.PathValue("user")
@@ -222,15 +306,10 @@ func v1UserStatsHandler(app core.App) func(*core.RequestEvent) error {
 		if name == "" {
 			return crudError(e, http.StatusBadRequest, "missing path variable {user}")
 		}
-		// The V1 client uses the AIP form
-		// `:getStats`. Go's ServeMux rejects that
-		// pattern, so we register the route with
-		// `/getStats` and accept either the slash
-		// form (registered) or the colon form
-		// (intercepted by the catch-all).
+		// Accept both `/…/getStats` and `/…/:getStats`.
 		verb := rest
-		if i := strings.LastIndex(rest, ":"); i >= 0 {
-			verb = rest[i+1:]
+		if i := strings.LastIndex(verb, ":"); i >= 0 {
+			verb = verb[i+1:]
 		}
 		if verb != "getStats" {
 			return crudError(e, http.StatusNotFound, "unsupported custom verb: "+verb)
@@ -238,7 +317,10 @@ func v1UserStatsHandler(app core.App) func(*core.RequestEvent) error {
 		// Build a synthetic upstream request that
 		// targets the connect procedure. The
 		// GetUserStats RPC takes a name string,
-		// so the body is `{"name": "users/<id>"}`.
+		// so the body is `{"name": "users/<user>"}` — the
+		// segment is the bare username/id the client sent, and
+		// `GetUserStats` strips the prefix back off before its
+		// `lookupUserByName`.
 		body := []byte(`{"name":"users/` + name + `"}`)
 		mux := connectProxyMux()
 		if mux == nil {
