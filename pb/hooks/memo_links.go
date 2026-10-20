@@ -52,30 +52,93 @@ var (
 	memoLinksActiveMemoIDsMu sync.Mutex
 	memoLinksActiveMemoIDs   = map[string]time.Time{}
 
-	// memoLinksShutdown is the cancellation signal
-	// the fan-out goroutines honour. The channel is
-	// closed by the OnTerminate hook registered in
-	// registerMemoLinks; once it fires, every in-
-	// flight fan-out aborts before its next DB
-	// write, which prevents the
-	// "sql: database is closed" race that
-	// otherwise surfaces when a test app (or a
-	// production app during a graceful shutdown)
-	// closes its DB while a fan-out is still
-	// running.
+	// memoLinksStates holds the PER-APP fan-out state: the
+	// cancellation signal the fan-out goroutines honour,
+	// and the wait group the teardown hook blocks on.
 	//
-	// See the AGENTS.md "Known Issues" section,
-	// entry 1, for the original report. The fix
-	// is intentionally narrow: the goroutine
-	// still owns the in-flight fetch but stops
-	// poking the DB as soon as shutdown is
-	// signalled. A fresh app boot re-creates a
-	// closed-channel value via sync.Once, so a
-	// second app in the same process still gets a
-	// usable signal.
-	memoLinksShutdown     chan struct{}
-	memoLinksShutdownOnce sync.Once
+	// Both are per app on purpose. The channel used to be
+	// package-level, which was wrong twice over: closing
+	// the shared channel for one app stopped every other
+	// app's fan-out, and two apps registering concurrently
+	// raced on the globals.
+	//
+	// See the AGENTS.md "Known Issues" section, entry 1,
+	// for the original report.
+	memoLinksStates map[core.App]*memoLinksState
+
+	// memoLinksStatesMu guards the per-app state maps. The
+	// maps are written from `registerMemoLinks` (once per app)
+	// and read from the teardown hooks; two apps booting
+	// concurrently would otherwise race on the map itself.
+	memoLinksStatesMu sync.Mutex
 )
+
+// memoLinksState is the per-app fan-out state.
+type memoLinksState struct {
+	shutdown     chan struct{}
+	shutdownOnce *sync.Once
+	workers      sync.WaitGroup
+
+	// gate guards the `workers` wait group against the
+	// `sync.WaitGroup` "reused before previous Wait has
+	// returned" panic, which fires when `Add` races a
+	// teardown's `Wait`.
+	//
+	// `workers.Add` runs per memo save, so it CAN overlap
+	// the teardown wait (a memo saved while the app is
+	// shutting down). Once teardown has taken the gate
+	// and begun waiting, `gateAccepting` is false and every
+	// later save declines to track its goroutine instead of
+	// calling `Add` on a wait group that is mid-`Wait`.
+	//
+	// Mutex-guarded rather than atomic because the lock
+	// also has to cover the `Add` itself: two concurrent
+	// saves must not both pass the check and then race each
+	// other into `Add` against a `Wait`.
+	gate          sync.Mutex
+	gateAccepting bool
+}
+
+// begin accepts a new worker iff teardown has not started.
+// It returns false once the state is closed, in which case
+// the caller must run its goroutine untracked: the channel
+// it would have been counted on is already being torn down.
+func (s *memoLinksState) begin() bool {
+	s.gate.Lock()
+	defer s.gate.Unlock()
+	if !s.gateAccepting {
+		return false
+	}
+	s.workers.Add(1)
+	return true
+}
+
+// end releases a worker accepted by begin.
+func (s *memoLinksState) end() {
+	s.workers.Done()
+}
+
+// stopAndWait signals the shutdown channel and waits for
+// every accepted worker to unwind. It is called from both
+// teardown hooks (`OnTerminate` and `OnBootstrapClear`),
+// so it must be safe to run twice — the channel close is
+// `sync.Once`-guarded and the second call finds no tracked
+// workers and returns immediately.
+func (s *memoLinksState) stopAndWait() {
+	// Close the gate FIRST so no further `begin` can
+	// reach `Add`. Without this a save landing mid-wait
+	// is exactly the documented panic.
+	s.gate.Lock()
+	s.gateAccepting = false
+	s.gate.Unlock()
+
+	s.shutdownOnce.Do(func() { close(s.shutdown) })
+	s.workers.Wait()
+}
+
+func init() {
+	memoLinksStates = map[core.App]*memoLinksState{}
+}
 
 // registerMemoLinks subscribes the memo_links auto-fetch to the
 // `memos` collection's after-save hooks. Fires for both create
@@ -92,21 +155,73 @@ func registerMemoLinks(app core.App) {
 		markdown.WithMentionExtension(),
 	)
 
-	// Per-app shutdown signal. We allocate the
-	// channel fresh on each registerMemoLinks call
-	// (once per app) and close it on terminate so
-	// every in-flight fan-out goroutine sees the
-	// signal at its next iteration.
-	memoLinksShutdownOnce = sync.Once{}
-	memoLinksShutdown = make(chan struct{})
+	// Per-app shutdown signal and wait group. We
+	// allocate them fresh on each registerMemoLinks
+	// call (once per app) and close the channel on
+	// terminate so every in-flight fan-out goroutine
+	// sees the signal at its next iteration.
+	//
+	// Both are PER APP on purpose. The channel must
+	// be: a package-level channel closed by one app
+	// would stop every other app's fan-out. The wait
+	// group must be: a package-level `sync.WaitGroup`
+	// cannot be waited on twice concurrently, and two
+	// apps tearing down at the same time would panic
+	// with "sync: WaitGroup is reused before previous
+	// Wait has returned".
+	state := &memoLinksState{
+		shutdown:      make(chan struct{}),
+		shutdownOnce:  &sync.Once{},
+		gateAccepting: true,
+	}
+	memoLinksStatesMu.Lock()
+	memoLinksStates[app] = state
+	memoLinksStatesMu.Unlock()
 	app.OnTerminate().BindFunc(func(e *core.TerminateEvent) error {
-		memoLinksShutdownOnce.Do(func() { close(memoLinksShutdown) })
+		state.stopAndWait()
+		return e.Next()
+	})
+	// The same wait on `OnBootstrapClear`, which is the
+	// hook a test's `ClearBootstrap` cleanup triggers
+	// (`OnTerminate` does NOT fire there).
+	//
+	// `stopAndWait` is idempotent, so the two hooks
+	// firing back to back is fine.
+	app.OnBootstrapClear().BindFunc(func(e *core.BootstrapEvent) error {
+		state.stopAndWait()
 		return e.Next()
 	})
 
 	bind := func(e *core.RecordEvent) error {
 		defer func() { _ = e.Next() }()
-		go memoLinksFanOut(app, mdSvc, e.Record)
+		// A save that lands after teardown has begun is
+		// NOT tracked: the wait group is mid-`Wait` and
+		// `Add` on it would panic the process. The
+		// goroutine still runs — the memo is already
+		// committed, and `memoLinksFanOut` already has a
+		// `recover()` plus a shutdown pre-check, so it
+		// unwinds cleanly on its own.
+		tracked := state.begin()
+		// Snapshot the record before launching the goroutine.
+		// Reading `e.Record` inside it is a data race: PocketBase's
+		// model/record event bridge writes back into the same shared
+		// `RecordEvent` on its way back up the stack
+		// (`core.syncModelEventWithRecordEvent`), and that write can
+		// land after this handler returns — concurrently with the
+		// goroutine's read.
+		rec := e.Record
+		go func() {
+			if tracked {
+				defer state.end()
+			}
+			defer func() {
+				if r := recover(); r != nil {
+					memoLinkLog.Warn("memo_links: fan-out panicked; app likely shutting down",
+						"panic", r)
+				}
+			}()
+			memoLinksFanOut(app, mdSvc, rec)
+		}()
 		return nil
 	}
 
@@ -142,7 +257,7 @@ func memoLinksFanOut(app core.App, mdSvc markdown.Service, rec *core.Record) {
 	// hit "sql: database is closed" on its first
 	// DB call. A normal production shutdown hits
 	// the same path.
-	if isMemoLinksShutdown() {
+	if isMemoLinksShutdown(app) {
 		return
 	}
 
@@ -201,7 +316,7 @@ func memoLinksFanOut(app core.App, mdSvc markdown.Service, rec *core.Record) {
 				}
 			}()
 			for u := range jobs {
-				if isMemoLinksShutdown() {
+				if isMemoLinksShutdown(app) {
 					continue
 				}
 				upsertOneMemoLink(app, ctx, memoID, u)
@@ -264,7 +379,7 @@ func pruneStaleMemoLinks(app core.App, memoID string, keep []string) {
 				"memo", memoID, "panic", r)
 		}
 	}()
-	if isMemoLinksShutdown() {
+	if isMemoLinksShutdown(app) {
 		return
 	}
 	existing, err := app.FindRecordsByFilter("memo_links",
@@ -449,12 +564,15 @@ func truncateErr(err error) string {
 // registerMemoLinks has run, or after a fresh
 // process boot) returns false, so this is safe to
 // call from any goroutine.
-func isMemoLinksShutdown() bool {
-	if memoLinksShutdown == nil {
+func isMemoLinksShutdown(app core.App) bool {
+	memoLinksStatesMu.Lock()
+	state := memoLinksStates[app]
+	memoLinksStatesMu.Unlock()
+	if state == nil {
 		return false
 	}
 	select {
-	case <-memoLinksShutdown:
+	case <-state.shutdown:
 		return true
 	default:
 		return false

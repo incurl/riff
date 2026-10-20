@@ -128,6 +128,22 @@ type SketchServiceClient interface {
 	// gets NotFound rather than Forbidden so
 	// a private sketch's existence is not
 	// leaked to a stranger.
+	//
+	// The path is deliberately NOT `/api/v1/{name=memos/*}`:
+	// that is MemoService.GetMemo's path, and two RPCs
+	// claiming the same HTTP method + path makes the
+	// OpenAPI generator drop one of them (gnostic keeps
+	// the first and silently discards the second).
+	// The collision cost the instance its
+	// `MemoService_GetMemo` operation, which the MCP
+	// catalog still curates — so the server refused to
+	// start ("curated OpenAPI operation
+	// \"MemoService_GetMemo\" not found").
+	//
+	// `/api/v1/sketches/{name}` is the sketch-scoped
+	// spelling of the same resource; the SPA calls the
+	// Connect procedure, not the REST path, so nothing
+	// depends on the old shape.
 	GetSketch(context.Context, *v1.GetSketchRequest) (*v1.Memo, error)
 	// PushSketch queues a sketch memo for delivery
 	// to one of the caller's bound PO-33 devices.
@@ -204,6 +220,22 @@ type SketchServiceHandler interface {
 	// gets NotFound rather than Forbidden so
 	// a private sketch's existence is not
 	// leaked to a stranger.
+	//
+	// The path is deliberately NOT `/api/v1/{name=memos/*}`:
+	// that is MemoService.GetMemo's path, and two RPCs
+	// claiming the same HTTP method + path makes the
+	// OpenAPI generator drop one of them (gnostic keeps
+	// the first and silently discards the second).
+	// The collision cost the instance its
+	// `MemoService_GetMemo` operation, which the MCP
+	// catalog still curates — so the server refused to
+	// start ("curated OpenAPI operation
+	// \"MemoService_GetMemo\" not found").
+	//
+	// `/api/v1/sketches/{name}` is the sketch-scoped
+	// spelling of the same resource; the SPA calls the
+	// Connect procedure, not the REST path, so nothing
+	// depends on the old shape.
 	GetSketch(context.Context, *v1.GetSketchRequest) (*v1.Memo, error)
 	// PushSketch queues a sketch memo for delivery
 	// to one of the caller's bound PO-33 devices.

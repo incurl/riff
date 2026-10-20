@@ -151,6 +151,10 @@ func uploadManagerGet() *uploadManager {
 // and a production server lands its stages under the
 // existing data dir.
 func installUploadManager(app core.App) {
+	state := &uploadSweepState{}
+	uploadSweepStatesMu.Lock()
+	uploadSweepStates[app] = state
+	uploadSweepStatesMu.Unlock()
 	mgr := uploadManagerGet()
 	mgr.setDir(filepath.Join(app.DataDir(), "uploads"))
 	// OnTerminate stops the sweeper so a unit test's app
@@ -160,10 +164,53 @@ func installUploadManager(app core.App) {
 	mgr.stopCh = stopCh
 	app.OnTerminate().BindFunc(func(e *core.TerminateEvent) error {
 		mgr.stopOnce.Do(func() { close(stopCh) })
+		// Wait for the sweep loop to unwind. The stop
+		// signal makes it return at its next tick, but
+		// without the wait the app can tear its data
+		// directory down while the sweep is still
+		// removing a staged upload from it.
+		state.workers.Wait()
 		return e.Next()
 	})
-	go mgr.sweepLoop(stopCh)
+	// The same wait on `OnBootstrapClear`, which is the
+	// hook a test's `ClearBootstrap` cleanup triggers
+	// (`OnTerminate` does NOT fire there).
+	//
+	// The stop signal is sent FIRST: the wait blocks
+	// until the sweep loop returns, and the loop only
+	// returns at its next tick — which it reaches only
+	// after the stop channel is closed. Waiting without
+	// closing it would deadlock the teardown.
+	app.OnBootstrapClear().BindFunc(func(e *core.BootstrapEvent) error {
+		mgr.stopOnce.Do(func() { close(stopCh) })
+		state.workers.Wait()
+		return e.Next()
+	})
+	state.workers.Add(1)
+	go func() {
+		defer state.workers.Done()
+		mgr.sweepLoop(stopCh)
+	}()
 }
+
+// uploadSweepStates holds the per-app sweep state.
+//
+// The wait group must be PER APP, not package-level: a
+// package-level `sync.WaitGroup` cannot be waited on
+// twice concurrently, and two apps tearing down at the
+// same time would panic with "sync: WaitGroup is
+// reused before previous Wait has returned".
+type uploadSweepState struct {
+	workers sync.WaitGroup
+}
+
+var uploadSweepStates = map[core.App]*uploadSweepState{}
+
+// uploadSweepStatesMu guards uploadSweepStates. The map
+// is written from `installUploadManager` (once per app)
+// and read from the teardown hooks; two apps booting
+// concurrently would otherwise race on the map.
+var uploadSweepStatesMu sync.Mutex
 
 // uploadManagerSetDir overrides the staging directory.
 // Intended for tests; the manager must have no live

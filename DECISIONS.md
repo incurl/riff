@@ -5,6 +5,606 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## MoeMemos saw `createdTs: 0` and `size: 0` on every row: the V0 shaper read protojson fields as the wrong JSON types (2026-10-20)
+
+The report was two symptoms in one: *"MoeMemos uploads are not
+linked and MoeMemos is not getting memos metadata like date of
+creation"*. Driving the real MoeMemos boot sequence against a
+live app (`pb/api/upstream_memos_v0_metadata_internal_test.go`)
+answered both.
+
+**The metadata symptom.** Every V0 response carried
+`createdTs: 0` and `updatedTs: 0` — the epoch. The shaper in
+`pb/api/upstream_memos_v0_convert.go` translates the connect
+handler's JSON body field by field, and it read `createTime` as
+
+    m, ok := v.(map[string]any)
+    secs, _ := m["seconds"].(float64)
+
+That is the **message** shape of `google.protobuf.Timestamp`. But
+protojson never emits that shape for a WKT: `Marshal` renders a
+`Timestamp` as an **RFC 3339 string**, `"2025-09-20T00:10:00Z"`.
+The type assertion therefore always failed and the function
+returned its zero value. Same class of bug on the resource side:
+`Attachment.size` is an `int64`, and protojson emits every 64-bit
+integer as a **JSON string** (`"15"`) because a 64-bit value can
+exceed the precision of an IEEE-754 double. The shaper read it as
+`a["size"].(float64)`, so every attachment reported zero bytes.
+
+**Why the tests missed it.** The existing V0 unit tests hand-wrote
+the V1 body as `"createTime": {"seconds": 1700000000}` and a
+numeric `size` — shapes protojson does not produce. The suite was
+green against a fixture the server never sends.
+
+**The decision.** Make the readers tolerant of what protojson
+actually emits, and make the fixtures honest. `protoTimestampToUnix`
+now parses the RFC 3339 string first and still accepts the
+structured form; a new `protoInt64` handles the stringified int64
+(plus `json.Number`/`float64`, so hand-built bodies keep working).
+`TestV0ProtojsonShapes` marshals a real `apiv1.Attachment` and
+asserts the shaper's readers survive it, so a future proto
+field-type change surfaces as a test failure instead of a
+silently-zeroed response.
+
+**Two further drops on the same path**, found while the
+end-to-end sequence was being traced:
+
+* `memoId` was hardcoded to `int64(0)` with a comment explaining
+  that the association "is carried by `resourceList` instead".
+  That is not true of the MoeMemos client: it reads `memoId` off
+  each resource, so a bound file reported no owner. It now derives
+  from the V1 `Attachment.memo` resource name through the same
+  `v0IDFromV1` projection every other id uses, and stays `0` for
+  an unlinked upload — the honest answer.
+* The upload handler trusted the multipart part's `Content-Type`.
+  Go's `multipart.CreateFormFile` labels **every** part
+  `application/octet-stream`, and several Kotlin upload helpers do
+  the same, so `mime_type` was pinned to a useless value forever.
+  A missing-or-generic header now falls back to the filename table
+  (`connect.GuessMimeType`, exported for this purpose).
+
+**And the linking symptom**, which turned out to be two things:
+
+* The PATCH handler bound the attachments correctly but shaped the
+  response from the V1 `UpdateMemo` reply, which carries only the
+  memo's own columns. The client therefore never saw the files it
+  had just bound, and its next edit — which rebuilds
+  `resourceList` from the previous response — could drop them
+  again. The PATCH path now re-reads the attachment list through
+  `v0ShapeSingleMemoAttachments`, the same pass the create path
+  already used.
+* Separately, a **data race** made the whole V0 package
+  `-race`-dirty: `registerMotionMedia` and the memo-links fan-out
+  read `e.App` / `e.Record` *inside* their detached goroutines.
+  PocketBase's model/record event bridge writes back into the same
+  shared `RecordEvent` on its way up the stack
+  (`core.syncRecordEventWithModelEvent`, bound at
+  `core/record_model.go:118`), and that write can land after the
+  handler returns — concurrently with the goroutine's read. The
+  fix is to snapshot both into locals *before* launching. This is
+  the same "detached worker" family as the teardown entry below,
+  but a different bug: that one was about *not waiting* for the
+  worker, this one is about *sharing* its inputs.
+
+## Private attachments 404 in the feed: `<img>` cannot present a localStorage token, so the file surface reads a session cookie (2026-10-20)
+
+The reporter's insert-image path posts successfully and links
+correctly — the attachment row exists and the memo is bound — but the
+image is broken, with
+`GET /community/file/attachments/ob0frvna8r7yuce/main_9cfda642.webp`
+answering 404. The upload was never the problem. This is a
+**transport** problem, and it is structural rather than a bad URL:
+
+* The SPA stores its PocketBase token in `localStorage`
+  (`web/src/auth-state.ts`) and sends it on every Connect call as an
+  `Authorization` header.
+* An `<img src>`, a `<video poster>`, a `<audio>`, or a CSS `url()`
+  can present **no** header and cannot read `localStorage`. The
+  browser attaches only ambient credentials — cookies.
+* `web/src/connect.ts` sets `credentials: "include"` on `fetch`, but
+  that only helps if a cookie exists, and nothing set one: there is
+  no `Set-Cookie` anywhere in the Go tree.
+* So the file GET arrived **anonymous**. `authorizeAttachment`
+  (`pb/api/file_authz.go`) then falls through to the `memos`
+  visibility rule, and the SPA editor's default visibility is
+  `Visibility.PRIVATE` (`web/src/components/MemoEditor/state/types.ts`).
+  `memos.ViewRule` is `author = @request.auth.id || ...`, so an
+  anonymous caller fails it and gets a deliberate 404.
+
+The 404 was therefore *correct behaviour for an anonymous request*. The
+bug is that riff demanded a credential from a sub-resource that has no
+way to send one — so every private image in every feed rendered
+broken, while the same URL fetched with an `Authorization` header
+worked.
+
+**The decision:** mirror the session token into a cookie, scoped to the
+SPA's mount path, and accept it on the file surface.
+
+* `syncAuthCookie` (`web/src/auth-state.ts`) writes `riff_auth=<token>`
+  on sign-in, on refresh, on page load, and on adoption of another
+  tab's broadcast token. It is removed by `clearAccessToken` on
+  sign-out — a leftover cookie would keep serving file reads for a
+  session the user just ended, because the server resolves it to a live
+  user record.
+* `fileViewer` (`pb/api/file_authz.go`) accepts `riff_auth` after the
+  `Authorization` header, reusing the existing
+  `ResolveFilePersonalAccessToken` path via a new shared
+  `resolveFileToken` helper.
+
+Rejected alternatives:
+
+* **Per-attachment signed URLs.** Stronger isolation (no ambient
+  credential at all) but it needs a new signing key, a new mint
+  endpoint, and a client-side rewrite of every emitted URL — including
+  the markdown-embedded ones, which the server renders. It also
+  changes the cache story: a signed URL is unique per render, so the
+  existing ETag/`Cache-Control` reuse (`fileCacheControl`) degrades.
+  Worth revisiting if the cookie's ambient scope ever becomes a
+  concern; `internal/signedurl` and the `share_token` path already
+  demonstrate the mechanism.
+* **Cookie on every Connect route.** Deliberately *not* done. The
+  cookie is read only by the file surface. Widening it would put a
+  long-lived bearer credential in the ambient request state of the
+  whole app, including the RPCs it is not needed for.
+
+Properties that are load-bearing, each pinned by a test:
+
+* `path` is `BASE_PATH`-scoped (`/community/` on the Fly layout), so
+  the token is never attached to requests for the static site that
+  shares the host in `Caddyfile.fly.community`.
+* `SameSite=Strict`, so a third-party page embedding the SPA cannot
+  ride the session.
+* The cookie expires with the token; it never outlives the session it
+  mirrors.
+* `Secure` is emitted unless `window.isSecureContext === false`, and
+  the server independently refuses a cleartext cookie from a
+  non-loopback host (`fileCookieTransportAllowed`). The two halves are
+  redundant on purpose: a client cannot be trusted to enforce its own
+  transport rule.
+
+The invariant is unchanged and still pinned by
+`TestFileRoute_PrivateAttachmentIsNotPublic`: **file access == memo
+access.** The cookie resolves *who* is asking; it does not grant
+anything. A foreign user's valid cookie still gets 404 on someone
+else's PRIVATE memo (`TestFileRoute_SessionCookieIsScopedToTheFileSurface`).
+
+**Follow-up worth knowing:** the SPA's own `insert image` path also
+depends on this, and so do avatars, thumbnails (`?thumbnail=true`) and
+motion clips (`?motion=true`) — every URL the browser loads without a
+header. Until this cookie shipped, the `/file/...` surface was usable
+only for PUBLIC and PROTECTED memos.
+
+## The SPA's "post memo with attachment" silently dropped the file: `attachment.memo` was required on the spec, but the SPA uploads before the memo exists (2026-10-20)
+
+The reporter's URL `https://ravine.1une.cc/community/memos/uwqi616olykffr2`
+shows a memo that posted fine but whose attachment vanished — the
+`/file/attachments/{uid}/{filename}` URL ends up 404'ing through the
+SPA's catch-all to `index.html`. The root cause is a server-side
+gate the SPA cannot satisfy:
+
+* `attachments` is a unified single-collection schema; the
+  `attachments.memo` column is nullable (`Required: false` in
+  `pb/migrations/1850000000_create_attachments.go`).
+* `pb/connect/attachment_upload.go::uploadSpec` *required*
+  `spec.attachment.memo` to point at an existing memo, with
+  `INVALID_ARGUMENT: memo is required for upload` on empty specs.
+* The SPA's `memoService.save` uploads `state.localFiles` *before*
+  calling `CreateMemo` (the original order is "upload inline, then
+  bind via `req.Memo.Attachments[]`") — both the end-of-edit
+  drag-upload and the inline-image upload during a brand-new memo
+  edit land with no `memo` to name. The upload is rejected. The
+  SPA catches the error, posts the memo anyway, and the
+  attachment's row never exists.
+
+Two changes close the bug:
+
+1. **Server relaxes the gate.** `spec.attachment.memo` is now
+   optional. An empty memo lands the row as an "orphan"
+   (`attachments.memo` empty), with a new nullable `creator`
+   column stamped with the uploader's user-id
+   (`pb/migrations/1890000000_attachment_creator_for_orphan_binding.go`).
+2. **`CreateMemo` and `UpdateMemo` rebind orphans in-RPC.** A new
+   helper `pb/connect/memo_bind_attachments.go` reads
+   `req.Memo.GetAttachments()`, resolves each name to a row,
+   refuses cross-user rebinds (the `creator` gate keeps bob from
+   re-binding alice's orphan onto bob's memo), refuses cross-memo
+   rebinds (matches the `SetMemoAttachments` policy), and rewires
+   the row's `memo` column to the new memo inside the same RPC.
+
+**Why the SPA did not need reordering.** The SPA's
+`memoService.save` still uploads before creating the memo and
+passes the resulting attachment names through
+`memoData.attachments`. With the relaxed gate the uploads land
+as orphans; with the bind pass the subsequent `CreateMemo` wires
+them in. The pre-existing order works.
+
+**Why the `creator` column exists.** An orphan row's visibility
+rule resolves to NULL for everyone (`memo` is empty, so
+`memo.author = @request.auth.id` is NULL regardless of the
+viewer), which means the rule engine cannot disambiguate the
+uploader. Without the `creator` gate a hostile SPA that ever
+learnt another user's orphan attachment name could re-bind the
+row onto its own memo and effectively steal the bytes. The
+column costs one nullable relation and one migration.
+
+**The V0 stub-memo path is unaffected.** The MoeMemos V0
+client's three-step upload (`POST /memo` →
+`POST /resource/blob` → `PATCH /memo` with `resourceList`)
+still works through `pb/api/upstream_memos_v0_attach.go`; the
+V0 upload target is a stub memo that exists at upload time, so
+the spec gate's relaxed path is unused here. See
+"V0 memo + attachment (the split-memo bug)" below.
+
+**Pre-existing attachment-upload race under `-race`.** The
+existing `TestUploadAttachment_HappyPath` (and now my new
+`TestUploadAttachment_OrphanSpecSucceeds`) trip the race
+detector when reading the row right after `finishWrite`. The
+race is between `pb/hooks/motion_media.go`'s detached detector
+writing the `motion_media` column and the test reading the row
+— both through PocketBase's internal `Record` model which has
+no cross-goroutine lock. The new tests wait for the per-app
+motion-media waitgroup via the exported
+`hooks.WaitMotionMediaWorkers(app)` helper, which closes the
+test-side window but does not address the underlying PocketBase
+race. The pre-existing test was already racy before my changes;
+not introducing a new race here.
+
+## The background workers were not awaited at teardown, so a test's temp dir cleanup raced with them (2026-10-20)
+
+Found while stress-testing the attachment fixes: a full
+`go test ./...` run failed roughly one run in six, always with
+
+    testing.go:1617: TempDir RemoveAll cleanup: unlinkat
+    /tmp/TestSomeTestXXXX/001: directory not empty
+
+and always on a *different* test each time.
+
+**Why it is so hard to attribute.** The failure lands on
+whatever test happened to own the temp dir the background
+goroutine was writing into — not on the test that started
+the goroutine. The four failures observed during this work
+were `TestFileRoute_UnknownAttachmentIs404`,
+`TestUploadSketch_HappyPath`, `TestSpaces_Schema` and
+`TestRiffOnlyColumnsAreDropped`; none of them had anything
+to do with each other.
+
+**The cause.** Six background workers were detached and
+untracked:
+
+* `pb/hooks/motion_media.go` — the Motion Photo detector
+  (reads the blob, writes the `motion_media` column)
+* `pb/hooks/memo_links.go` — the link fan-out
+* `pb/hooks/scheduler.go` — the 1-minute sweep loop
+* `pb/hooks/webhook_drain.go` — the outbox drain loop
+* `pb/connect/upload_session.go` — the upload-session sweeper
+* `pb/connect/memo_import_session.go` — the import-session
+  sweeper
+
+The last two stage their files **inside the app's data
+directory** (`<dataDir>/imports`, and the upload staging
+dir), so a sweeper that runs after the cleanup has removed
+the directory recreates it, and the cleanup fails.
+
+**The fix.** Each worker is now tracked in a
+`sync.WaitGroup` that the app waits on during teardown.
+Three details are load-bearing, and each of them cost a
+debugging cycle:
+
+1. **The wait belongs on `OnBootstrapClear`, not
+   `OnTerminate`.** A test's cleanup calls
+   `app.ClearBootstrap()`, and that triggers
+   `OnBootstrapClear` but NOT `OnTerminate` — so a wait
+   bound to `OnTerminate` never runs in a test, and the
+   test is exactly where the race bites. (PocketBase
+   triggers `OnTerminate` only from a real shutdown; see
+   `core/base.go::ClearBootstrap`, which fires
+   `OnBootstrapClear`.)
+
+2. **The stop signal must be sent BEFORE the wait.** The
+   wait blocks until the worker returns, and the worker
+   only returns after it observes the signal. Waiting
+   first deadlocks the teardown. The first attempt did
+   exactly that and hung `pb/connect` for the full
+   90-second test timeout.
+
+3. **The scheduler's shutdown channel must be CLOSED, not
+   sent on.** It was an unbuffered channel with a
+   non-blocking send (`select { case ch <- struct{}{}:
+   default: }`). An unbuffered send is only received if the
+   loop happens to be parked in its `select` at that exact
+   moment; otherwise the `default:` branch silently drops
+   it, and the loop then waits out its 1-minute tick. The
+   fix closes the channel — a closed channel is seen by
+   every future `select` — and guards the close so the
+   `OnTerminate` and `OnBootstrapClear` hooks can both fire
+   without a double-close panic.
+
+The `memo_links` fan-out already closed its channel behind
+a `sync.Once`, so it needed only the wait.
+
+**A fourth detail, found by the race detector's blind spot.**
+The wait group cannot be package-level. A
+`sync.WaitGroup` may not be waited on twice concurrently, so
+two apps tearing down at the same time panic with "sync:
+WaitGroup is reused before previous Wait has returned". The
+same applies to the shutdown channel: a package-level channel
+closed for one app stops *every* app's fan-out, and two apps
+registering concurrently race on the globals.
+
+All the per-app state (the shutdown channel, the `sync.Once`
+that closes it, and the wait group) therefore lives in a
+per-app map keyed by the `core.App` value, guarded by a
+mutex. The same change retired the last package-level
+`memoLinksShutdown` global, which had the same two bugs.
+
+**Why the race detector did not catch this.** The misuse is
+a `panic()` from the runtime's `sync` package, not a data
+race, so `-race` reports nothing; it only shows up as a
+failed test. The probe that found it was a test that
+registers the hooks and tears the app down on five goroutines
+at once, 200 times over.
+
+**Verification.** Six consecutive full runs of
+`./pb/ ./pb/migrations/ ./pb/api/` are clean, where the flake
+previously hit roughly one run in six. `pb/connect` also
+stopped hanging: the `TestTranscribe_RequiresAuth` case went
+from a 90-second timeout to 0.34 s once the scheduler's
+shutdown channel was closed instead of sent on. The
+concurrent-teardown probe is clean under `-race` as well.
+
+## The V0 memo+attachment flow split one post into two memos, and the native file route served private blobs (2026-10-20)
+
+Two bugs, both found from the same user report: "memos posted with
+attachment is split into 2 memos in spa, one with text, one empty
+with attachment broken".
+
+### The split: the V0 PATCH dropped the `resourceList`
+
+The MoeMemos V0 client posts a memo that carries an attachment in
+three steps:
+
+1. `POST /api/v1/memo` — the memo with its text
+2. `POST /api/v1/resource/blob` — the file upload
+3. `PATCH /api/v1/memo/{id}` — the memo update whose `resourceList`
+   links the uploaded resource to the memo
+
+Step 2 has no memo to attach the file to (the V1
+`UploadAttachment.spec.attachment.memo` field is required), so the
+V0 upload handler creates a hidden **stub memo** (the
+zero-width-space sentinel content) and uploads against it. Step 3
+is what binds the file to the memo the user actually sees.
+
+**Step 3 was a no-op.** The V0 PATCH shaper
+(`v0MemoPatchToV1UpdateMemo`) deleted the V0-only fields it knew
+about but left `resourceList` in the body, so it landed in the V1
+`update_mask` — and the V1 `UpdateMemo` handler has no
+`resourceList` field, so it was silently ignored. The file stayed
+bound to the stub forever, and the feed showed two memos: the real
+one with the text, and the stub carrying the attachment.
+
+The upstream 0.21 contract confirms the shape: `Memo.resources` is
+`OUTPUT_ONLY` in the 0.21 proto, and the binding was done through
+`Resource.memo`; the V0 REST dialect expressed the same thing as
+the `resourceList` on the memo body.
+
+**The fix** (`pb/api/upstream_memos_v0_attach.go`): the V0 PATCH
+handler reads the `resourceList` before dispatching to the V1
+handler, and `v0LinkResourcesToMemo` moves each named attachment
+onto the target memo (a pointer rewrite on the `attachments.memo`
+relation — the bytes never leave storage) and then deletes the
+stub that is left empty. The whole move runs in one transaction, so
+a rejected attachment cannot leave the files split across two memos.
+The shaper now strips `resourceList` so it no longer pollutes the
+`update_mask`.
+
+**A second, latent bug in the same path.** The V0 resource ids
+are Kotlin `Long`s that run up to 2^63, which a `float64` cannot
+represent exactly. The shared `decodeFlatObject` helper decodes
+into `map[string]any`, so every number became a `float64` and the
+id came back rounded — the id no longer matched the attachment it
+named. The new `decodeV0Object` helper keeps the literal digits
+(`json.Decoder.UseNumber`) so `json.Number.Int64` reads them back
+exactly.
+
+**The stub also leaked into the SPA feed.** The V1 `ListMemos`
+handler did not filter stubs, so even an upload that was never
+linked left an empty memo in the feed (the 2026-10-19 V0 restore
+entry noted this as a known wart: "the V1 client sees them as real
+memos"). The V1 list now skips the stub sentinel, and the stub
+marker moved to `pb/connect/memo_stub.go` so both sides share one
+definition. The visibility check was dropped from the stub test on
+purpose: a stub that a later V0 edit flipped to PUBLIC is still a
+stub and still must not be shown.
+
+### The leak: PocketBase's native file route ignored the memo's visibility
+
+`GET /api/files/{collection}/{recordId}/{filename}` is
+PocketBase's built-in file server. It evaluates the collection's
+`ViewRule` **only** when the file field is marked `Protected`
+(`apis/file.go::download`). The `attachments.blob` field was not
+protected, so the native route served any attachment blob to
+anybody who knew the id — completely bypassing the owning memo's
+visibility. A file attached to a PRIVATE memo was downloadable by
+an anonymous caller.
+
+The `attachments.ViewRule` *is* the memo-visibility rule
+(`memo.author = @request.auth.id || memo.visibility =
+"PROTECTED" || "PUBLIC" || ...`), so marking the field
+`Protected` closes the leak: the native route now evaluates the
+rule, and a PRIVATE memo's attachment answers 404 for anyone but
+the author. A PUBLIC memo's attachment is still served by the
+native route (the rule passes for an anonymous caller), so nothing
+that worked before stops working.
+
+Migration `pb/migrations/1880000000_protect_attachment_blobs.go`
+sets the flag on existing installs; the create migration sets it
+too, so a fresh install never has the window.
+
+**Protected is not enough on its own.** PocketBase's protected-file
+branch wants a short-lived *file token* (`?token=…`), not the
+caller's bearer token — so even the author of a PRIVATE memo could
+not read their own attachment through the native route. And the SPA
+*prefers* `attachment.externalLink` over its own `/file/...` URL
+(`web/src/utils/attachment.ts`), and the connect layer was setting
+`externalLink` to the native `/api/files/...` route. So the SPA
+was using the leaky route and would have broken on private memos
+once the field was protected.
+
+The `externalLink` now points at riff's own `/file/...` surface
+(`/file/{collection}/{id}/{filename}`), which authorizes against
+the same `ViewRule` using the caller's normal PocketBase token and
+additionally supports `?thumbnail=true`, `?motion=true`, and
+`?share_token=…`. The avatar URL moved the same way
+(`/file/users/{id}/avatar`). The V0 resource shaper's fallback
+`externalLink` moved with it.
+
+### Verification
+
+`pb/api/upstream_memos_v0_attach_test.go` reproduces the exact
+MoeMemos three-step sequence against a real PocketBase app and
+asserts that the feed shows one memo carrying the attachment, and
+that a stub left behind by an unlinked upload is invisible to both
+the V0 and the V1 list. The leak fix is pinned by
+`pb/migrations/1880000000_protect_attachment_blobs_internal_test.go`
+and by the existing 26 file-route tests. End-to-end against a
+running server: a PRIVATE memo's attachment answers 404 on both
+`/api/files/...` and `/file/...` for an anonymous caller and 200
+for the author; a PUBLIC memo's attachment answers 200 on both,
+and `?thumbnail=true` answers 200 `image/jpeg`.
+
+## The SPA's `/file/...` URLs were never registered: the file server now owns the surface, authorization, and thumbnails (2026-10-20)
+
+A user reported that
+`https://ravine.1une.cc/community/file/attachments/juck9wz3nedyeaj/96F82B1E-….jpeg?thumbnail=true`
+returned 404. The URL was fine; **the route did not exist**.
+
+**The root cause.** riff registered exactly one family of file
+routes — the upstream-Memos one, at `/memos/api/file/...`
+(`pb/api/upstream_memos_rest.go`). The SPA, the markdown
+renderer, and the share links all emit a *different* family:
+`web/src/utils/attachment.ts` builds
+`${BASE_URL}file/${name}/${filename}` → `/file/attachments/...`,
+and `web/src/utils/managed-attachment.ts` writes the same shape
+into memo content as `/file/attachments/{uid}`. Nothing in the
+binary answered that path, so it fell through to the SPA's
+catch-all route (`server/frontend/embed.go`, `Any("/{path...}")`)
+and came back **200 with `index.html`** — a broken image, not a
+404. The `?thumbnail=true` in the report was a red herring: no
+thumbnail support existed either, on any route.
+
+The 2026-10-14 "sub-path-aware URLs" entry had already made the
+SPA emit `${origin}/community/file/...` instead of
+`${origin}/file/...` — which made the miss *visible* (the
+pre-fix URL 308'd to the static site and 404'd there) but did
+not create the route. Two half-fixes in a row: the URL was
+corrected, the handler was never written.
+
+**The fix.** `pb/api/file_routes.go` registers the public
+`/file/...` family (`/file/attachments/{uid}[/{filename}]` and
+`/file/users/{identifier}/avatar`), and both families now share
+one handler — `upstream_memos_rest_file.go` dispatches into
+`file_routes.go` rather than keeping a second implementation.
+
+**The routes are GET, not Any.** The SPA catch-all is `Any`, and
+Go's `http.ServeMux` panics when a method-less pattern overlaps
+a method-less one. A `GET`-only `/file/...` pattern is strictly
+more specific than the method-less catch-all, so the two
+coexist — the same rule that governs the method-less Connect and
+`/mcp` patterns (see `server/frontend/embed.go`).
+
+**The file server is the authorization authority, and it asks the
+collection rule rather than re-implementing it.** The
+`attachments` collection's `ViewRule` encodes the parent memo's
+visibility, and a file download is not a collection read — the
+rule is the only thing standing between a private memo's file and
+the public internet. `pb/api/file_authz.go` resolves the caller
+(a PocketBase token, a `memos_pat_*` PAT, or nothing) and then
+asks `app.CanAccessRecord(memo, …, memos.ViewRule)`.
+
+This closed a **live leak**: the pre-existing
+`/memos/api/file/...` handler served *any* attachment to *any*
+caller, so a private memo's file was a public URL. A denial
+answers **404, not 403**, so the response never confirms that an
+attachment exists.
+
+**`share_token` is checked first.** A share link is a
+capability: its holder is by definition not a member of the
+memo's space, so the normal visibility rules would reject them.
+The token resolves to a `memo_shares` row; the grant holds only if
+the row points at *this* attachment's memo and has not expired.
+
+**The file surface follows the memo surface, even where riff
+diverges from upstream.** riff's `memos` ViewRule reads
+`visibility = "PROTECTED"` as world-readable, where upstream
+Memos means "any signed-in user". The file server does not
+re-implement the policy — it asks the rule — so the two surfaces
+can never disagree. `TestFileRoute_ProtectedAttachmentFollowsTheCollectionRule`
+pins that invariant.
+
+**Thumbnails are generated server-side and cached on disk.**
+`?thumbnail=true` produced a 600px-box JPEG (upstream's number)
+via `disintegration/imaging`, cached in the PocketBase filesystem
+under `.riff_thumbnails/`. The cache key embeds the record id,
+filename, size, and update timestamp, so replacing an attachment's
+bytes invalidates the entry automatically. The decoded size is
+checked against `internal/imagelimit` *before* the full decode, so
+a decompression bomb is refused rather than allocated. A format
+the generator cannot decode falls back to the original bytes —
+the SPA's `<img onError>` handler does the same.
+
+`?motion=true` extracts the MP4 embedded in a Motion Photo via
+the existing `internal/motionphoto` library. A file with no
+embedded video answers 404 rather than serving the still frame,
+which would look like a video that never plays.
+
+**Non-inline content types are served as `Content-Disposition:
+attachment`.** The filename is attacker-controlled, so an
+`.html` or `.svg` upload must never render against the
+instance's origin. The content-type table is an explicit
+allow-list; anything unlisted is `application/octet-stream`.
+
+**Public memo attachments are cacheable** (`public, max-age=3600`);
+private ones are `private, no-store`. The SPA re-requests the
+same thumbnail URL constantly while scrolling a feed.
+
+## Two pre-existing startup bugs found while verifying the file fix (2026-10-20)
+
+The file fix could not be verified end-to-end because the server
+**did not start at all**. Both causes pre-date the file work
+(reproduced with an unmodified HEAD binary) and are fixed here.
+
+**1. `sync.RWMutex` deadlock in the signed-URL bootstrap.**
+`pb/connect/sketch_signer_bootstrap.go`'s OnServe hook took
+`signerMu.Lock()` and held it across `e.Next()`. `e.Next()`
+runs the *next* OnServe hook, and `main.go`'s hook calls
+`connect.InstallSignedURLSignerForREST()`, which takes the
+**read** lock on the same mutex. A `sync.RWMutex` is not
+reentrant, so the read lock blocked forever and the listener was
+never bound — the process hung with no error. The fix scopes the
+lock to the mutation and calls `e.Next()` after releasing it.
+
+**2. `MemoService_GetMemo` silently dropped from the OpenAPI.**
+Commit `edcc96e5` added `SketchService.GetSketch` with the same
+`get: "/api/v1/{name=memos/*}"` as `MemoService.GetMemo`. Two
+RPCs claiming the same HTTP method + path makes gnostic keep the
+first and **silently discard the second**, so
+`MemoService_GetMemo` vanished from `proto/gen/openapi.yaml` —
+while `server/mcp/catalog.go` still curated it. `mcp.Register`
+then refused to start the binary ("curated OpenAPI operation
+\"MemoService_GetMemo\" not found").
+
+The fix moves `GetSketch` to `get: "/api/v1/sketches/{name}"` —
+the sketch-scoped spelling of the same resource. The SPA calls
+the Connect procedure, not the REST path, so nothing depended on
+the old shape. `buf generate` then restores
+`MemoService_GetMemo` to the spec and the MCP catalog resolves.
+
+**The lesson for the next proto edit:** two RPCs must never
+share an HTTP method + path, and the OpenAPI generator will not
+tell you — it drops one. A curated operation missing from the
+spec is a *startup* failure, so the catalog and the spec have to
+be regenerated together (`cd proto && buf generate`).
+
 ## Sketch push transport is device-pulls: SPA queues a 15-min signed URL on the device row, the PO-33 polls (2026-10-19)
 
 The "Push to my device" feature on the SPA's sketch player has two
@@ -4806,3 +5406,159 @@ and now exercises the non-nested transaction path.
 Verified: `go vet ./...`, `gofmt -l pb/ main.go`,
 `go test -count=1 ./...`, and `go test -race -count=1 ./pb/connect/`
 all pass.
+
+## 2026-10-20 — MoeMemos V0 file GETs: `/o/r/{uid}` and the orphan-uploader rule
+
+MoeMemos (iOS) was locked out of attachment downloads entirely. Two
+independent bugs, both on the V0 read path, both invisible to the
+existing metadata regression (`TestV0BootServesRealCreationMetadata`),
+which only ever asserted on the *shaped JSON* and never on the bytes
+subsequently fetched from the URL inside that JSON.
+
+**1. `GET /o/r/{uid}` was never registered.**
+
+The MoeMemos client builds a resource URL in
+`MemosV0Resource.url(for:)` (`Packages/Services/Sources/MemosV0Service/Ext.swift`):
+
+```swift
+func path() -> String {
+    if let uid = uid, !uid.isEmpty { return "/o/r/\(uid)" }
+    return "/o/r/\(name ?? "")"
+}
+```
+
+so it downloads from `<host>/o/r/<uid>`. Upstream Memos serves that
+path (`server/route/resource/resource.go`); riff did not, so the
+request fell through to the SPA catch-all
+(`server/frontend/embed.go`) and answered **200 with index.html**. A
+client that trusts the status code caches HTML as the attachment.
+Compounding it, `v0ShapeResource` never emitted `uid` at all — upstream
+populates it from `store.Resource.UID` — so the Swift optional was
+always nil and the client fell into the `name` branch, requesting
+`/o/r/` with an empty segment.
+
+**Fix.** `v0ShapeResource` emits `"uid"` (the PocketBase record id;
+riff has no UID column and the id is the equivalent stable handle
+that `/o/r/{uid}` resolves), `mountFileRoutes` registers
+`GET /o/r/{uid}` on the *same* handler as the `/file/...` family, and
+`attachmentUIDFromRequest` learns the `o/r/` form alongside the
+`attachments/` segment search. Sharing the handler is what keeps the
+authorization, thumbnail, motion and share-token behaviour from
+diverging between the two surfaces.
+
+**2. An unlinked attachment was readable only by a superuser.**
+
+`authorizeAttachment`'s orphan branch (`memo == ""`) admitted
+superusers only, on the stated premise that "the `attachments`
+collection has no `creator` column of its own". That premise stopped
+being true at migration `1890000000`, which added exactly that column
+and stamps it with the uploader whenever the spec named no memo.
+
+The consequence was total rather than subtle: the V0 upload path
+deliberately lands rows unlinked (the MoeMemos client uploads the
+file in step 2, before it knows the memo id, and binds it in step 3
+with a PATCH), so **every file a V0 client uploaded answered 404 on
+every read** — including the `externalLink` returned in the upload
+response, which the client downloads from *immediately*, before the
+PATCH that would have bound the row. Even after binding, the window
+between upload and PATCH was a hard 404 for ordinary users.
+
+**Fix.** The orphan branch now admits the uploader recorded in
+`creator`, alongside the existing superuser path, and still refuses
+everyone else with a **404** (never a 403) so the response does not
+confirm the attachment exists. A row with an empty `creator` (one
+predating the column, or written via the admin UI) stays
+superuser-only — the conservative answer for a row whose owner cannot
+be established.
+
+**Tests.** `pb/api/upstream_memos_v0_resource_download_internal_test.go`
+mounts a stand-in for the SPA catch-all (`mountTestSpaFallback`) so a
+missing route reproduces as *200 index.html* rather than a bare mux
+404 — otherwise the test would pass for the wrong reason and never
+see the real failure mode.
+
+- `TestV0ResourceIsDownloadable` — drives the real upload and asserts
+  on `uid`, on `GET /o/r/{uid}`, and on the `externalLink`, checking
+  the response bytes rather than just the status.
+- `TestV0ResourceDownloadDeniesOtherUsers` — `/o/r/{uid}` must not be
+  a way to read an arbitrary attachment by id; owner allowed,
+  anonymous and other users 404 with no byte leak.
+- `TestUnlinkedAttachmentIsReadableByItsUploader` — pins the orphan
+  branch on both URL forms.
+
+Each of the three fixes was verified to be individually load-bearing by
+reverting it and watching the corresponding test fail.
+
+Verified: `go build ./...`, `go vet ./pb/...`,
+`go test -count=1 ./pb/api/ ./pb/connect/ ./pb/hooks/ ./pb/migrations/`,
+and `go test -count=1 -race ./pb/api/` (403 s, zero data races).
+
+## 2026-10-20 — The V0 PATCH bound nothing: `resourceIdList`, not `resourceList`
+
+Uploads from MoeMemos were never linked to a memo. The cause is a
+single field name, and it had been wrong for the entire life of the
+V0 surface.
+
+MoeMemos' own OpenAPI spec (`Packages/Services/Sources/MemosV0Service/openapi.yaml`)
+declares the memo request bodies as:
+
+```yaml
+CreateMemoRequest:
+  properties:
+    resourceIdList:
+      type: array
+      items:
+        type: integer      # <- a FLAT array of ids
+PatchMemoRequest:
+  properties:
+    resourceIdList:
+      type: array
+      items:
+        type: integer
+```
+
+`resourceList` does not appear in either request schema. It is a
+field of the **`Memo`** schema — i.e. the *response* shape, where it
+holds an array of full `Resource` objects.
+
+Our `v0ResourceListIDs` read `resourceList` and expected objects with
+an `id` key. MoeMemos sends `resourceIdList` as bare integers. The
+lookup therefore found nothing on **every** request, `resourceIDs`
+came back empty, and `v0LinkResourcesToMemo` was never called. Both
+the create path and the PATCH path were affected — they share
+`v0ResourceListIDsFromBody`.
+
+**Why no test caught it.** Every existing regression test
+hand-wrote the `resourceList` *object* form into the request body —
+a shape the client cannot produce. The tests were green and
+asserting a fiction. This is the same class of mistake as the
+hand-written `{"seconds": N}` timestamp fixtures: a fixture
+invented from a plausible-looking guess rather than read off the
+real wire.
+
+**Fix.** `v0ResourceListIDs` reads `resourceIdList` first, as a flat
+array of integer ids, via a new `v0ResourceIDFromScalar` that accepts
+`json.Number` (the client decodes 64-bit ids as `Long`, so the body
+is decoded with `UseNumber`), `float64`, and a numeric string. The
+object-form `resourceList` is still accepted for older forks and
+hand-rolled clients. Both V0 request shapers now also strip
+`resourceIdList` alongside `resourceList`, so it cannot leak into the
+V1 `update_mask`.
+
+**Testing rule this establishes.** For the V0 surface, a request
+fixture must be copied from the client's `openapi.yaml` or from a
+recorded real request. A test that hand-writes a request body is only
+valid if the shape is one a real client can emit; otherwise it pins
+whatever the server happens to do rather than what the client
+actually asks for.
+
+**Test.** `TestV0MemoWithResourceIdListBindsUpload` sends the
+client's exact `{"resourceIdList": [<id>]}` payload and asserts both
+the PATCH response and the `attachments.memo` column.
+`TestV0MemoImageIsDownloadableAfterLink` runs the whole
+create → upload → PATCH → download sequence for both PRIVATE and
+PUBLIC memos, checking the download in *both* the orphan window and
+the steady state (after the row has a memo, authorization goes
+through `memos.ViewRule` instead of the `creator` branch — a
+different code path, so a test covering only one proves nothing about
+the other).

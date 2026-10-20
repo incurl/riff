@@ -13,6 +13,17 @@ export const uploadService = {
   async uploadFile(localFile: LocalFile, signal?: AbortSignal): Promise<Attachment> {
     const { file, motionMedia } = localFile;
     const mediaMetadata = await localFile.mediaMetadata;
+    // The server-side `UploadAttachment` spec accepts a missing
+    // `attachment.memo` (an "orphan" upload). The row lands with the
+    // `memo` column empty and a `creator` column stamped with the
+    // uploader; the SPA then names the file on the subsequent
+    // `CreateMemo` (or `UpdateMemo`) request, and the server binds the
+    // row to the new memo inside the same RPC (`CreateMemo` honours
+    // `req.Memo.Attachments[]` since the
+    // `pb/connect/memo_bind_attachments.go` rebind pass). The SPA does
+    // not need to thread a memo name down — both the inline-image
+    // upload (which happens during a brand-new memo edit) and the
+    // end-of-edit drag upload land first as orphans.
     const spec = create(UploadAttachmentSpecSchema, {
       attachment: create(AttachmentSchema, {
         filename: file.name,

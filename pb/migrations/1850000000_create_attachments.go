@@ -83,10 +83,18 @@ func init() {
 			CascadeDelete: true, // deleting the parent memo removes its attachments
 		})
 		r.Fields.Add(&core.FileField{
-			Name:     "blob",
-			Required: false,
+			Name:      "blob",
+			Required:  false,
 			MaxSelect: 1,
-			MaxSize:  32 * 1024 * 1024, // 32 MB
+			MaxSize:   32 * 1024 * 1024, // 32 MB
+			// `Protected` makes PocketBase's native file
+			// server (`GET /api/files/{collection}/{id}/{file}`)
+			// evaluate the collection's `ViewRule` before it
+			// serves the bytes. Without it the file is
+			// downloadable by anyone who knows the URL, which
+			// bypasses the owning memo's visibility. See
+			// pb/migrations/1880000000_protect_attachment_blobs.go.
+			Protected: true,
 			MimeTypes: []string{
 				// Images
 				"image/png", "image/jpeg", "image/jpg", "image/gif",

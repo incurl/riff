@@ -67,7 +67,16 @@ func recordToUser(rec *core.Record) *v1.User {
 	avatarFilenames := rec.GetStringSlice("avatar")
 	var avatarURL string
 	if len(avatarFilenames) > 0 {
-		avatarURL = "/api/files/users/" + rec.Id + "/" + avatarFilenames[0]
+		// The `/file/users/{id}/avatar` surface (see
+		// `pb/api/file_routes.go`) serves the avatar with
+		// the same authorization the rest of the public
+		// file surface uses. The native
+		// `/api/files/users/...` route is not used: the
+		// `users.avatar` field is not `Protected`, so the
+		// native route serves the bytes to anybody who
+		// knows the id, and it would bypass the caller
+		// token that the `ViewRule` expects.
+		avatarURL = "/file/users/" + rec.Id + "/avatar"
 	}
 
 	return &v1.User{

@@ -93,7 +93,15 @@ export const memoService = {
       space?: string;
     },
   ): Promise<{ memoName: string; hasChanges: boolean; moved?: boolean }> {
-    // 1. Upload local files first
+    // 1. Upload local files first. The server allows memo-less specs as
+    // "orphan" uploads (the row lands with `attachments.memo` empty and
+    // a `creator` column stamped with the uploader); the SPA then names
+    // each uploaded file on the subsequent `CreateMemo` / `UpdateMemo`
+    // request, and the server binds the orphans to the memo inside the
+    // same RPC (see `pb/connect/memo_bind_attachments.go`). This shape
+    // matches the V0 client on MoeMemos where the upload happens *before*
+    // the memo edit, so the SPA — which used to send nothing on the spec
+    // and watch the server reject the upload — now has a working path.
     const newAttachments = await uploadService.uploadFiles(state.localFiles);
     const allAttachments = [...state.metadata.attachments, ...newAttachments];
 

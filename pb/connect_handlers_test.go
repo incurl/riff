@@ -122,7 +122,12 @@ func TestAttachmentService_PublicAttachmentVisibleAnonymously(t *testing.T) {
 	assert.Equal(t, "attachments/"+att.Id, a.GetName())
 	assert.True(t, strings.HasSuffix(a.GetFilename(), ".po33"), "filename = %q", a.GetFilename())
 	assert.Equal(t, "application/octet-stream", a.GetType())
-	assert.True(t, strings.HasPrefix(a.GetExternalLink(), "/api/files/attachments/"+att.Id+"/"),
+	// The external link points at riff's own `/file/...`
+	// surface, not PocketBase's native `/api/files/...`
+	// route: the native route wants a short-lived file
+	// token for a `Protected` field, and serves the bytes
+	// to anyone who knows the id for an unprotected one.
+	assert.True(t, strings.HasPrefix(a.GetExternalLink(), "/file/attachments/"+att.Id+"/"),
 		"external link = %q", a.GetExternalLink())
 	assert.NotNil(t, a.GetCreateTime())
 }
@@ -178,7 +183,7 @@ func TestAttachmentService_ArchiveAttachmentVisible(t *testing.T) {
 	a := resp.GetAttachments()[0]
 	assert.Equal(t, "attachments/"+rec.Id, a.GetName())
 	assert.Equal(t, "application/zip", a.GetType())
-	assert.True(t, strings.HasPrefix(a.GetExternalLink(), "/api/files/attachments/"+rec.Id+"/"),
+	assert.True(t, strings.HasPrefix(a.GetExternalLink(), "/file/attachments/"+rec.Id+"/"),
 		"external link = %q", a.GetExternalLink())
 }
 

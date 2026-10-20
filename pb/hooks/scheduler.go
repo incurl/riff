@@ -3,6 +3,7 @@ package hooks
 import (
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/pocketbase/pocketbase/core"
@@ -30,29 +31,131 @@ var schedulerLog = slog.Default()
 // is the only safe way to stop the loop in a
 // long-running test or a production server.
 func registerScheduler(app core.App) {
-	shutdown := make(chan struct{})
-	schedulerShutdowns[app] = append(schedulerShutdowns[app], shutdown)
+	state := &schedulerState{shutdown: make(chan struct{})}
+	schedulerStatesMu.Lock()
+	schedulerShutdowns[app] = state
+	schedulerStatesMu.Unlock()
 	app.OnTerminate().BindFunc(func(e *core.TerminateEvent) error {
-		for _, ch := range schedulerShutdowns[app] {
-			select {
-			case ch <- struct{}{}:
-			default:
-			}
-		}
-		delete(schedulerShutdowns, app)
+		stopSchedulerLoops(app)
+		return e.Next()
+	})
+	// The same teardown on `OnBootstrapClear`, which is
+	// the hook a test's `ClearBootstrap` cleanup triggers
+	// (`OnTerminate` does NOT fire there).
+	//
+	// The shutdown signal is sent FIRST: the wait blocks
+	// until the loop returns, and the loop only returns
+	// at its next select — which it reaches only after the
+	// shutdown channel is signalled. Waiting without
+	// signalling would deadlock the teardown.
+	//
+	// Both hooks route through `stopSchedulerLoops`,
+	// which removes the map entry as well as signalling
+	// and waiting. The OnTerminate path used to delete
+	// the entry inline and this one did not, so a
+	// ClearBootstrap-only teardown — which is what every
+	// test cleanup does — leaked one entry per app into a
+	// package-level map keyed by the app value. Keyed on
+	// an app that never terminates, the leak is small, but
+	// it is a map that only ever grows.
+	app.OnBootstrapClear().BindFunc(func(e *core.BootstrapEvent) error {
+		stopSchedulerLoops(app)
 		return e.Next()
 	})
 
-	go runSchedulerLoop(app, shutdown)
+	state.workers.Add(1)
+	go func() {
+		defer state.workers.Done()
+		runSchedulerLoop(app, state.shutdown)
+	}()
 }
 
 // schedulerShutdowns holds the per-app shutdown
-// channels. The map is process-global; multiple
+// channels AND the per-app wait group.
+//
+// The map is process-global; multiple
 // registerScheduler calls on different apps
 // (which the test suite does for isolation) each
 // get their own channel and are torn down by
 // OnTerminate.
-var schedulerShutdowns = map[core.App][]chan struct{}{}
+//
+// The wait group must be PER APP, not package-level: a
+// package-level `sync.WaitGroup` cannot be waited on
+// twice concurrently, and two apps tearing down at the
+// same time would panic with "sync: WaitGroup is
+// reused before previous Wait has returned".
+type schedulerState struct {
+	shutdown chan struct{}
+	workers  sync.WaitGroup
+}
+
+var schedulerShutdowns map[core.App]*schedulerState
+
+// schedulerStatesMu guards schedulerShutdowns. The map
+// is written from `registerScheduler` (once per app) and
+// read from the teardown hooks; two apps booting
+// concurrently would otherwise race on the map itself.
+var schedulerStatesMu sync.Mutex
+
+func init() {
+	schedulerShutdowns = map[core.App]*schedulerState{}
+}
+
+// stopSchedulerLoops signals the scheduler loops of
+// one app to return, waits for them to unwind, and drops
+// the app's map entry.
+//
+// It is the single teardown path for both
+// `OnTerminate` and `OnBootstrapClear`; whichever fires
+// first does the work and the second finds nothing to do.
+//
+// The channels are CLOSED, not sent on. The loop
+// parks in a `select` on the shutdown channel and
+// the ticker; an unbuffered send is only received
+// if the loop happens to be parked at that exact
+// moment, and the `default:` branch of a
+// non-blocking send silently drops it otherwise. A
+// closed channel is seen by every future select, so
+// the loop always returns.
+//
+// The close is guarded per app so a double stop
+// (the OnTerminate hook and the OnBootstrapClear
+// hook can both fire) does not panic.
+//
+// Every read and write of `schedulerShutdowns` happens
+// under `schedulerStatesMu`. The reads used to be bare:
+// `registerScheduler` writes the map while the loop
+// goroutine and the teardown hooks read it, and an
+// unsynchronised read concurrent with a write is a
+// `fatal error: concurrent map read and map write` —
+// an unrecoverable crash, not the recoverable data race
+// the race detector reports. The mutex is released
+// BEFORE the wait, so a teardown never holds it across
+// the loop's exit.
+func stopSchedulerLoops(app core.App) {
+	schedulerStatesMu.Lock()
+	state := schedulerShutdowns[app]
+	delete(schedulerShutdowns, app)
+	schedulerStatesMu.Unlock()
+	if state == nil {
+		return
+	}
+	select {
+	case <-state.shutdown:
+		// Already closed: the receive above took
+		// the zero value, so a close would panic.
+		// Nothing to do.
+	default:
+		close(state.shutdown)
+	}
+	// Wait for the loop to unwind. The shutdown signal
+	// makes it return at its next select, but without
+	// the wait the app can close its database while a
+	// sweep is still running — and a test's data
+	// directory can be torn down while the sweep is
+	// still writing into it.
+	state.workers.Wait()
+}
 
 // runSchedulerLoop is the worker body. It ticks
 // every minute and runs all registered sweep

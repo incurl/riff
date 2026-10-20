@@ -288,7 +288,7 @@ func memoAttachments(app core.App, memoID string) []*v1.Attachment {
 		"memo={:id}", "-created", 0, 0, map[string]any{"id": memoID})
 	if err == nil {
 		for _, r := range rows {
-			if a := resourceToAttachment(r); a != nil {
+			if a := resourceToAttachment(app, r); a != nil {
 				out = append(out, a)
 			}
 		}

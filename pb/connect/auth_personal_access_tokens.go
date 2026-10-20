@@ -40,6 +40,23 @@ const personalAccessTokenCollection = "personal_access_tokens"
 // first match because the unique index on token_hash makes a
 // second-row match impossible in practice.
 //
+// ResolveFilePersonalAccessToken resolves a bearer token that may be a
+// riff personal access token, for the file server in pb/api.
+//
+// The file server is not a Connect procedure, so it cannot use the
+// withAuth interceptor's context plumbing; it needs the token
+// resolved from the raw Authorization header. This wrapper exposes
+// exactly that and nothing more: a non-PAT token yields (nil, nil),
+// so the caller can treat the request as unauthenticated.
+//
+// The `memos_pat_` prefix is checked before the (relatively
+// expensive) bcrypt scan, so a PocketBase auth token costs nothing
+// here — the file server's normal session path goes through
+// PocketBase's own loadAuthToken middleware instead.
+func ResolveFilePersonalAccessToken(app core.App, tok string) (*core.Record, error) {
+	return resolvePersonalAccessToken(app, tok)
+}
+
 // Best-effort last_used_at: a successful verify stamps the row's
 // last_used_at column so the SPA can show "last used N hours ago".
 // The write is wrapped in a recover() because the write is on the

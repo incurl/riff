@@ -503,7 +503,7 @@ func readAvatarBytes(t *testing.T, app core.App, rec *core.Record) []byte {
 // TestUpdateUser_Avatar_DataURL_WritesFileAndPersistsFilename pins the
 // "avatar upload is not saved" regression: the SPA's UpdateAccountDialog
 // posts a base64 data URL through `User.avatar_url` and expects
-// recordToUser to return a working `/api/files/users/{id}/{name}` URL
+// recordToUser to return a working `/file/users/{id}/avatar` URL
 // afterwards. The bytes should also be retrievable from PocketBase's
 // filesystem at the canonical key.
 func TestUpdateUser_Avatar_DataURL_WritesFileAndPersistsFilename(t *testing.T) {
@@ -521,11 +521,18 @@ func TestUpdateUser_Avatar_DataURL_WritesFileAndPersistsFilename(t *testing.T) {
 	require.NoError(t, err)
 
 	// The returned User has a working avatar URL on the
-	// `/api/files/users/{id}/{filename}` shape, not a JSON-looking
+	// `/file/users/{id}/avatar` shape, not a JSON-looking
 	// one and not a base64 data URL.
+	//
+	// The URL points at riff's own `/file/...` surface
+	// rather than PocketBase's native `/api/files/...`
+	// route: the native route serves the bytes to anyone
+	// who knows the id (the `users.avatar` field is not
+	// `Protected`), and the `/file/...` surface
+	// authorizes the caller against the `ViewRule`.
 	avatarURL := updated.GetAvatarUrl()
-	assert.True(t, strings.HasPrefix(avatarURL, "/api/files/users/"+alice.Id+"/"),
-		"avatar URL must point at the files endpoint, got %q", avatarURL)
+	assert.True(t, strings.HasPrefix(avatarURL, "/file/users/"+alice.Id+"/"),
+		"avatar URL must point at the file endpoint, got %q", avatarURL)
 	assert.NotContains(t, avatarURL, "[", "avatar URL must not be the raw JSON-sliced filename")
 	assert.NotContains(t, avatarURL, "base64,", "avatar URL must not be the submitted data URL")
 
@@ -651,7 +658,7 @@ func TestRecordToUser_AvatarFileField_ProducesRelativeURL(t *testing.T) {
 	// One filename → one URL.
 	rec.SetRaw("avatar", []string{"abc123.png"})
 	u := recordToUser(rec)
-	assert.Equal(t, "/api/files/users/"+alice.Id+"/abc123.png", u.GetAvatarUrl())
+	assert.Equal(t, "/file/users/"+alice.Id+"/avatar", u.GetAvatarUrl())
 
 	// Empty slice → empty URL, never a path with `["..."]`.
 	rec.SetRaw("avatar", []string{})

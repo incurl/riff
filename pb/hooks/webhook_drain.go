@@ -106,6 +106,10 @@ var webhookDrainLog = slog.Default()
 // reference.
 func registerWebhookDrain(app core.App) {
 	stopCh := make(chan struct{})
+	state := &webhookDrainState{}
+	webhookDrainStatesMu.Lock()
+	webhookDrainStates[app] = state
+	webhookDrainStatesMu.Unlock()
 	app.OnTerminate().BindFunc(func(e *core.TerminateEvent) error {
 		// Non-blocking close: a double-close from
 		// a forced shutdown is benign because
@@ -118,13 +122,62 @@ func registerWebhookDrain(app core.App) {
 		default:
 			close(stopCh)
 		}
+		// Wait for the drain loop to unwind. The stop
+		// signal makes it return at its next tick
+		// boundary, but without the wait the app can
+		// close its database while a batch is still
+		// being processed — and a test's data directory
+		// can be torn down while the batch is still
+		// writing into it.
+		state.workers.Wait()
+		return e.Next()
+	})
+	// The same wait on `OnBootstrapClear`, which is the
+	// hook a test's `ClearBootstrap` cleanup triggers
+	// (`OnTerminate` does NOT fire there).
+	//
+	// The stop signal is sent FIRST: the wait blocks
+	// until the loop returns, and the loop only returns
+	// at its next tick — which it reaches only after the
+	// stop channel is closed. Waiting without closing it
+	// would deadlock the teardown.
+	app.OnBootstrapClear().BindFunc(func(e *core.BootstrapEvent) error {
+		select {
+		case <-stopCh:
+		default:
+			close(stopCh)
+		}
+		state.workers.Wait()
 		return e.Next()
 	})
 	app.OnServe().BindFunc(func(e *core.ServeEvent) error {
-		go webhookDrainLoop(app, stopCh)
+		state.workers.Add(1)
+		go func() {
+			defer state.workers.Done()
+			webhookDrainLoop(app, stopCh)
+		}()
 		return e.Next()
 	})
 }
+
+// webhookDrainStates holds the per-app drain state.
+//
+// The wait group must be PER APP, not package-level: a
+// package-level `sync.WaitGroup` cannot be waited on
+// twice concurrently, and two apps tearing down at the
+// same time would panic with "sync: WaitGroup is
+// reused before previous Wait has returned".
+type webhookDrainState struct {
+	workers sync.WaitGroup
+}
+
+var webhookDrainStates = map[core.App]*webhookDrainState{}
+
+// webhookDrainStatesMu guards webhookDrainStates. The
+// map is written from `registerWebhookDrain` (once per
+// app) and read from the teardown hooks; two apps
+// booting concurrently would otherwise race on the map.
+var webhookDrainStatesMu sync.Mutex
 
 // webhookDrainLoop is the worker. It sleeps for
 // webhookDrainTick, wakes up, processes up to

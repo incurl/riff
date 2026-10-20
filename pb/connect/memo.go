@@ -93,6 +93,15 @@ func (s *MemoServer) ListMemos(ctx context.Context, req *v1.ListMemosRequest) (*
 		if !ok {
 			continue
 		}
+		// Skip the upload stubs the V0 (Memos 0.21)
+		// resource path creates. A stub is an
+		// implementation detail of the upload, not a
+		// memo the user wrote, and it must not appear in
+		// the SPA feed as an empty memo (see
+		// `pb/connect/memo_stub.go`).
+		if IsStubMemoContent(r.GetString("content")) {
+			continue
+		}
 		out = append(out, recordToMemo(s.app, r))
 	}
 	return &v1.ListMemosResponse{Memos: out, NextPageToken: ""}, nil
@@ -145,7 +154,8 @@ func (s *MemoServer) GetMemo(ctx context.Context, req *v1.GetMemoRequest) (*v1.M
 // authenticated caller, parses hashtags into `tags`, and validates the
 // visibility/space combination (including active Space membership).
 func (s *MemoServer) CreateMemo(ctx context.Context, req *v1.CreateMemoRequest) (*v1.Memo, error) {
-	if CurrentUser(ctx) == nil {
+	viewer := CurrentUser(ctx)
+	if viewer == nil {
 		return nil, connect.NewError(connect.CodeUnauthenticated, "authentication required")
 	}
 	if req.Memo == nil {
@@ -172,6 +182,31 @@ func (s *MemoServer) CreateMemo(ctx context.Context, req *v1.CreateMemoRequest) 
 	if err := createRecordRequest(ctx, s.app, rec); err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err.Error())
 	}
+
+	// Bind any attachment ids the SPA named on the request to this newly
+	// created memo. The SPA uploads files *before* the memo exists (because
+	// the unified `attachments` collection used to require `attachment.memo`
+	// to point at a memo that already existed); the spec now accepts
+	// memo-less uploads (see `attachment_upload.go::uploadSpec`) and the
+	// upload finishes with the row's `memo` column empty. This pass rewires
+	// every named attachment to the new memo so the file becomes a child of
+	// the memo that was just created. We only re-bind the caller's own
+	// orphan rows to prevent a stranger from pivoting their attachment onto
+	// someone else's memo — the `attachments.memo` column null check is the
+	// authoritative "still orphan" test because bound rows keep a non-empty
+	// `memo`. Attachments that already belong to another memo are rejected
+	// as `INVALID_ARGUMENT` rather than silently moved (matches
+	// `SetMemoAttachments` policy).
+	if len(req.Memo.GetAttachments()) > 0 {
+		if err := bindOrphanAttachmentsToMemo(ctx, s.app, rec.Id, viewer.Id, req.Memo.GetAttachments()); err != nil {
+			// A failed binding pass leaves the memo in place but orphans
+			// the attachments. The SPA decides whether to retry or surface
+			// the error; deleting the memo would discard content the user
+			// already saw, so we err out instead.
+			return nil, err
+		}
+	}
+
 	return recordToMemo(s.app, rec), nil
 }
 
@@ -240,6 +275,21 @@ func (s *MemoServer) UpdateMemo(ctx context.Context, req *v1.UpdateMemoRequest) 
 			return nil, connect.NewError(connect.CodeNotFound, "space not found")
 		}
 		rec.Set("space", spaceID)
+	}
+
+	// `attachments` is the V1 mask entry that the SPA sets when the user adds
+	// new files to an existing memo by drag-and-drop. The SPA uploads the
+	// file (now allowed to be memo-less — see `attachment_upload.go::uploadSpec`)
+	// and then names the resulting `Attachment.name` on the patch. We bind
+	// those orphan rows to this memo inside the same RPC so the SPA does not
+	// need a separate `SetMemoAttachments` round-trip. Attachments that
+	// already belong to a *different* memo are rejected as `INVALID_ARGUMENT`
+	// rather than silently moved, mirroring `SetMemoAttachments`'s cross-memo
+	// guard.
+	if targets("attachments") {
+		if err := bindOrphanAttachmentsToMemo(ctx, s.app, id, viewerID, req.Memo.GetAttachments()); err != nil {
+			return nil, err
+		}
 	}
 
 	if err := updateRecordRequest(ctx, s.app, rec); err != nil {
@@ -344,6 +394,7 @@ func (s *MemoServer) CreateMemoComment(ctx context.Context, req *v1.CreateMemoCo
 	}
 
 	var comment *core.Record
+	viewer := CurrentUser(ctx)
 	err = s.app.RunInTransaction(func(txApp core.App) error {
 		memos, err := txApp.FindCollectionByNameOrId("memos")
 		if err != nil {
@@ -357,6 +408,21 @@ func (s *MemoServer) CreateMemoComment(ctx context.Context, req *v1.CreateMemoCo
 		}
 		if err := createRecordRequest(ctx, txApp, rec); err != nil {
 			return err
+		}
+
+		// Mirror `CreateMemo`: rebind any orphan attachments the SPA
+		// just uploaded (its inline-image uploads land first as
+		// orphans because the memo doesn't exist yet — see
+		// `pb/connect/memo_bind_attachments.go`). The rebind runs in
+		// the same transaction as the comment-creation so a rejected
+		// target cannot leave a half-bound memo behind. The viewer
+		// identity is required for the cross-user rebind guard; both
+		// `CreateMemo` and `CreateMemoComment` feed from the same
+		// helper.
+		if len(req.Comment.GetAttachments()) > 0 {
+			if err := bindOrphanAttachmentsToMemo(ctx, txApp, rec.Id, viewer.Id, req.Comment.GetAttachments()); err != nil {
+				return err
+			}
 		}
 
 		rels, err := txApp.FindCollectionByNameOrId("memo_relations")

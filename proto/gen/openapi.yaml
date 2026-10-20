@@ -856,20 +856,9 @@ paths:
     /api/v1/memos/{memo}:
         get:
             tags:
-                - SketchService
-            description: |-
-                GetSketch returns a single sketch memo by
-                 resource name, with the SketchPayload
-                 envelope populated. Used by the SPA to
-                 render the in-page sketch player on the
-                 memo detail page without re-listing
-                 every sketch the caller owns. The caller
-                 must be the sketch author or a space
-                 member (per `canViewMemo`); a non-viewer
-                 gets NotFound rather than Forbidden so
-                 a private sketch's existence is not
-                 leaked to a stranger.
-            operationId: SketchService_GetSketch
+                - MemoService
+            description: GetMemo gets a memo.
+            operationId: MemoService_GetMemo
             parameters:
                 - name: memo
                   in: path
@@ -1666,6 +1655,61 @@ paths:
                 - name: shareToken
                   in: path
                   description: Required. The opaque bearer token extracted from the share URL.
+                  required: true
+                  schema:
+                    type: string
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Memo'
+                default:
+                    description: Default error response
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Status'
+    /api/v1/sketches/{name}:
+        get:
+            tags:
+                - SketchService
+            description: |-
+                GetSketch returns a single sketch memo by
+                 resource name, with the SketchPayload
+                 envelope populated. Used by the SPA to
+                 render the in-page sketch player on the
+                 memo detail page without re-listing
+                 every sketch the caller owns. The caller
+                 must be the sketch author or a space
+                 member (per `canViewMemo`); a non-viewer
+                 gets NotFound rather than Forbidden so
+                 a private sketch's existence is not
+                 leaked to a stranger.
+
+                 The path is deliberately NOT `/api/v1/{name=memos/*}`:
+                 that is MemoService.GetMemo's path, and two RPCs
+                 claiming the same HTTP method + path makes the
+                 OpenAPI generator drop one of them (gnostic keeps
+                 the first and silently discards the second).
+                 The collision cost the instance its
+                 `MemoService_GetMemo` operation, which the MCP
+                 catalog still curates — so the server refused to
+                 start ("curated OpenAPI operation
+                 \"MemoService_GetMemo\" not found").
+
+                 `/api/v1/sketches/{name}` is the sketch-scoped
+                 spelling of the same resource; the SPA calls the
+                 Connect procedure, not the REST path, so nothing
+                 depends on the old shape.
+            operationId: SketchService_GetSketch
+            parameters:
+                - name: name
+                  in: path
+                  description: |-
+                    The resource name of the sketch memo.
+                     Format: memos/{memo}
                   required: true
                   schema:
                     type: string

@@ -197,12 +197,31 @@ without a memo, so the V0 upload handler
 creates a hidden stub memo first and uploads
 against it. The stub has the
 zero-width-space sentinel content `\u200b` and
-PRIVATE visibility. The V0 list shaper
-(`v0ShapeMemoList` → `isV0StubMemo`) filters
-stubs out, so the V0 client never sees them.
-The V1 client sees the stubs (they're real
-memos from its perspective); a future
-"delete stubs" sweep is a one-liner.
+PRIVATE visibility. The sentinel lives in
+`pb/connect/memo_stub.go`
+(`connect.StubMemoContent`), because both
+surfaces have to recognise it.
+
+The V0 client links the uploaded resource to its
+memo in a third step: the `PATCH /api/v1/memo/{id}`
+that carries a `resourceList` naming the
+resource. The PATCH handler reads that list
+before dispatching to the V1 handler and moves
+each named attachment onto the target memo
+(`v0LinkResourcesToMemo` in
+`pb/api/upstream_memos_v0_attach.go`); the
+stub is deleted once it holds nothing. The
+shaper strips `resourceList` so it does not end
+up in the V1 `update_mask`, where the V1
+`UpdateMemo` handler would ignore it.
+
+Both list surfaces hide a stub: the V0 list
+shaper (`v0ShapeMemoList` → `isV0StubMemo`)
+filters it, and so does the V1 `ListMemos`
+handler, so a stub never reaches the SPA feed.
+The stub test ignores visibility on purpose — a
+stub that a later V0 edit flipped to PUBLIC is
+still a stub and must still be hidden.
 
 ## Body wraps
 

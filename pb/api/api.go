@@ -110,6 +110,17 @@ func Register(app core.App, limiter ratelimit.Limiter) {
 		e.Router.POST("/api/po33/sketches/pending/ack", ackPendingPullHandler)
 		e.Router.GET("/api/po33/sketches/{memoId}/download", deviceSketchDownloadHandler)
 
+		// The public file surface at /file/... . These are
+		// the URLs the SPA, the markdown renderer, and the
+		// share links emit (see web/src/utils/attachment.ts).
+		// Before this was registered they fell through to the
+		// SPA's catch-all route and answered 200 with
+		// index.html — a broken image rather than a 404. The
+		// handler enforces the attachment's memo visibility
+		// and supports ?thumbnail=true, ?motion=true, and
+		// ?share_token=…; see file_routes.go and file_authz.go.
+		mountFileRoutes(e.Router, app)
+
 		// Upstream-Memos REST surface at /memos/api/...
 		// 97 routes (84 proto-annotated + 3 file server
 		// + 1 SSE). The connect_proxy flavor dispatches

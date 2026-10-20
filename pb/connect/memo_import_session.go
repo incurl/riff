@@ -133,16 +133,63 @@ func importManagerGet() *importManager {
 
 // installImportManager starts the sweeper goroutine.
 func installImportManager(app core.App) {
+	state := &importSweepState{}
+	importSweepStatesMu.Lock()
+	importSweepStates[app] = state
+	importSweepStatesMu.Unlock()
 	mgr := importManagerGet()
 	mgr.setDir(filepath.Join(app.DataDir(), "imports"))
 	stopCh := make(chan struct{})
 	mgr.stopCh = stopCh
 	app.OnTerminate().BindFunc(func(e *core.TerminateEvent) error {
 		mgr.stopOnce.Do(func() { close(stopCh) })
+		// Wait for the sweep loop to unwind. The stop
+		// signal makes it return at its next tick, but
+		// without the wait the app can tear its data
+		// directory down while the sweep is still
+		// removing a staged file from it.
+		state.workers.Wait()
 		return e.Next()
 	})
-	go mgr.sweepLoop(stopCh)
+	// The same wait on `OnBootstrapClear`, which is the
+	// hook a test's `ClearBootstrap` cleanup triggers
+	// (`OnTerminate` does NOT fire there).
+	//
+	// The stop signal is sent FIRST: the wait blocks
+	// until the sweep loop returns, and the loop only
+	// returns at its next tick — which it reaches only
+	// after the stop channel is closed. Waiting without
+	// closing it would deadlock the teardown.
+	app.OnBootstrapClear().BindFunc(func(e *core.BootstrapEvent) error {
+		mgr.stopOnce.Do(func() { close(stopCh) })
+		state.workers.Wait()
+		return e.Next()
+	})
+	state.workers.Add(1)
+	go func() {
+		defer state.workers.Done()
+		mgr.sweepLoop(stopCh)
+	}()
 }
+
+// importSweepStates holds the per-app sweep state.
+//
+// The wait group must be PER APP, not package-level: a
+// package-level `sync.WaitGroup` cannot be waited on
+// twice concurrently, and two apps tearing down at the
+// same time would panic with "sync: WaitGroup is
+// reused before previous Wait has returned".
+type importSweepState struct {
+	workers sync.WaitGroup
+}
+
+var importSweepStates = map[core.App]*importSweepState{}
+
+// importSweepStatesMu guards importSweepStates. The map
+// is written from `installImportManager` (once per app)
+// and read from the teardown hooks; two apps booting
+// concurrently would otherwise race on the map.
+var importSweepStatesMu sync.Mutex
 
 // setDir overrides the staging directory.
 func (m *importManager) setDir(dir string) {

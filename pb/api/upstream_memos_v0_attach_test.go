@@ -146,9 +146,7 @@ func TestV0MemoWithAttachmentIsNotSplit(t *testing.T) {
 	require.Equal(t, http.StatusOK, w3.Code,
 		"V0 memo patch must answer 200, got %d: %s", w3.Code, w3.Body.String())
 
-	// The V1 list is what the SPA feed renders. The stub
-	// must not show up there, even if the upload never
-	// got a matching PATCH.
+	// The V1 list is what the SPA feed renders.
 	v1List := doReq(http.MethodGet, "/api/v1/memos?pageSize=50", "")
 	require.Equal(t, http.StatusOK, v1List.Code,
 		"V1 memo list must answer 200, got %d: %s", v1List.Code, v1List.Body.String())
@@ -156,26 +154,25 @@ func TestV0MemoWithAttachmentIsNotSplit(t *testing.T) {
 	require.NoError(t, json.Unmarshal(v1List.Body.Bytes(), &v1Body))
 	for _, raw := range v1Body["memos"].([]any) {
 		m := raw.(map[string]any)
-		assert.NotEqual(t, stubMemoSentinel, m["content"],
-			"the upload stub memo must not appear in the SPA feed")
+		assert.NotEqual(t, connect.StubMemoContent, m["content"],
+			"a legacy upload stub must not appear in the SPA feed")
 	}
 
-	// The memos table is what the SPA feed renders. The
-	// stub memo the upload created must not be left
-	// behind, and the real memo must own the attachment.
+	// The memos table must hold exactly the one memo the client
+	// created — no phantom row for the upload.
 	memos := listMemosForTest(t, app)
 	var realID string
 	for _, m := range memos {
 		name, _ := m["id"].(string)
 		content, _ := m["content"].(string)
 		t.Logf("memo=%s content=%q", name, content)
-		assert.NotEqual(t, stubMemoSentinel, content,
-			"the upload stub memo must not leak into the feed")
 		if content == "from V0 with a file" {
 			realID = name
 		}
 	}
 	require.NotEmpty(t, realID, "the memo created via V0 must exist")
+	require.Len(t, memos, 1,
+		"a V0 upload must not manufacture a second memo row")
 
 	// The attachment must hang off the real memo.
 	owners := attachmentOwners(t, app)
@@ -222,17 +219,18 @@ func listMemosForTest(t *testing.T, app core.App) []map[string]any {
 	return out
 }
 
-// TestV0UploadStubIsHiddenFromTheSPAFeed is the
-// regression for the second half of the split-memo
-// symptom: a stub memo left behind by an upload that was
-// never linked to a real memo still showed up in the SPA
-// feed as an empty memo.
+// TestV0UploadLeavesNoPhantomMemo is the regression for the split-memo
+// symptom. The V0 client uploads a resource before it has a memo to bind
+// it to. When `attachments.memo` was required, that upload manufactured a
+// hidden stub memo to hang the file on, and the stub was the empty memo the
+// user saw alongside their real one whenever the binding never completed.
 //
-// The stub is an implementation detail of the V0 upload
-// path (the V1 upload requires a memo, the V0 upload has
-// none to give), so it must be invisible on both the V0
-// list and the V1 list the SPA renders.
-func TestV0UploadStubIsHiddenFromTheSPAFeed(t *testing.T) {
+// The upload now lands as an *unlinked attachment* — upstream's own model,
+// where `Attachment.memo` is optional and `GetAttachment` documents that an
+// unlinked attachment is visible only to its uploader. No memo row is
+// created, so there is nothing to leak into either feed and nothing for a
+// later request to clean up.
+func TestV0UploadLeavesNoPhantomMemo(t *testing.T) {
 	app := newTestApp(t)
 	hooks.Register(app)
 
@@ -301,23 +299,26 @@ func TestV0UploadStubIsHiddenFromTheSPAFeed(t *testing.T) {
 	require.Equal(t, http.StatusOK, w2.Code,
 		"V0 resource upload must answer 200, got %d: %s", w2.Code, w2.Body.String())
 
-	// The stub exists in the database (the upload needs
-	// a memo to hang the file on).
+	// The upload must not have created a memo at all.
 	memos := listMemosForTest(t, app)
-	require.Len(t, memos, 1, "the upload must have created exactly one stub")
-	assert.Equal(t, stubMemoSentinel, memos[0]["content"],
-		"the upload must have created a stub memo")
+	require.Len(t, memos, 0,
+		"an upload with no memo must leave the memos table untouched")
 
-	// The V0 list must not show it.
+	// The file itself must survive as an unlinked attachment.
+	owners := attachmentOwners(t, app)
+	require.Equal(t, []string{""}, owners,
+		"the uploaded file must land as an unlinked attachment, owned by nobody")
+
+	// Neither list can show a memo that does not exist.
 	w3 := doReq(http.MethodGet, "/api/v1/memo", "")
 	require.Equal(t, http.StatusOK, w3.Code,
 		"V0 memo list must answer 200, got %d: %s", w3.Code, w3.Body.String())
 	var v0List []any
 	require.NoError(t, json.Unmarshal(w3.Body.Bytes(), &v0List))
 	assert.Empty(t, v0List,
-		"the V0 list must not show the upload stub: %s", w3.Body.String())
+		"the V0 list must be empty: %s", w3.Body.String())
 
-	// The V1 list (the SPA feed) must not show it either.
+	// The V1 list (the SPA feed) must be empty too.
 	w4 := doReq(http.MethodGet, "/api/v1/memos?pageSize=50", "")
 	require.Equal(t, http.StatusOK, w4.Code,
 		"V1 memo list must answer 200, got %d: %s", w4.Code, w4.Body.String())
@@ -325,5 +326,5 @@ func TestV0UploadStubIsHiddenFromTheSPAFeed(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w4.Body.Bytes(), &v1Body))
 	v1Memos, _ := v1Body["memos"].([]any)
 	assert.Empty(t, v1Memos,
-		"the SPA feed must not show the upload stub: %s", w4.Body.String())
+		"the SPA feed must be empty: %s", w4.Body.String())
 }

@@ -672,12 +672,12 @@ const file_api_v1_po33_sketch_service_proto_rawDesc = "" +
 	"\x11PUSH_STATE_QUEUED\x10\x01\x12\x16\n" +
 	"\x12PUSH_STATE_SENDING\x10\x02\x12\x18\n" +
 	"\x14PUSH_STATE_DELIVERED\x10\x03\x12\x15\n" +
-	"\x11PUSH_STATE_FAILED\x10\x042\xf8\x05\n" +
+	"\x11PUSH_STATE_FAILED\x10\x042\xf9\x05\n" +
 	"\rSketchService\x12z\n" +
 	"\x0eListMySketches\x12#.memos.api.v1.ListMySketchesRequest\x1a$.memos.api.v1.ListMySketchesResponse\"\x1d\x82\xd3\xe4\x93\x02\x17\x12\x15/api/v1/po33/sketches\x12y\n" +
 	"\rPublishSketch\x12\".memos.api.v1.PublishSketchRequest\x1a\x12.memos.api.v1.Memo\"0\xdaA\x04name\x82\xd3\xe4\x93\x02#:\x01*\"\x1e/api/v1/{name=memos/*}:publish\x12y\n" +
-	"\rArchiveSketch\x12\".memos.api.v1.ArchiveSketchRequest\x1a\x12.memos.api.v1.Memo\"0\xdaA\x04name\x82\xd3\xe4\x93\x02#:\x01*\"\x1e/api/v1/{name=memos/*}:archive\x12f\n" +
-	"\tGetSketch\x12\x1e.memos.api.v1.GetSketchRequest\x1a\x12.memos.api.v1.Memo\"%\xdaA\x04name\x82\xd3\xe4\x93\x02\x18\x12\x16/api/v1/{name=memos/*}\x12\x85\x01\n" +
+	"\rArchiveSketch\x12\".memos.api.v1.ArchiveSketchRequest\x1a\x12.memos.api.v1.Memo\"0\xdaA\x04name\x82\xd3\xe4\x93\x02#:\x01*\"\x1e/api/v1/{name=memos/*}:archive\x12g\n" +
+	"\tGetSketch\x12\x1e.memos.api.v1.GetSketchRequest\x1a\x12.memos.api.v1.Memo\"&\xdaA\x04name\x82\xd3\xe4\x93\x02\x19\x12\x17/api/v1/sketches/{name}\x12\x85\x01\n" +
 	"\n" +
 	"PushSketch\x12\x1f.memos.api.v1.PushSketchRequest\x1a .memos.api.v1.PushSketchResponse\"4\xdaA\vname,device\x82\xd3\xe4\x93\x02 :\x01*\"\x1b/api/v1/{name=memos/*}:push\x12\x84\x01\n" +
 	"\rGetPushStatus\x12\".memos.api.v1.GetPushStatusRequest\x1a\x18.memos.api.v1.PushStatus\"5\x82\xd3\xe4\x93\x02/\x12-/api/v1/{device=po33-devices/*}/pushes/{push}B\xab\x01\n" +

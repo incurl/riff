@@ -390,7 +390,7 @@ func requireAdmin(ctx context.Context) error {
 // directory and rewrites the column to the new filename. The
 // caller reads it back via recordToUser (which now reads the column
 // as a string slice) and surfaces the resulting
-// `/api/files/users/{id}/{filename}` URL.
+// `/file/users/{id}/avatar` URL.
 func applyAvatarURLToRecord(rec *core.Record, avatarURL string) error {
 	avatarURL = strings.TrimSpace(avatarURL)
 	if avatarURL == "" {

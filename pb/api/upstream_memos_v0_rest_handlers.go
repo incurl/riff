@@ -30,6 +30,8 @@ import (
 	"github.com/pkg/errors"
 	"github.com/pocketbase/pocketbase/core"
 	"golang.org/x/crypto/bcrypt"
+
+	"github.com/incurl/riff/pb/connect"
 )
 
 // The V0 handlers do their own request shaping
@@ -203,6 +205,12 @@ func v0MemoAllListHandler(app core.App) func(*core.RequestEvent) error {
 // `CreateMemoRequest{memo: Memo}`. The shaper
 // `v0MemoCreateToV1CreateMemo` strips the V0-only
 // fields and translates the visibility string.
+//
+// A create may carry `resourceList`. The V0 client that uploads-then-creates
+// (rather than uploads, creates, then PATCHes) names its already-uploaded
+// resources here, so the handler binds them onto the memo it just created —
+// the same `v0LinkResourcesToMemo` pass the PATCH path uses. Before this, the
+// shaper dropped `resourceList` on the floor and the files were stranded.
 func v0MemoCreateHandler(app core.App) func(*core.RequestEvent) error {
 	return func(e *core.RequestEvent) error {
 		body, err := io.ReadAll(e.Request.Body)
@@ -210,6 +218,10 @@ func v0MemoCreateHandler(app core.App) func(*core.RequestEvent) error {
 			return crudError(e, http.StatusBadRequest,
 				"could not read V0 create body: "+err.Error())
 		}
+		// Read the resource ids before dispatch: the V1 `Memo` proto has no
+		// `resourceList` field, so the shaper strips it and the binding has
+		// to happen here.
+		resourceIDs := v0ResourceListIDsFromBody(body)
 		v1body, err := v0MemoCreateToV1CreateMemo(body, nil, nil)
 		if err != nil {
 			return crudError(e, http.StatusBadRequest,
@@ -232,6 +244,31 @@ func v0MemoCreateHandler(app core.App) func(*core.RequestEvent) error {
 		if err := json.Unmarshal(resp, &v1Body); err != nil {
 			return crudError(e, http.StatusInternalServerError,
 				"connect response was not JSON: "+err.Error())
+		}
+		if len(resourceIDs) > 0 {
+			name, _ := v1Body["name"].(string)
+			memoID := strings.TrimPrefix(name, "memos/")
+			if memoID == "" {
+				return crudError(e, http.StatusInternalServerError,
+					"connect response carried no memo name to bind the uploaded resources to")
+			}
+			viewerID := resolveV0ViewerID(e)
+			if viewerID == "" {
+				return crudError(e, http.StatusUnauthorized,
+					"authentication required for V0 resource link")
+			}
+			if err := v0LinkResourcesToMemo(e.App, viewerID, memoID, resourceIDs); err != nil {
+				return crudError(e, http.StatusBadRequest,
+					"link V0 resources to memo: "+err.Error())
+			}
+			// The memo proto the client gets back must show the files it just
+			// asked for, or the next edit's `resourceList` would be built from
+			// an empty list and the client could drop them again.
+			v1Body, err = v0ShapeSingleMemoAttachments(e.App, memoID, v1Body)
+			if err != nil {
+				return crudError(e, http.StatusInternalServerError,
+					"shape V0 memo attachments: "+err.Error())
+			}
 		}
 		shaped, err := v0ShapeSingleMemo(v1Body)
 		if err != nil {
@@ -347,6 +384,24 @@ func v0MemoPatchHandler(app core.App) func(*core.RequestEvent) error {
 			return crudError(e, http.StatusBadRequest,
 				"could not read V0 patch body: "+err.Error())
 		}
+		// The V0 client links an uploaded resource to its
+		// memo through the `resourceList` field of the
+		// PATCH body. The V1 `Memo` proto has no such
+		// field, so the shaper cannot carry it — the
+		// binding is done here instead (see
+		// `v0LinkResourcesToMemo`).
+		resourceIDs := v0ResourceListIDsFromBody(body)
+		if len(resourceIDs) > 0 {
+			viewerID := resolveV0ViewerID(e)
+			if viewerID == "" {
+				return crudError(e, http.StatusUnauthorized,
+					"authentication required for V0 resource link")
+			}
+			if err := v0LinkResourcesToMemo(e.App, viewerID, v1ID, resourceIDs); err != nil {
+				return crudError(e, http.StatusBadRequest,
+					"link V0 resources to memo: "+err.Error())
+			}
+		}
 		v1body, err := v0MemoPatchToV1UpdateMemo(body, path, nil)
 		if err != nil {
 			if we, ok := err.(*wrapErr); ok {
@@ -372,6 +427,20 @@ func v0MemoPatchHandler(app core.App) func(*core.RequestEvent) error {
 		if err := json.Unmarshal(resp, &v1Body); err != nil {
 			return crudError(e, http.StatusInternalServerError,
 				"connect response was not JSON: "+err.Error())
+		}
+		// The memo proto the client gets back must show the files
+		// the PATCH just bound, or the client's own `resourceList`
+		// bookkeeping stays empty and the next edit — which rebuilds
+		// that list from this response — could drop them again. The
+		// V1 `UpdateMemo` response carries only the memo's own
+		// columns, so the attachment list is read back from the store
+		// here, the same pass the create path uses.
+		if len(resourceIDs) > 0 {
+			v1Body, err = v0ShapeSingleMemoAttachments(e.App, v1ID, v1Body)
+			if err != nil {
+				return crudError(e, http.StatusInternalServerError,
+					"shape V0 memo attachments: "+err.Error())
+			}
 		}
 		shaped, err := v0ShapeSingleMemo(v1Body)
 		if err != nil {
@@ -562,19 +631,33 @@ func v0ResourceUploadHandler(app core.App) func(*core.RequestEvent) error {
 		//    request, threading the upload_id
 		//    through.
 		//
-		// The V1 chunked upload requires a
-		// memo name on the spec
-		// (the `attachments.memo` column is
-		// REQUIRED). The V0 client uploads
-		// without a memo, so the V0 handler
-		// creates a hidden stub memo first
-		// and uploads against it. The stub
-		// is owned by the caller, has empty
-		// content, and is private.
+		// The V1 chunked upload treats
+		// `spec.attachment.memo` as OPTIONAL
+		// (upstream `Attachment.memo` is
+		// `OPTIONAL`, and riff's upload handler
+		// accepts an empty memo as an
+		// "unlinked upload"). The V0 client
+		// uploads before it knows the memo
+		// id, so we deliberately send no memo
+		// on the spec: the row lands unlinked
+		// with the `creator` column stamped
+		// with the uploader, and the follow-up
+		// `PATCH /api/v1/memo/{id}` binds it
+		// via `resourceList` (see
+		// `v0LinkResourcesToMemo`).
 		//
-		// TODO(2026-10-19): when the
-		// `attachments.memo` requirement is
-		// relaxed, drop the stub.
+		// This path used to create a hidden stub
+		// memo to satisfy a since-relaxed gate.
+		// The stub was a phantom memo row for
+		// every upload: it had to be cleaned up
+		// by the follow-up PATCH, and any
+		// client that uploaded without
+		// patching left it in the `memos`
+		// table forever — the visible symptom of
+		// "my post became two memos, one empty
+		// with the file on it". Uploading
+		// unlinked removes the phantom row
+		// entirely and matches upstream.
 		//
 		// The viewer id is read from the
 		// `e.Auth` record (PocketBase's
@@ -583,21 +666,23 @@ func v0ResourceUploadHandler(app core.App) func(*core.RequestEvent) error {
 		// handler runs) and falls back to a
 		// direct bearer-token resolve for
 		// tests / non-middleware paths.
-		viewerID := resolveV0ViewerID(e)
-		if viewerID == "" {
+		if resolveV0ViewerID(e) == "" {
 			return crudError(e, http.StatusUnauthorized,
 				"authentication required for V0 resource upload")
 		}
-		stubV1ID, serr := v0CreateStubMemo(e, viewerID)
-		if serr != nil {
-			return crudError(e, http.StatusInternalServerError,
-				"create stub memo: "+serr.Error())
-		}
-		stubV1Name := "memos/" + stubV1ID
 
+		// The part header is only as good as the client that
+		// wrote it: Go's `multipart.CreateFormFile` and
+		// several Kotlin upload helpers label every part
+		// `application/octet-stream`, and a stale header
+		// would pin the row's `mime_type` to a useless
+		// value forever. When the header is missing or is the
+		// generic octet-stream placeholder, fall back to the
+		// filename-derived type — the same table the V1 read
+		// path uses for a row with no stored `mime_type`.
 		contentType := fileHdr.Header.Get("Content-Type")
-		if contentType == "" {
-			contentType = "application/octet-stream"
+		if contentType == "" || contentType == "application/octet-stream" {
+			contentType = connect.GuessMimeType(partValue, "application/octet-stream")
 		}
 		// The V0 path is a single-shot
 		// upload: the file is small
@@ -619,7 +704,11 @@ func v0ResourceUploadHandler(app core.App) func(*core.RequestEvent) error {
 				"attachment": map[string]any{
 					"filename": partValue,
 					"type":     contentType,
-					"memo":     stubV1Name,
+					// No `memo`: the V0 client uploads
+					// before it knows the memo id. The
+					// row lands unlinked with `creator`
+					// stamped; the follow-up PATCH
+					// binds it via `resourceList`.
 				},
 				"total_size": int64(len(buf)),
 			},
@@ -932,56 +1021,6 @@ func resolveV0PatOwner(e *core.RequestEvent, token string) string {
 	}
 	return ""
 }
-
-// v0CreateStubMemo creates a hidden stub memo
-// owned by the caller. The V0 resource upload
-// path needs a memo to satisfy the V1
-// `UploadAttachment.spec.attachment.memo`
-// requirement (the `attachments.memo` column is
-// REQUIRED). The stub has empty content, is
-// PRIVATE, and is owned by the caller.
-//
-// The V0 client never sees the stub: the
-// `v0ShapeMemoList` helper filters out memos
-// whose content is empty and whose visibility is
-// PRIVATE (see `isV0StubMemo`). The V0 client
-// never posts an empty memo, so the filter is
-// safe.
-//
-// The stub is created via a direct PocketBase
-// record write (not the V1 connect
-// `CreateMemo` RPC) so the payload can be
-// stamped with the sentinel — the V1 connect
-// handler does not expose a payload write path.
-func v0CreateStubMemo(e *core.RequestEvent, authorID string) (string, error) {
-	col, err := e.App.FindCollectionByNameOrId("memos")
-	if err != nil {
-		return "", errors.Wrap(err, "find memos collection")
-	}
-	rec := core.NewRecord(col)
-	rec.Set("content", stubMemoSentinel)
-	rec.Set("visibility", "PRIVATE")
-	rec.Set("author", authorID)
-	rec.Set("payload", `{"_v0_stub":true}`)
-	if err := e.App.Save(rec); err != nil {
-		return "", errors.Wrap(err, "save stub memo")
-	}
-	return rec.Id, nil
-}
-
-// stubMemoSentinel is the literal content the
-// V0 stub-memo creator writes into the
-// `memos.content` column. The V0 list shaper
-// matches on it (see `isV0StubMemo`); the V0
-// client never produces a memo with this exact
-// content (its composer always requires at
-// least one non-sentinel character), so the
-// filter is a safe stub detector. The sentinel
-// is a zero-width-space Unicode code point so
-// the V0 client renders the stub as an
-// effectively-empty line (and a future
-// "delete stubs" sweep is easy to script).
-const stubMemoSentinel = "\u200b"
 
 // v0ResolveMemoName is the V0-write helper. It
 // resolves a V0 Long id (the `{id}` path variable

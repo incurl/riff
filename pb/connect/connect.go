@@ -40,6 +40,7 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"sync"
 
 	"connectrpc.com/connect/v2"
 	"connectrpc.com/connect/v2/connecthttp"
@@ -129,7 +130,9 @@ func Register(app core.App, limiter ratelimit.Limiter) error {
 	// pb/api/upstream_memos_rest_proxy.go can dispatch through
 	// the same connect.Server without rebuilding the handlers
 	// (and re-running every Register call's hook chain).
+	connectMuxMu.Lock()
 	connectMux = mux
+	connectMuxMu.Unlock()
 
 	app.OnServe().BindFunc(func(e *core.ServeEvent) error {
 		// Start the import-session sweeper so staged
@@ -255,7 +258,20 @@ func CurrentUser(ctx context.Context) *core.Record {
 // the same connect.Server, so the two surfaces share
 // withAuth, the rate-limit middleware, and the per-service
 // rule engine. nil until Register runs.
-var connectMux *http.ServeMux
+//
+// connectMuxMu guards it because both `pb/api` request
+// handlers and the test helpers that call SetConnectMux
+// reach it from different goroutines. `SetConnectMux` is
+// registered as a `t.Cleanup` in several pb/api tests, and
+// those cleanups can interleave with a still-running
+// request goroutine (or with another test's cleanup) that is
+// calling `ConnectMux` — an unsynchronised read/write on the
+// pointer that `go test -race` reports as a
+// DATA RACE on `SetConnectMux` / `ConnectMux`.
+var (
+	connectMuxMu sync.RWMutex
+	connectMux   *http.ServeMux
+)
 
 // ConnectMux returns the in-process http.ServeMux that the
 // connect package mounted its procedures on at Register
@@ -270,6 +286,8 @@ var connectMux *http.ServeMux
 // /memos/api/... REST surface, so the two answer through
 // the same handler instances.
 func ConnectMux() *http.ServeMux {
+	connectMuxMu.RLock()
+	defer connectMuxMu.RUnlock()
 	return connectMux
 }
 
@@ -280,5 +298,7 @@ func ConnectMux() *http.ServeMux {
 // path. Pass nil to restore the default (which is the
 // real mux installed at Register time, or nil).
 func SetConnectMux(m *http.ServeMux) {
+	connectMuxMu.Lock()
+	defer connectMuxMu.Unlock()
 	connectMux = m
 }

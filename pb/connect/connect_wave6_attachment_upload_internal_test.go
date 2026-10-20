@@ -120,10 +120,6 @@ func TestUploadAttachment_SpecRejectsMissingFields(t *testing.T) {
 			req:  uploadSpecRequest(memoName, "kick.po33", "", 0),
 		},
 		{
-			name: "no memo",
-			req:  uploadSpecRequest("", "kick.po33", "application/octet-stream", 0),
-		},
-		{
 			name: "content in spec",
 			req: &v1.UploadAttachmentRequest{
 				Upload: &v1.UploadAttachmentRequest_Spec{

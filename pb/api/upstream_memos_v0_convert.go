@@ -58,6 +58,9 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/incurl/riff/pb/connect"
 )
 
 // v0IDFromV1 derives a V0 numeric `Long` id from a V1
@@ -362,6 +365,13 @@ func v0MemoCreateToV1CreateMemo(body []byte, _ map[string]string, _ url.Values) 
 	delete(inner, "updatedTs")
 	delete(inner, "creatorId")
 	delete(inner, "resourceList")
+	// `resourceIdList` is the V0 *request* field for attachments
+	// (a flat array of integer ids; see the client's OpenAPI
+	// spec). The V1 `Memo` proto has no such field, so it must
+	// not survive into the V1 body or the create handler would
+	// reject it as an unknown field. The binding itself is done
+	// by the caller (see `v0LinkResourcesToMemo`).
+	delete(inner, "resourceIdList")
 	delete(inner, "rowStatus")
 	if vis, ok := inner["visibility"].(string); ok {
 		inner["visibility"] = v0VisibilityToProto(vis)
@@ -450,6 +460,19 @@ func v0MemoPatchToV1UpdateMemo(body []byte, path map[string]string, _ url.Values
 		inner["state"] = rowStatusToState(rs)
 		delete(inner, "rowStatus")
 	}
+	// `resourceList` and `resourceIdList` are V0-only fields:
+	// the V1 `Memo` proto has neither, so leaving either in the
+	// body would put it in the V1 `update_mask`, where the
+	// `UpdateMemo` handler ignores it (or rejects it outright).
+	// The V0 PATCH handler reads the list before it calls this
+	// shaper and binds the attachments itself (see
+	// `v0LinkResourcesToMemo`).
+	//
+	// `resourceIdList` is the one the real client sends; it is a
+	// flat array of integer ids, whereas `resourceList` is the
+	// object array that only ever appears in a *response*.
+	delete(inner, "resourceList")
+	delete(inner, "resourceIdList")
 	inner["name"] = "memos/" + id
 	// Build the mask from the keys the V0
 	// body populated (after the V0→V1
@@ -664,8 +687,7 @@ func v0ShapeMemoList(v1Body map[string]any) ([]any, error) {
 // non-sentinel character).
 func isV0StubMemo(m map[string]any) bool {
 	content, _ := m["content"].(string)
-	visibility, _ := m["visibility"].(string)
-	return content == stubMemoSentinel && visibility == "PRIVATE"
+	return connect.IsStubMemoContent(content)
 }
 
 // v0ShapeMemo converts one V1 `Memo` JSON object
@@ -744,35 +766,76 @@ func v0ShapeResource(a map[string]any) map[string]any {
 	filename, _ := a["filename"].(string)
 	externalLink, _ := a["externalLink"].(string)
 	if externalLink == "" {
-		externalLink = "/api/files/attachments/" + v1id + "/" + filename
+		// The fallback points at riff's own `/file/...`
+		// surface, not PocketBase's native `/api/files/...`
+		// route: the native route serves the bytes to
+		// anyone who knows the id (the `blob` field is
+		// `Protected`, so the native route evaluates the
+		// `ViewRule` but wants a short-lived *file token*,
+		// which the V0 client does not have). The `/file/...`
+		// surface authorizes with the caller's normal
+		// bearer token.
+		externalLink = "/file/attachments/" + v1id + "/" + filename
 	}
 	contentType, _ := a["type"].(string)
 	if contentType == "" {
 		contentType = "application/octet-stream"
 	}
-	size, _ := a["size"].(float64)
+	// `size` is an int64, which protojson emits as a JSON
+	// string; read it through the shared coercion so the
+	// V0 client sees the real byte count instead of 0.
+	size := protoInt64(a["size"])
 	creator, _ := a["creator"].(string)
 	v0creatorID := v0IDFromV1(strings.TrimPrefix(creator, "users/"))
+	// V0's `memoId` is the numeric id of the owning memo.
+	// The V1 `Attachment.memo` carries it as a
+	// `memos/<id>` resource name, so it projects through
+	// the same derivation as every other id. It used to be
+	// hardcoded to 0, which left MoeMemos unable to tell
+	// which memo an unlinked upload belonged to.
+	memoRef, _ := a["memo"].(string)
+	v0memoID := v0IDFromV1(strings.TrimPrefix(memoRef, "memos/"))
+	// The V1 `Attachment` proto has no `update_time` field at
+	// all, so a resource's `updateTime` is always absent and the
+	// raw read below yielded `updatedTs: 0`. V0 clients use the
+	// resource's last-modified time for sort ordering and cache
+	// validation, and 0 sorts every file to the epoch. Fall back
+	// to `createTime`, which is the truthful "last changed at"
+	// for an attachment whose bytes are immutable once uploaded.
+	updatedTs := protoTimestampToUnixOr(a["updateTime"], 0)
+	if updatedTs == 0 {
+		updatedTs = protoTimestampToUnixOr(a["createTime"], 0)
+	}
 	return map[string]any{
-		"id":           v0id,
+		"id": v0id,
+		// `uid` is the stable, URL-addressable handle for the
+		// row. Upstream Memos populates it from
+		// `store.Resource.UID` (a shortuuid) and serves the blob
+		// at `GET /o/r/{uid}`; the MoeMemos iOS client's
+		// `MemosV0Resource.path()` is literally
+		// `"/o/r/\(uid)"`, with `"/o/r/\(name ?? "")"` as the
+		// fallback when `uid` is nil. We omitted the field
+		// entirely, so the Swift optional was always nil and the
+		// client requested `/o/r/` with an empty segment.
+		//
+		// riff has no UID column; the PocketBase record id is the
+		// equivalent stable handle, and it is what the `/o/r/{uid}`
+		// route resolves. It is a string, not the numeric `id`
+		// above, exactly as upstream types it.
+		"uid":          v1id,
 		"creatorId":    v0creatorID,
 		"createdTs":    protoTimestampToUnixOr(a["createTime"], 0),
-		"updatedTs":    protoTimestampToUnixOr(a["updateTime"], 0),
+		"updatedTs":    updatedTs,
 		"filename":     filename,
 		"externalLink": externalLink,
 		"type":         contentType,
-		"size":         int64(size),
-		// The V0 client also reads `memoId` to
-		// associate the resource with a memo;
-		// the V1 client uses the `Memo.attachments`
-		// relation, which is a server-side
-		// materialization. We surface the V0
-		// field as 0 (no direct relation); the
-		// MoeMemos client uses the
-		// `resourceList` field on the memo
-		// (which we populate above) for the
-		// actual association.
-		"memoId": int64(0),
+		"size":         size,
+		// The V0 client reads `memoId` to associate the
+		// resource with a memo. It is derived from the V1
+		// `Attachment.memo` resource name (0 when the
+		// upload is not linked to a memo yet, which is the
+		// honest answer for an unlinked row).
+		"memoId": v0memoID,
 	}
 }
 
@@ -873,16 +936,80 @@ func protoVisibilityToV0(s string) string {
 }
 
 // protoTimestampToUnix converts a V1 protojson
-// timestamp (`{"seconds": <int>, "nanos": <int>}`)
-// into a flat Unix-seconds int64. The V0 client
-// reads `createdTs: Long` as seconds-since-epoch.
+// timestamp into a flat Unix-seconds int64. The V0
+// client reads `createdTs: Long` as
+// seconds-since-epoch.
+//
+// protojson renders `google.protobuf.Timestamp` as
+// an **RFC 3339 string** (`"2025-09-20T00:10:00Z"`),
+// not as the `{"seconds": N, "nanos": N}` message
+// shape — see the WKT mapping in protojson's
+// `Marshal`. Reading only the message shape meant
+// every V0 memo came back with `createdTs: 0` and
+// `updatedTs: 0`, which the Kotlin client renders as
+// 1970-01-01 (or, with some builds, drops the field
+// from the memo's display metadata entirely).
+//
+// Both shapes are therefore accepted: the RFC 3339
+// string first, then the structured form for the
+// hand-built V1 bodies the unit tests feed the
+// shaper directly. A value that is neither yields 0
+// rather than an error, because one unreadable
+// timestamp on one row must not fail a whole list.
 func protoTimestampToUnix(v any) (int64, error) {
-	m, ok := v.(map[string]any)
-	if !ok {
-		return 0, nil
+	switch t := v.(type) {
+	case string:
+		return parseRFC3339Seconds(t), nil
+	case map[string]any:
+		secs, _ := t["seconds"].(float64)
+		return int64(secs), nil
 	}
-	secs, _ := m["seconds"].(float64)
-	return int64(secs), nil
+	return 0, nil
+}
+
+// parseRFC3339Seconds converts a protojson
+// `Timestamp` string to Unix seconds. Sub-second
+// precision is truncated (V0 `createdTs` is whole
+// seconds), and an unparseable or absent value yields 0.
+func parseRFC3339Seconds(s string) int64 {
+	if s == "" {
+		return 0
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		return 0
+	}
+	return parsed.Unix()
+}
+
+// protoInt64 coerces a protojson int64 value to an
+// int64. protojson emits 64-bit integers as JSON
+// **strings** (`"15"`), because they can exceed the
+// precision of an IEEE-754 double; the shaper used to
+// read `size` as a `float64` and therefore always saw
+// 0, so every V0 resource reported a zero-byte file.
+// `json.Number` and `float64` are both still accepted
+// so hand-built bodies keep working.
+func protoInt64(v any) int64 {
+	switch n := v.(type) {
+	case string:
+		parsed, err := strconv.ParseInt(n, 10, 64)
+		if err != nil {
+			return 0
+		}
+		return parsed
+	case json.Number:
+		parsed, err := n.Int64()
+		if err != nil {
+			return 0
+		}
+		return parsed
+	case float64:
+		return int64(n)
+	case int64:
+		return n
+	}
+	return 0
 }
 
 // protoTimestampToUnixOr is the error-free version

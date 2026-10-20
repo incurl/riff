@@ -21,6 +21,8 @@ vi.mock("@/utils/base-path", async () => {
   return { ...actual, BASE_PATH: "/community" };
 });
 
+const { clearAccessToken, setAccessToken, syncAuthCookie } = await import("@/auth-state");
+
 // Assert on the *written* cookie string rather than on `document.cookie`.
 //
 // jsdom serves the document from `http://localhost:3000/`, and its cookie jar
@@ -30,8 +32,7 @@ vi.mock("@/utils/base-path", async () => {
 // cookie implementation instead of riff's, and would fail on exactly the
 // deployment layout this fixes. The written string is the contract riff
 // controls: name, value, path, expiry, SameSite, and Secure.
-const lastCookieWrite = (written: { mock: { calls: unknown[][] } }): string =>
-  (written.mock.calls.at(-1)?.[0] as string | undefined) ?? "";
+const lastCookieWrite = (written: { mock: { calls: unknown[][] } }): string => (written.mock.calls.at(-1)?.[0] as string | undefined) ?? "";
 
 // jsdom does not implement `isSecureContext`, so it reads `undefined`.
 const setSecureContext = (value: boolean | undefined) => {

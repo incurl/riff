@@ -55,7 +55,7 @@ const downloadSigningKeySettingKey = "DOWNLOAD_SIGNING_KEY"
 // across boots; the sync.Once makes
 // the singleton load-once.
 var (
-	signerMu      sync.RWMutex
+	signerMu        sync.RWMutex
 	signerSingleton *signedurl.Signer
 )
 
@@ -70,20 +70,29 @@ var (
 // accessor can read it.
 func installSignedURLSigner(app core.App) {
 	app.OnServe().BindFunc(func(e *core.ServeEvent) error {
+		// The lock must NOT be held across e.Next().
+		//
+		// e.Next() runs the *next* OnServe hook, and main.go's
+		// hook calls InstallSignedURLSignerForREST(), which
+		// takes the read lock on the same mutex. A sync.RWMutex
+		// is not reentrant: the write lock is still held here,
+		// so the read lock blocks forever and the server never
+		// binds its listener.
+		//
+		// The fix is to scope the lock to the mutation only, and
+		// to call e.Next() after it has been released.
 		signerMu.Lock()
-		defer signerMu.Unlock()
-		if signerSingleton != nil {
-			// Already installed by an
-			// earlier OnServe pass
-			// (e.g. a test that calls
-			// Register twice).
-			return e.Next()
+		if signerSingleton == nil {
+			raw, err := loadOrMintDownloadSigningKey(app)
+			if err != nil {
+				signerMu.Unlock()
+				return err
+			}
+			signerSingleton = signedurl.New(raw)
 		}
-		raw, err := loadOrMintDownloadSigningKey(app)
-		if err != nil {
-			return err
-		}
-		signerSingleton = signedurl.New(raw)
+		signerMu.Unlock()
+		// Already installed by an earlier OnServe pass
+		// (e.g. a test that calls Register twice).
 		return e.Next()
 	})
 }

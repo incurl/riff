@@ -1,13 +1,14 @@
 package api
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
-	"google.golang.org/protobuf/encoding/protojson"
-	"google.golang.org/protobuf/types/known/timestamppb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	apiv1 "github.com/incurl/riff/proto/gen/api/v1"
 )
@@ -57,7 +58,7 @@ func TestV0ProtojsonShapes(t *testing.T) {
 	require.NoError(t, err, "marshal Attachment")
 
 	var body map[string]any
-	require.NoError(t, protojson.Unmarshal(raw, &body),
+	require.NoError(t, json.Unmarshal(raw, &body),
 		"decode Attachment the way the handler does")
 
 	// A Timestamp is a string, not `{"seconds": N}`.
@@ -89,7 +90,7 @@ func TestV0ShapeMemoCarriesCreationMetadata(t *testing.T) {
 
 	raw, err := protojson.Marshal(&apiv1.Memo{
 		Name:       "memos/wdq85xegrxio2cs",
-		Creator:    &creator,
+		Creator:    creator,
 		Content:    "hello from V0",
 		CreateTime: created,
 		UpdateTime: updated,
@@ -97,7 +98,7 @@ func TestV0ShapeMemoCarriesCreationMetadata(t *testing.T) {
 	require.NoError(t, err)
 
 	var body map[string]any
-	require.NoError(t, protojson.Unmarshal(raw, &body))
+	require.NoError(t, json.Unmarshal(raw, &body))
 
 	shaped, err := v0ShapeMemo(body)
 	require.NoError(t, err)
@@ -143,13 +144,13 @@ func TestV0ShapeResourceCarriesMetadata(t *testing.T) {
 		Type:       "image/jpeg",
 		Size:       4096,
 		Memo:       &memoName,
-		Creator:    &creator,
+		Creator:    creator,
 		CreateTime: created,
 	})
 	require.NoError(t, err)
 
 	var body map[string]any
-	require.NoError(t, protojson.Unmarshal(raw, &body))
+	require.NoError(t, json.Unmarshal(raw, &body))
 
 	shaped := v0ShapeResource(body)
 
@@ -181,7 +182,7 @@ func TestV0ShapeResourceUnlinkedMemoIDIsZero(t *testing.T) {
 	require.NoError(t, err)
 
 	var body map[string]any
-	require.NoError(t, protojson.Unmarshal(raw, &body))
+	require.NoError(t, json.Unmarshal(raw, &body))
 
 	shaped := v0ShapeResource(body)
 	assert.EqualValues(t, 0, shaped["memoId"],
@@ -203,7 +204,7 @@ func TestV0ShapeResourceUpdatedTsFallsBackToCreated(t *testing.T) {
 	require.NoError(t, err)
 
 	var body map[string]any
-	require.NoError(t, protojson.Unmarshal(raw, &body))
+	require.NoError(t, json.Unmarshal(raw, &body))
 
 	shaped := v0ShapeResource(body)
 	assert.EqualValues(t, 1700000000, shaped["updatedTs"],

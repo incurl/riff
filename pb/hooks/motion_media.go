@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/pocketbase/pocketbase/core"
 
@@ -16,6 +17,60 @@ import (
 // path. Pulled out so the tests can substitute a discard
 // handler. The default is the package-level slog default.
 var motionMediaLog = slog.Default()
+
+// motionMediaStates holds the per-app detection state.
+//
+// The wait group must be PER APP, not package-level: a
+// package-level `sync.WaitGroup` cannot be waited on
+// twice concurrently, and two apps tearing down at the
+// same time would panic with "sync: WaitGroup is
+// reused before previous Wait has returned".
+//
+// `gate` closes the same hole for a single app: `Add` runs
+// per attachment upload and can overlap the teardown wait,
+// and `Add` on a wait group that is mid-`Wait` panics the
+// process. See memo_links.go for the full rationale; the
+// same pattern is used in both files.
+type motionMediaState struct {
+	workers sync.WaitGroup
+
+	gate          sync.Mutex
+	gateAccepting bool
+}
+
+// begin accepts a new detection worker iff teardown has
+// not started, and returns false once it has. A caller
+// that gets false must run its goroutine untracked.
+func (s *motionMediaState) begin() bool {
+	s.gate.Lock()
+	defer s.gate.Unlock()
+	if !s.gateAccepting {
+		return false
+	}
+	s.workers.Add(1)
+	return true
+}
+
+var motionMediaStates = map[core.App]*motionMediaState{}
+
+// motionMediaStatesMu guards motionMediaStates. The map
+// is written from the after-create hook and read from
+// the teardown hook; two apps running concurrently would
+// otherwise race on the map itself.
+var motionMediaStatesMu sync.Mutex
+
+// motionMediaStateFor returns the per-app state, creating
+// it on first use.
+func motionMediaStateFor(app core.App) *motionMediaState {
+	motionMediaStatesMu.Lock()
+	defer motionMediaStatesMu.Unlock()
+	st := motionMediaStates[app]
+	if st == nil {
+		st = &motionMediaState{gateAccepting: true}
+		motionMediaStates[app] = st
+	}
+	return st
+}
 
 // motionMediaMaxFileSize caps the JPEG blob we'll read for
 // detection. The unified `attachments` collection's
@@ -62,10 +117,97 @@ func registerMotionMedia(app core.App) {
 		// not stall the API response. Failures are
 		// logged and dropped; the memo save is the
 		// primary path, this is best-effort.
-		go detectMotionMedia(e.App, e.Record)
+		//
+		// The worker is tracked so the OnTerminate hook
+		// can wait for it: an untracked goroutine can
+		// still be writing into the data directory when
+		// the app terminates, which breaks the cleanup
+		// of a test's temp dir.
+		st := motionMediaStateFor(e.App)
+		tracked := st.begin()
+		// Snapshot `e.App` and `e.Record` into locals before
+		// launching the goroutine. Reading them *inside* the
+		// goroutine is a data race: PocketBase's
+		// after-create chain re-assigns `e.App`, `e.Context`
+		// and `e.Type` on the shared `RecordEvent` on its way
+		// back up the stack
+		// (`core.syncRecordEventWithModelEvent`, bound at
+		// `core/record_model.go:118`), and that write can land
+		// after this handler returns — concurrently with the
+		// goroutine's read. The race detector flags exactly this
+		// pair under `go test -race ./pb/api/`.
+		//
+		// The record pointer is captured the same way for the
+		// same reason: `syncModelEventWithRecordEvent` writes
+		// back into the same event on the way down.
+		app, rec := e.App, e.Record
+		go func() {
+			if tracked {
+				defer st.workers.Done()
+			}
+			defer func() {
+				// A panic in the detector must not take
+				// the process down; the save already
+				// committed and the payload is
+				// best-effort.
+				if r := recover(); r != nil {
+					motionMediaLog.Warn("motion-media: detector panicked",
+						"panic", r)
+				}
+			}()
+			detectMotionMedia(app, rec)
+		}()
 		return nil
 	}
 	app.OnRecordAfterCreateSuccess("attachments").BindFunc(bind)
+
+	// Wait for the in-flight detectors before the app
+	// tears down. Without this a goroutine can recreate a
+	// file in the data directory after the cleanup ran,
+	// and the cleanup fails with "directory not empty".
+	//
+	// The wait is bound to `OnBootstrapClear`, not
+	// `OnTerminate`: `ClearBootstrap` (which is what a
+	// test's cleanup calls) triggers `OnBootstrapClear`
+	// but NOT `OnTerminate`, so a wait on the latter
+	// would never run in a test — and the test is exactly
+	// where the teardown race bites. `OnBootstrapClear`
+	// fires on a real shutdown too, right before the
+	// data directory is removed.
+	app.OnBootstrapClear().BindFunc(func(e *core.BootstrapEvent) error {
+		motionMediaStatesMu.Lock()
+		st := motionMediaStates[app]
+		delete(motionMediaStates, app)
+		motionMediaStatesMu.Unlock()
+		if st != nil {
+			// Close the gate BEFORE waiting, so an upload
+			// that lands mid-teardown declines to `Add`
+			// rather than panicking on a wait group that is
+			// already in `Wait`.
+			st.gate.Lock()
+			st.gateAccepting = false
+			st.gate.Unlock()
+			st.workers.Wait()
+		}
+		return e.Next()
+	})
+}
+
+// WaitMotionMediaWorkers blocks until every in-flight
+// motion-media detection goroutine for `app` has finished.
+// The hook fires detection as a detached goroutine so a slow
+// disk read does not stall the API response; tests that read
+// the row right after `UploadAttachment` finishes need this
+// sync to avoid racing against the hook's `rec.Set("motion_media", ...)`
+// write under `-race`. Production code does not need to call
+// this — `OnBootstrapClear` waits for the workers anyway.
+func WaitMotionMediaWorkers(app core.App) {
+	motionMediaStatesMu.Lock()
+	st := motionMediaStates[app]
+	motionMediaStatesMu.Unlock()
+	if st != nil {
+		st.workers.Wait()
+	}
 }
 
 // detectMotionMedia reads the file on the record,

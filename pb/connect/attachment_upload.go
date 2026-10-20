@@ -95,16 +95,27 @@ func (s *AttachmentServer) uploadSpec(ctx context.Context, viewer *core.Record, 
 	if a.GetContent() != nil && len(a.GetContent()) > 0 {
 		return nil, connect.NewError(connect.CodeInvalidArgument, "attachment.content must be empty; use the data field for file bytes")
 	}
+	// `attachment.memo` is optional. When the SPA is uploading inline during
+	// a brand-new memo edit (the memo doesn't exist yet), it has no memo
+	// name to thread through the spec; we accept the upload, write the row
+	// with `memo` empty, and the SPA binds it later (either via a follow-up
+	// `CreateMemo` whose `req.Memo.Attachments[]` names are rebound by the
+	// server, or via the existing flow where `UpdateMemo`/`SetMemoAttachments`
+	// happens on a memo that already owns the rows). The `attachments` row's
+	// `memo` column is non-null in the wire read but nullable in the schema
+	// (`Required: false` in `1850000000_create_attachments.go`), so an orphan
+	// is a legitimate state. See `pb/connect/memo.go::CreateMemo` for the
+	// bind pass that runs in the same RPC as `CreateMemo` so the SPA can
+	// upload-then-create in one round-trip.
 	memoID := ""
-	if a.GetMemo() == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, "memo is required for upload")
-	}
-	memoID = memoIDFromName(a.GetMemo())
-	if memoID == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, "memo name is malformed")
-	}
-	if _, err := s.app.FindRecordById("memos", memoID); err != nil {
-		return nil, connect.NewError(connect.CodeNotFound, "memo not found")
+	if a.GetMemo() != "" {
+		memoID = memoIDFromName(a.GetMemo())
+		if memoID == "" {
+			return nil, connect.NewError(connect.CodeInvalidArgument, "memo name is malformed")
+		}
+		if _, err := s.app.FindRecordById("memos", memoID); err != nil {
+			return nil, connect.NewError(connect.CodeNotFound, "memo not found")
+		}
 	}
 	if spec.GetTotalSize() < 0 {
 		return nil, connect.NewError(connect.CodeInvalidArgument, "total_size must be non-negative")
@@ -190,7 +201,7 @@ func (s *AttachmentServer) continueSession(ctx context.Context, sess *uploadSess
 	if sess.recordID != "" {
 		resp.CommittedSize = sess.bytesReceived
 		if rec, err := s.app.FindRecordById("attachments", sess.recordID); err == nil {
-			resp.Attachment = recordToAttachment(rec)
+			resp.Attachment = recordToAttachment(s.app, rec)
 		}
 		return resp, nil
 	}
@@ -295,6 +306,15 @@ func (s *AttachmentServer) finalizeSession(ctx context.Context, sess *uploadSess
 	if sess.memoID != "" {
 		rec.Set("memo", sess.memoID)
 	}
+	// Stamp the uploader into the `creator` column when the row lands as an
+	// orphan (no memo on the spec). The bind pass in `memo_bind_attachments.go`
+	// refuses a cross-user rebind by reading this column, so without it a
+	// hostile SPA could re-bind any orphan it happened to learn the name of
+	// onto its own memo and effectively steal the bytes. Bound rows already
+	// have their owner implied by `memo.author`, so we do not stamp them.
+	if sess.memoID == "" {
+		rec.Set("creator", sess.userID)
+	}
 	// The unified `attachments` collection uses a
 	// single-file `blob` FileField for both binary
 	// patches and audio sample packs.
@@ -338,7 +358,7 @@ func (s *AttachmentServer) finalizeSession(ctx context.Context, sess *uploadSess
 	sess.recordID = rec.Id
 	sess.bytesReceived = sess.expectedSize
 	resp.CommittedSize = sess.expectedSize
-	resp.Attachment = recordToAttachment(rec)
+	resp.Attachment = recordToAttachment(s.app, rec)
 	return resp, nil
 }
 

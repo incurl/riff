@@ -182,8 +182,14 @@ func TestV0BootServesRealCreationMetadata(t *testing.T) {
 	require.Equal(t, http.StatusOK, w4.Code,
 		"V0 memo list must answer 200, got %d: %s", w4.Code, w4.Body.String())
 
+	// The list body is a top-level array, so it gets its own
+	// UseNumber decode — a plain `json.Unmarshal` would widen
+	// the `Long` timestamps to float64 and defeat the
+	// numeric assertions below.
 	var rows []any
-	require.NoError(t, json.Unmarshal(w4.Body.Bytes(), &rows),
+	decList := json.NewDecoder(bytes.NewReader(w4.Body.Bytes()))
+	decList.UseNumber()
+	require.NoError(t, decList.Decode(&rows),
 		"V0 memo list must be a top-level array: %s", w4.Body.String())
 	require.Len(t, rows, 1, "exactly one memo must exist: %s", w4.Body.String())
 
