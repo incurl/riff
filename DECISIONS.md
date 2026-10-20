@@ -5562,3 +5562,52 @@ the steady state (after the row has a memo, authorization goes
 through `memos.ViewRule` instead of the `creator` branch — a
 different code path, so a test covering only one proves nothing about
 the other).
+
+## 2026-10-20 — V1 write/read routes were dead on arrival: `connect_proxy` vs `connect_proxy_wrap`
+
+The V1 REST surface (`pb/api/upstream_memos_v1_rest.go`) had 30 routes,
+and every one used the plain `connect_proxy` flavor. The `connect_proxy`
+flavor forwards the request body **verbatim** to the connect handler.
+But the V1 proto wire format is not verbatim-shaped:
+
+* `CreateMemo` declares `body: "memo"`, so the MoeMemos openapi-generator
+  client posts the inner `Memo` fields directly — `{"content":"...",
+  "visibility":"..."}` — while the connect handler expects
+  `CreateMemoRequest{memo: Memo}`. Verbatim forwarding left `memo` nil
+  and every create answered `"memo is required"`.
+* `GetMemo` declares `get: "/api/v1/{name=memos/*}"`, so the client sends
+  an empty body and the id lives in the URL path. Verbatim forwarding
+  sent `{}`, the connect handler saw an empty `name`, and every read
+  answered `"name is required"`.
+* Same class for `UpdateMemo`, `DeleteMemo`, `GetAttachment`,
+  `UpdateAttachment`, `DeleteAttachment`, `GetUser`, `GetUserSetting`,
+  `UpdateUserSetting`, the memo comment/reaction/relation/attachment
+  sub-resources, and `CreateAttachment`.
+
+`v1BodyWrappers` and `connectProxyWrapHandler` already existed with the
+correct wrappers (`wrapV1CreateMemoBody`, `wrapV1GetMemoBody`, …), but
+the route table never wired them — they were dead code, and the
+comment that "the V1 routes are all `connect_proxy` (no wrap)" recorded
+the mistake as intentional.
+
+**Fix.** The parameterized and body-unwrapped V1 routes now use
+`connect_proxy_wrap` with the right `Builder` key into `v1BodyWrappers`.
+Two wrappers were missing and are added: `wrapV1UpdateAttachmentBody`
+and `wrapV1UpdateUserSettingBody` (both unwrap the inner message, inject
+`name` from the path, and forward `updateMask` from the query).
+`wrapV1InjectMemoNameBody` fixes `UpsertMemoReaction`, which had used
+`wrapV1PathInjectBody` and thereby *replaced* the body with `{name}`,
+dropping the `reaction` field.
+
+The two tests that pin the regression are
+`TestV1CreateMemo_BareMemoBodyIsWrapped` and
+`TestV1MemoPathRoutesInjectName`; both failed on the old route table
+(`"memo is required"` / `"name is required"`) and pass after the fix.
+
+**Version probe.** The V0 probe (`GET /api/v1/status`) and the V1 probe
+(`GET /api/v1/instance/profile` → `GetInstanceProfile`) now both honour
+`RIFF_MEMOS_VERSION` via `api.SetAdvertisedVersion` and
+`connect.SetAdvertisedVersion`. Without the connect side, the V1 client's
+compatibility check would read the riff build CalVer (e.g. "25.10") and
+flag the server as "higher than supported"; advertising "0.31.0" (or
+whatever the current maximum is) makes the V1 client fully compatible.

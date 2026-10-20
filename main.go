@@ -131,6 +131,7 @@ func main() {
 	// string. The default is "0.21.0" so a missing env var is
 	// a no-op rather than a silent regression.
 	api.SetAdvertisedVersion(os.Getenv("RIFF_MEMOS_VERSION"))
+	connect.SetAdvertisedVersion(os.Getenv("RIFF_MEMOS_VERSION"))
 	api.Register(app, rateLimiter)
 
 	// --- Connect/gRPC services ------------------------------------------

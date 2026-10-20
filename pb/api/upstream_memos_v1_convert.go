@@ -65,7 +65,7 @@ var v1BodyWrappers = map[string]bodyWrapper{
 	"v1_list_memo_comments":    wrapV1PathInjectBody("name", "memos/{memo}"),
 	"v1_create_memo_comment":   wrapV1CreateMemoCommentBody,
 	"v1_list_memo_reactions":   wrapV1PathInjectBody("name", "memos/{memo}"),
-	"v1_upsert_memo_reaction":  wrapV1PathInjectBody("name", "memos/{memo}"),
+	"v1_upsert_memo_reaction":  wrapV1InjectMemoNameBody,
 	"v1_delete_memo_reaction":  wrapV1PathInjectBody("name", "memos/{memo}/reactions/{reaction}"),
 	"v1_list_memo_relations":   wrapV1PathInjectBody("name", "memos/{memo}"),
 	"v1_set_memo_relations":    wrapV1SetMemoRelationsBody,
@@ -75,8 +75,9 @@ var v1BodyWrappers = map[string]bodyWrapper{
 	"v1_delete_attachment":     wrapV1PathInjectBody("name", "attachments/{attachment}"),
 	"v1_get_user":              wrapV1PathInjectBody("name", "users/{user}"),
 	"v1_get_user_setting":      wrapV1PathInjectBody("name", "users/{user}/settings/{setting}"),
-	"v1_update_user_setting":   wrapV1PathInjectBody("name", "users/{user}/settings/{setting}"),
+	"v1_update_user_setting":   wrapV1UpdateUserSettingBody,
 	"v1_create_attachment":     wrapV1CreateAttachmentBody,
+	"v1_update_attachment":     wrapV1UpdateAttachmentBody,
 	"v1_list_attachments":      passthroughBody,
 	"v1_get_user_stats":        passthroughBody, // handled in the custom builder, not here.
 }
@@ -237,6 +238,28 @@ func wrapV1SetMemoAttachmentsBody(body []byte, path map[string]string, _ url.Val
 	return jsonMarshal(inner)
 }
 
+// wrapV1InjectMemoNameBody injects the path variable `{memo}` as
+// `name` into the decoded body and forwards the rest unchanged.
+// It is the `body: "*"` counterpart for
+// `UpsertMemoReaction` (`post: "/api/v1/{name=memos/*}/reactions"`),
+// where the request body is the full request minus the
+// path-extracted `name`. The prior registry entry used
+// `wrapV1PathInjectBody`, which *replaced* the body with just
+// `{name}` and dropped the `reaction` field, so every upsert
+// answered "reaction is required".
+func wrapV1InjectMemoNameBody(body []byte, path map[string]string, _ url.Values) ([]byte, error) {
+	inner, err := decodeFlatObject(body)
+	if err != nil {
+		return nil, err
+	}
+	id, ok := path["memo"]
+	if !ok || id == "" {
+		return nil, newWrapErr(400, "missing path variable {memo}")
+	}
+	inner["name"] = "memos/" + id
+	return jsonMarshal(inner)
+}
+
 // wrapV1CreateAttachmentBody wraps a V1 body that is
 // the inner `Attachment` shape (because the proto has
 // `body: "attachment"`) into
@@ -247,6 +270,66 @@ func wrapV1CreateAttachmentBody(body []byte, _ map[string]string, _ url.Values) 
 		return nil, err
 	}
 	return jsonMarshal(map[string]any{"attachment": inner})
+}
+
+// wrapV1UpdateAttachmentBody unwraps the V1 PATCH body (inner
+// `Attachment`), injects the path variable `{attachment}` as
+// `attachment.name`, and reads `updateMask` from the query
+// string. The result is `UpdateAttachmentRequest{attachment:
+// {name,...}, update_mask}` — the same shape the proto's
+// `body: "attachment"` + `{attachment.name=attachments/*}`
+// annotation produces in the grpc-gateway.
+func wrapV1UpdateAttachmentBody(body []byte, path map[string]string, query url.Values) ([]byte, error) {
+	inner, err := decodeFlatObject(body)
+	if err != nil {
+		return nil, err
+	}
+	id, ok := path["attachment"]
+	if !ok || id == "" {
+		return nil, newWrapErr(400, "missing path variable {attachment}")
+	}
+	inner["name"] = "attachments/" + id
+	mask := query.Get("updateMask")
+	if mask == "" {
+		mask = "*"
+	}
+	return jsonMarshal(map[string]any{
+		"attachment":  inner,
+		"update_mask": mask,
+	})
+}
+
+// wrapV1UpdateUserSettingBody unwraps the V1 PATCH body (inner
+// `UserSetting`), injects the path variables `{user}` and
+// `{setting}` as `setting.name`, and reads `updateMask` from
+// the query string. The result is
+// `UpdateUserSettingRequest{setting: {name,...}, update_mask}`.
+// The prior registry entry pointed at
+// `wrapV1PathInjectBody("name", ...)`, which injected a bare
+// `name` at the top level — the handler reads `setting.name`,
+// so every update 400'd with "setting is required".
+func wrapV1UpdateUserSettingBody(body []byte, path map[string]string, query url.Values) ([]byte, error) {
+	inner, err := decodeFlatObject(body)
+	if err != nil {
+		return nil, err
+	}
+	user, ok := path["user"]
+	if !ok || user == "" {
+		return nil, newWrapErr(400, "missing path variable {user}")
+	}
+	setting, ok := path["setting"]
+	if !ok || setting == "" {
+		return nil, newWrapErr(400, "missing path variable {setting}")
+	}
+	inner["name"] = "users/" + user + "/settings/" + setting
+	mask := query.Get("updateMask")
+	if mask == "" {
+		mask = "*"
+	}
+	return jsonMarshal(map[string]any{
+		"setting":     inner,
+		"update_mask": mask,
+	})
 }
 
 // ============================================================

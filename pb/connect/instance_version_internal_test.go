@@ -65,3 +65,27 @@ func TestInstanceCommit_HidesUnset(t *testing.T) {
 		t.Fatalf(`instanceCommit() returned "unknown"; the front-end footer should not see the unset-build sentinel`)
 	}
 }
+
+// TestInstanceVersion_OverrideViaSetter pins the
+// RIFF_MEMOS_VERSION path for the V1 probe. Once the V1 surface is
+// complete and an operator sets RIFF_MEMOS_VERSION=0.31.0,
+// GetInstanceProfile must report that string — not the riff build
+// CalVer — so the V1 client's compatibility check sees a
+// Memos-compatible version instead of "higher than supported".
+func TestInstanceVersion_OverrideViaSetter(t *testing.T) {
+	prev := advertisedMemosVersion
+	t.Cleanup(func() { advertisedMemosVersion = prev })
+
+	// Empty value is a no-op.
+	advertisedMemosVersion = ""
+	SetAdvertisedVersion("")
+	if got := instanceVersion(); got == "" {
+		t.Fatal("instanceVersion() returned empty after an empty SetAdvertisedVersion call")
+	}
+
+	// Non-empty value overrides.
+	SetAdvertisedVersion("0.31.0")
+	if got := instanceVersion(); got != "0.31.0" {
+		t.Fatalf("instanceVersion() = %q; want %q after SetAdvertisedVersion", got, "0.31.0")
+	}
+}

@@ -103,7 +103,7 @@ func upstreamMemosV1Routes() []upstreamMemosV1RouteEntry {
 		// ============================================================
 		// V1 users (resource-name identity)
 		// ============================================================
-		{Method: http.MethodGet, Path: "/api/v1/users/{user}", Flavor: "connect_proxy", Target: memosConnectUserGetUserProcedure, Scope: ratelimit.ScopeAuthenticated},
+		{Method: http.MethodGet, Path: "/api/v1/users/{user}", Flavor: "connect_proxy_wrap", Builder: "v1_get_user", Target: memosConnectUserGetUserProcedure, Scope: ratelimit.ScopeAuthenticated},
 		// AIP-style custom verb. The V1 client uses
 		// `/api/v1/users/{user}:getStats`; Go's
 		// ServeMux rejects `{var}` followed by `:`
@@ -111,43 +111,43 @@ func upstreamMemosV1Routes() []upstreamMemosV1RouteEntry {
 		// `{rest...}` segment and let the custom
 		// handler dispatch on the trailing verb.
 		{Method: http.MethodGet, Path: "/api/v1/users/{user}/{rest...}", Flavor: "custom", Builder: "v1_user_stats", Scope: ratelimit.ScopeAuthenticated},
-		{Method: http.MethodGet, Path: "/api/v1/users/{user}/settings/{setting}", Flavor: "connect_proxy", Target: memosConnectUserGetUserSettingProcedure, Scope: ratelimit.ScopeAuthenticated},
-		{Method: http.MethodPatch, Path: "/api/v1/users/{user}/settings/{setting}", Flavor: "connect_proxy", Target: memosConnectUserUpdateUserSettingProcedure, Scope: ratelimit.ScopeWriteUser},
+		{Method: http.MethodGet, Path: "/api/v1/users/{user}/settings/{setting}", Flavor: "connect_proxy_wrap", Builder: "v1_get_user_setting", Target: memosConnectUserGetUserSettingProcedure, Scope: ratelimit.ScopeAuthenticated},
+		{Method: http.MethodPatch, Path: "/api/v1/users/{user}/settings/{setting}", Flavor: "connect_proxy_wrap", Builder: "v1_update_user_setting", Target: memosConnectUserUpdateUserSettingProcedure, Scope: ratelimit.ScopeWriteUser},
 
 		// ============================================================
 		// V1 memos (proto-shaped already; just forward)
 		// ============================================================
 		{Method: http.MethodGet, Path: "/api/v1/memos", Flavor: "connect_proxy", Target: memosConnectMemoListMemosProcedure, Scope: ratelimit.ScopeAuthenticated},
-		{Method: http.MethodPost, Path: "/api/v1/memos", Flavor: "connect_proxy", Target: memosConnectMemoCreateMemoProcedure, Scope: ratelimit.ScopeWriteUser},
-		{Method: http.MethodGet, Path: "/api/v1/memos/{memo}", Flavor: "connect_proxy", Target: memosConnectMemoGetMemoProcedure, Scope: ratelimit.ScopeAuthenticated},
-		{Method: http.MethodPatch, Path: "/api/v1/memos/{memo}", Flavor: "connect_proxy", Target: memosConnectMemoUpdateMemoProcedure, Scope: ratelimit.ScopeWriteUser},
-		{Method: http.MethodDelete, Path: "/api/v1/memos/{memo}", Flavor: "connect_proxy", Target: memosConnectMemoDeleteMemoProcedure, Scope: ratelimit.ScopeWriteUser},
+		{Method: http.MethodPost, Path: "/api/v1/memos", Flavor: "connect_proxy_wrap", Builder: "v1_create_memo", Target: memosConnectMemoCreateMemoProcedure, Scope: ratelimit.ScopeWriteUser},
+		{Method: http.MethodGet, Path: "/api/v1/memos/{memo}", Flavor: "connect_proxy_wrap", Builder: "v1_get_memo", Target: memosConnectMemoGetMemoProcedure, Scope: ratelimit.ScopeAuthenticated},
+		{Method: http.MethodPatch, Path: "/api/v1/memos/{memo}", Flavor: "connect_proxy_wrap", Builder: "v1_update_memo", Target: memosConnectMemoUpdateMemoProcedure, Scope: ratelimit.ScopeWriteUser},
+		{Method: http.MethodDelete, Path: "/api/v1/memos/{memo}", Flavor: "connect_proxy_wrap", Builder: "v1_delete_memo", Target: memosConnectMemoDeleteMemoProcedure, Scope: ratelimit.ScopeWriteUser},
 
 		// ---- V1 memo comments ----
-		{Method: http.MethodGet, Path: "/api/v1/memos/{memo}/comments", Flavor: "connect_proxy", Target: memosConnectMemoListMemoCommentsProcedure, Scope: ratelimit.ScopeAuthenticated},
-		{Method: http.MethodPost, Path: "/api/v1/memos/{memo}/comments", Flavor: "connect_proxy", Target: memosConnectMemoCreateMemoCommentProcedure, Scope: ratelimit.ScopeWriteUser},
+		{Method: http.MethodGet, Path: "/api/v1/memos/{memo}/comments", Flavor: "connect_proxy_wrap", Builder: "v1_list_memo_comments", Target: memosConnectMemoListMemoCommentsProcedure, Scope: ratelimit.ScopeAuthenticated},
+		{Method: http.MethodPost, Path: "/api/v1/memos/{memo}/comments", Flavor: "connect_proxy_wrap", Builder: "v1_create_memo_comment", Target: memosConnectMemoCreateMemoCommentProcedure, Scope: ratelimit.ScopeWriteUser},
 
 		// ---- V1 memo reactions ----
-		{Method: http.MethodGet, Path: "/api/v1/memos/{memo}/reactions", Flavor: "connect_proxy", Target: memosConnectMemoListMemoReactionsProcedure, Scope: ratelimit.ScopeAuthenticated},
-		{Method: http.MethodPost, Path: "/api/v1/memos/{memo}/reactions", Flavor: "connect_proxy", Target: memosConnectMemoUpsertMemoReactionProcedure, Scope: ratelimit.ScopeWriteUser},
-		{Method: http.MethodDelete, Path: "/api/v1/memos/{memo}/reactions/{reaction}", Flavor: "connect_proxy", Target: memosConnectMemoDeleteMemoReactionProcedure, Scope: ratelimit.ScopeWriteUser},
+		{Method: http.MethodGet, Path: "/api/v1/memos/{memo}/reactions", Flavor: "connect_proxy_wrap", Builder: "v1_list_memo_reactions", Target: memosConnectMemoListMemoReactionsProcedure, Scope: ratelimit.ScopeAuthenticated},
+		{Method: http.MethodPost, Path: "/api/v1/memos/{memo}/reactions", Flavor: "connect_proxy_wrap", Builder: "v1_upsert_memo_reaction", Target: memosConnectMemoUpsertMemoReactionProcedure, Scope: ratelimit.ScopeWriteUser},
+		{Method: http.MethodDelete, Path: "/api/v1/memos/{memo}/reactions/{reaction}", Flavor: "connect_proxy_wrap", Builder: "v1_delete_memo_reaction", Target: memosConnectMemoDeleteMemoReactionProcedure, Scope: ratelimit.ScopeWriteUser},
 
 		// ---- V1 memo relations ----
-		{Method: http.MethodGet, Path: "/api/v1/memos/{memo}/relations", Flavor: "connect_proxy", Target: memosConnectMemoListMemoRelationsProcedure, Scope: ratelimit.ScopeAuthenticated},
-		{Method: http.MethodPatch, Path: "/api/v1/memos/{memo}/relations", Flavor: "connect_proxy", Target: memosConnectMemoSetMemoRelationsProcedure, Scope: ratelimit.ScopeWriteUser},
+		{Method: http.MethodGet, Path: "/api/v1/memos/{memo}/relations", Flavor: "connect_proxy_wrap", Builder: "v1_list_memo_relations", Target: memosConnectMemoListMemoRelationsProcedure, Scope: ratelimit.ScopeAuthenticated},
+		{Method: http.MethodPatch, Path: "/api/v1/memos/{memo}/relations", Flavor: "connect_proxy_wrap", Builder: "v1_set_memo_relations", Target: memosConnectMemoSetMemoRelationsProcedure, Scope: ratelimit.ScopeWriteUser},
 
 		// ---- V1 memo attachments ----
-		{Method: http.MethodGet, Path: "/api/v1/memos/{memo}/attachments", Flavor: "connect_proxy", Target: memosConnectMemoListMemoAttachmentsProcedure, Scope: ratelimit.ScopeAuthenticated},
-		{Method: http.MethodPatch, Path: "/api/v1/memos/{memo}/attachments", Flavor: "connect_proxy", Target: memosConnectMemoSetMemoAttachmentsProcedure, Scope: ratelimit.ScopeWriteUser},
+		{Method: http.MethodGet, Path: "/api/v1/memos/{memo}/attachments", Flavor: "connect_proxy_wrap", Builder: "v1_list_memo_attachments", Target: memosConnectMemoListMemoAttachmentsProcedure, Scope: ratelimit.ScopeAuthenticated},
+		{Method: http.MethodPatch, Path: "/api/v1/memos/{memo}/attachments", Flavor: "connect_proxy_wrap", Builder: "v1_set_memo_attachments", Target: memosConnectMemoSetMemoAttachmentsProcedure, Scope: ratelimit.ScopeWriteUser},
 
 		// ============================================================
 		// V1 attachments (resource-name identity)
 		// ============================================================
 		{Method: http.MethodGet, Path: "/api/v1/attachments", Flavor: "connect_proxy", Target: memosConnectAttachmentListAttachmentsProcedure, Scope: ratelimit.ScopeAuthenticated},
-		{Method: http.MethodPost, Path: "/api/v1/attachments", Flavor: "connect_proxy", Target: memosConnectAttachmentCreateAttachmentProcedure, Scope: ratelimit.ScopeWriteUser},
-		{Method: http.MethodGet, Path: "/api/v1/attachments/{attachment}", Flavor: "connect_proxy", Target: memosConnectAttachmentGetAttachmentProcedure, Scope: ratelimit.ScopeAuthenticated},
-		{Method: http.MethodPatch, Path: "/api/v1/attachments/{attachment}", Flavor: "connect_proxy", Target: memosConnectAttachmentUpdateAttachmentProcedure, Scope: ratelimit.ScopeWriteUser},
-		{Method: http.MethodDelete, Path: "/api/v1/attachments/{attachment}", Flavor: "connect_proxy", Target: memosConnectAttachmentDeleteAttachmentProcedure, Scope: ratelimit.ScopeWriteUser},
+		{Method: http.MethodPost, Path: "/api/v1/attachments", Flavor: "connect_proxy_wrap", Builder: "v1_create_attachment", Target: memosConnectAttachmentCreateAttachmentProcedure, Scope: ratelimit.ScopeWriteUser},
+		{Method: http.MethodGet, Path: "/api/v1/attachments/{attachment}", Flavor: "connect_proxy_wrap", Builder: "v1_get_attachment", Target: memosConnectAttachmentGetAttachmentProcedure, Scope: ratelimit.ScopeAuthenticated},
+		{Method: http.MethodPatch, Path: "/api/v1/attachments/{attachment}", Flavor: "connect_proxy_wrap", Builder: "v1_update_attachment", Target: memosConnectAttachmentUpdateAttachmentProcedure, Scope: ratelimit.ScopeWriteUser},
+		{Method: http.MethodDelete, Path: "/api/v1/attachments/{attachment}", Flavor: "connect_proxy_wrap", Builder: "v1_delete_attachment", Target: memosConnectAttachmentDeleteAttachmentProcedure, Scope: ratelimit.ScopeWriteUser},
 	}
 }
 

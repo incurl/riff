@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 
 	connectrpc "connectrpc.com/connect/v2"
@@ -483,9 +484,148 @@ func TestV1PatPath_MoeMemosBoot(t *testing.T) {
 		"auth/me user must include a 'name' field (MemosV1Api.getUser reads it): user=%v", meUser)
 }
 
+// TestV1CreateMemo_BareMemoBodyIsWrapped pins the V1
+// create-memo wire format. The V1 proto declares `CreateMemo`
+// with `body: "memo"`, so the MoeMemos openapi-generator client
+// sends the inner `Memo` fields directly (no `{memo: {...}}`
+// envelope): `{"content":"hello","visibility":"PRIVATE"}`. The
+// connect handler expects `CreateMemoRequest{memo: Memo}`, so
+// the route must wrap the bare body via `wrapV1CreateMemoBody`.
+// The prior state (all V1 routes `connect_proxy`) forwarded the
+// bare body verbatim and left `memo` nil, so the handler
+// answered "memo is required".
+func TestV1CreateMemo_BareMemoBodyIsWrapped(t *testing.T) {
+	app := newTestApp(t)
+	hooks.Register(app)
+
+	srv := connectrpc.NewServer(connect.WithAuth(app))
+	apiv1connect.RegisterAuthServiceHandler(srv, connect.NewAuthServer(app, nil))
+	apiv1connect.RegisterInstanceServiceHandler(srv, connect.NewInstanceServer(app))
+	apiv1connect.RegisterUserServiceHandler(srv, connect.NewUserServer(app))
+	apiv1connect.RegisterMemoServiceHandler(srv, connect.NewMemoServer(app))
+	apiv1connect.RegisterAttachmentServiceHandler(srv, connect.NewAttachmentServer(app))
+	connectMux := http.NewServeMux()
+	connecthttp.Mount(connectMux, srv)
+	connect.SetConnectMux(connectMux)
+	t.Cleanup(func() { connect.SetConnectMux(nil) })
+
+	users, err := app.FindCollectionByNameOrId("users")
+	require.NoError(t, err)
+	rec := core.NewRecord(users)
+	rec.Set("username", "moe")
+	rec.Set("email", "moe@example.com")
+	rec.Set("password", "passw0rd!")
+	require.NoError(t, app.Save(rec))
+	patRaw, perr := random.String(24)
+	require.NoError(t, perr)
+	pat := "memos_pat_" + patRaw
+	patHash, perr := bcrypt.GenerateFromPassword([]byte(pat), bcrypt.MinCost)
+	require.NoError(t, perr)
+	pats, perr := app.FindCollectionByNameOrId("personal_access_tokens")
+	require.NoError(t, perr)
+	patRec := core.NewRecord(pats)
+	patRec.Set("user", rec.Id)
+	patRec.Set("description", "v1 create memo")
+	patRec.Set("token_hash", string(patHash))
+	require.NoError(t, app.Save(patRec))
+
+	r := router.NewRouter[*core.RequestEvent](eventFactoryFor(app))
+	mountUpstreamMemosV1Routes(r, app, nil)
+	mux, err := r.BuildMux()
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/memos",
+		strings.NewReader(`{"content":"hello from v1","visibility":"PRIVATE"}`))
+	req.Header.Set("Authorization", "Bearer "+pat)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code,
+		"V1 memo create must answer 200, got %d: %s", w.Code, w.Body.String())
+	var created map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &created),
+		"V1 memo create body must be valid JSON: %s", w.Body.String())
+	assert.Equal(t, "hello from v1", created["content"],
+		"the created memo must echo the client's content")
+}
+
+// TestV1MemoPathRoutesInjectName pins the V1 read/delete routes
+// that carry the memo id in the URL path. The proto declares
+// `GetMemo` as `get: "/api/v1/{name=memos/*}"`, so the client
+// sends an empty body and the route must inject `name` from the
+// path via `wrapV1GetMemoBody` / `wrapV1DeleteMemoBody`. The
+// prior state (all V1 routes `connect_proxy`) forwarded `{}`
+// verbatim, so the connect handler answered "name is required".
+func TestV1MemoPathRoutesInjectName(t *testing.T) {
+	app := newTestApp(t)
+	hooks.Register(app)
+
+	srv := connectrpc.NewServer(connect.WithAuth(app))
+	apiv1connect.RegisterAuthServiceHandler(srv, connect.NewAuthServer(app, nil))
+	apiv1connect.RegisterInstanceServiceHandler(srv, connect.NewInstanceServer(app))
+	apiv1connect.RegisterUserServiceHandler(srv, connect.NewUserServer(app))
+	apiv1connect.RegisterMemoServiceHandler(srv, connect.NewMemoServer(app))
+	apiv1connect.RegisterAttachmentServiceHandler(srv, connect.NewAttachmentServer(app))
+	connectMux := http.NewServeMux()
+	connecthttp.Mount(connectMux, srv)
+	connect.SetConnectMux(connectMux)
+	t.Cleanup(func() { connect.SetConnectMux(nil) })
+
+	users, err := app.FindCollectionByNameOrId("users")
+	require.NoError(t, err)
+	rec := core.NewRecord(users)
+	rec.Set("username", "moe")
+	rec.Set("email", "moe@example.com")
+	rec.Set("password", "passw0rd!")
+	require.NoError(t, app.Save(rec))
+	patRaw, perr := random.String(24)
+	require.NoError(t, perr)
+	pat := "memos_pat_" + patRaw
+	patHash, perr := bcrypt.GenerateFromPassword([]byte(pat), bcrypt.MinCost)
+	require.NoError(t, perr)
+	pats, perr := app.FindCollectionByNameOrId("personal_access_tokens")
+	require.NoError(t, perr)
+	patRec := core.NewRecord(pats)
+	patRec.Set("user", rec.Id)
+	patRec.Set("description", "v1 memo path")
+	patRec.Set("token_hash", string(patHash))
+	require.NoError(t, app.Save(patRec))
+
+	memos, err := app.FindCollectionByNameOrId("memos")
+	require.NoError(t, err)
+	memoRec := core.NewRecord(memos)
+	memoRec.Set("content", "existing memo")
+	memoRec.Set("visibility", "PRIVATE")
+	memoRec.Set("author", rec.Id)
+	require.NoError(t, app.Save(memoRec))
+
+	r := router.NewRouter[*core.RequestEvent](eventFactoryFor(app))
+	mountUpstreamMemosV1Routes(r, app, nil)
+	mux, err := r.BuildMux()
+	require.NoError(t, err)
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/v1/memos/"+memoRec.Id, nil)
+	getReq.Header.Set("Authorization", "Bearer "+pat)
+	wGet := httptest.NewRecorder()
+	mux.ServeHTTP(wGet, getReq)
+	require.Equal(t, http.StatusOK, wGet.Code,
+		"V1 memo get must answer 200, got %d: %s", wGet.Code, wGet.Body.String())
+	var got map[string]any
+	require.NoError(t, json.Unmarshal(wGet.Body.Bytes(), &got),
+		"V1 memo get body must be valid JSON: %s", wGet.Body.String())
+	assert.Equal(t, "existing memo", got["content"],
+		"the fetched memo must carry its content")
+
+	delReq := httptest.NewRequest(http.MethodDelete, "/api/v1/memos/"+memoRec.Id, nil)
+	delReq.Header.Set("Authorization", "Bearer "+pat)
+	wDel := httptest.NewRecorder()
+	mux.ServeHTTP(wDel, delReq)
+	require.Equal(t, http.StatusOK, wDel.Code,
+		"V1 memo delete must answer 200, got %d: %s", wDel.Code, wDel.Body.String())
+}
+
 // TestCoerceIntToString, TestV0LookupUsername_CachesEmpty,
 // TestAtoiDefault_Defaults, TestV0MemoAllFilter, and
 // TestConnectProxyWrap_StripsAndForwards were removed
-// with the V0 helpers they covered. The V0 routes were
-// the only consumers of the `connect_proxy_wrap` flavor;
-// the V1 routes are all `connect_proxy` (no wrap).
+// with the V0 helpers they covered.

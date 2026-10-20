@@ -23,11 +23,42 @@ const riffVersionFallback = "dev (riff)"
 // metadata. The fallback keeps the
 // `TestInstanceService_FreshInstall` assertion
 // (`assert.NotEmpty(GetVersion())`) passing under `go test`.
+//
+// When the operator set RIFF_MEMOS_VERSION (via
+// SetAdvertisedVersion), that value wins: it is the Memos
+// version string the V1 client's compatibility check reads, so a
+// riff deployment that has completed the V1 surface advertises
+// "0.31.0" (or whatever the current maximum is) rather than the
+// riff build CalVer, which the client would flag as "higher than
+// supported".
 func instanceVersion() string {
+	if advertisedMemosVersion != "" {
+		return advertisedMemosVersion
+	}
 	if v := version.GetCurrentVersion(); v != "" {
 		return v
 	}
 	return riffVersionFallback
+}
+
+// advertisedMemosVersion is the operator-configured Memos version
+// reported by GetInstanceProfile. Empty means "use the riff build
+// version". Set once at startup by main.go from
+// RIFF_MEMOS_VERSION; mirrors pb/api.SetAdvertisedVersion so the
+// V0 `/api/v1/status` probe and the V1
+// `/api/v1/instance/profile` probe report the same string.
+var advertisedMemosVersion string
+
+// SetAdvertisedVersion overrides the Memos version reported by
+// GetInstanceProfile. An empty argument is a no-op (the build
+// version is preserved) so a misconfigured operator does not
+// silently advertise an empty string, which the V1 client treats
+// as "unsupported version".
+func SetAdvertisedVersion(v string) {
+	if v == "" {
+		return
+	}
+	advertisedMemosVersion = v
 }
 
 // instanceCommit returns the build commit hash. Empty in dev
