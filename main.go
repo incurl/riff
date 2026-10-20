@@ -124,6 +124,13 @@ func main() {
 
 	// --- Custom REST routes ---------------------------------------------
 	// /api/po33/* endpoints (feed, space memos, invite, move).
+	//
+	// SetAdvertisedVersion applies RIFF_MEMOS_VERSION before any
+	// route is mounted, so the very first /api/v1/status probe
+	// an operator runs after restart already sees the new
+	// string. The default is "0.21.0" so a missing env var is
+	// a no-op rather than a silent regression.
+	api.SetAdvertisedVersion(os.Getenv("RIFF_MEMOS_VERSION"))
 	api.Register(app, rateLimiter)
 
 	// --- Connect/gRPC services ------------------------------------------

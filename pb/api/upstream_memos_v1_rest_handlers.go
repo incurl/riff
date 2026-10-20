@@ -158,7 +158,7 @@ func connectProxyWrapHandler(app core.App, procedure string, wrap bodyWrapper) f
 // `profile.version`: a non-empty value routes the
 // client to the V0 (Memos 0.21) surface, an empty
 // value routes it to the V1 (Memos 0.27-0.31)
-// surface. We always return `0.21.0` so the V0
+// surface. The default is "0.21.0" so the V0
 // client is selected — the V0 surface is fully
 // implemented (`pb/api/upstream_memos_v0_rest.go`)
 // and the iOS-app-tested V1 fallback path
@@ -167,20 +167,21 @@ func connectProxyWrapHandler(app core.App, procedure string, wrap bodyWrapper) f
 // added before the V1 fallback would be viable; see
 // DECISIONS.md "V0 dispatch helper strips
 // `Accept-Encoding: gzip` ..." for the wire-format
-// rationale). The V0 surface answer is verified
-// end-to-end by `TestV0PatPath_MoeMemosBoot` and by
-// the live probe at `ravine.fly.dev/community/api/v1/...`.
+// rationale). Operators who have completed the V1
+// surface can opt in by setting RIFF_MEMOS_VERSION
+// to "0.31.0" (or whatever the current minimum is)
+// — see pb/api.SetAdvertisedVersion and main.go.
 //
 // The shape is:
 //
-//	{ profile: { mode: "prod" | "dev" | "demo", version: "0.21.0" } }
+//	{ profile: { mode: "prod" | "dev" | "demo", version: "<advertised>" } }
 func v1StatusHandler(app core.App) func(*core.RequestEvent) error {
 	return func(e *core.RequestEvent) error {
 		e.Response.Header().Set("Content-Type", "application/json")
 		return e.JSON(http.StatusOK, map[string]any{
 			"profile": map[string]any{
 				"mode":    "prod",
-				"version": "0.21.0",
+				"version": advertisedMemosVersion,
 			},
 		})
 	}

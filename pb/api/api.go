@@ -22,6 +22,30 @@ import (
 // limiter and apply per-route scopes.
 var packageLimiter ratelimit.Limiter
 
+// advertisedMemosVersion is the `profile.version` value the
+// /api/v1/status probe advertises to Memos clients. Memos 0.21
+// (V0) and Memos 0.27–0.31 (V1) clients select their protocol
+// based on this field: an empty value routes the client to V1
+// (which we don't fully implement), a non-empty value routes
+// to V0 (which we do). The operator-facing knob is
+// RIFF_MEMOS_VERSION; SetAdvertisedVersion applies it at
+// startup. The default ("0.21.0") keeps the V0 client working
+// out of the box until the V1 surface is complete.
+var advertisedMemosVersion = "0.21.0"
+
+// SetAdvertisedVersion overrides the version string returned by
+// the /api/v1/status probe. main.go calls this once, before
+// Register, with the value of RIFF_MEMOS_VERSION. An empty
+// argument is a no-op (the default is preserved) so a
+// misconfigured operator does not silently disable the V0
+// client by advertising an empty string.
+func SetAdvertisedVersion(v string) {
+	if v == "" {
+		return
+	}
+	advertisedMemosVersion = v
+}
+
 // Register binds all riff custom routes on the given app. Call
 // from main.go via app.OnServe().BindFunc.
 //

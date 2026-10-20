@@ -15,10 +15,10 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/bcrypt"
 
-	apiv1connect "github.com/incurl/riff/proto/gen/api/v1/apiv1connect"
 	"github.com/incurl/riff/internal/random"
 	"github.com/incurl/riff/pb/connect"
 	"github.com/incurl/riff/pb/hooks"
+	apiv1connect "github.com/incurl/riff/proto/gen/api/v1/apiv1connect"
 )
 
 // makeEventFor builds a *core.RequestEvent with the
@@ -131,17 +131,27 @@ func TestUpstreamMemosV1Routes_MountsAndServesGet(t *testing.T) {
 
 // TestV1StatusHandler_DefaultVersionIsV0 confirms
 // the version-probe endpoint returns the V0 (Memos
-// 0.21) version string `0.21.0`. The MoeMemos (iOS
-// + Android) boot path inspects `profile.version`:
-// a non-empty value routes the client to the V0
-// surface, an empty value routes it to the V1
-// surface. The V1 fallback path
+// 0.21) version string `0.21.0` when no override is
+// set. The MoeMemos (iOS + Android) boot path inspects
+// `profile.version`: a non-empty value routes the
+// client to the V0 surface, an empty value routes
+// it to the V1 surface. The V1 fallback path
 // (`/api/v1/workspace/profile`) is not served, so
 // the V0 contract is the only one that works on
 // the live deployment. See DECISIONS.md "V0
 // dispatch helper strips `Accept-Encoding: gzip`
 // ..." for the rationale.
+//
+// The companion test TestV1StatusHandler_OverrideViaSetter
+// confirms the override path (RIFF_MEMOS_VERSION).
 func TestV1StatusHandler_DefaultVersionIsV0(t *testing.T) {
+	// Reset the package variable in case another test in the
+	// same run set it. t.Cleanup restores whatever it was
+	// before the test so cross-test order doesn't leak state.
+	prev := advertisedMemosVersion
+	t.Cleanup(func() { advertisedMemosVersion = prev })
+	advertisedMemosVersion = "0.21.0"
+
 	app := newTestApp(t)
 	h := v1StatusHandler(app)
 
@@ -157,6 +167,41 @@ func TestV1StatusHandler_DefaultVersionIsV0(t *testing.T) {
 		"status must report a non-empty V0 version so the MoeMemos client selects the V0 surface")
 	assert.Equal(t, "prod", profile["mode"],
 		"status mode must be one of prod/dev/demo")
+}
+
+// TestV1StatusHandler_OverrideViaSetter pins the
+// RIFF_MEMOS_VERSION path. Once the V1 surface is complete
+// and an operator sets RIFF_MEMOS_VERSION=0.31.0, the probe
+// must report that exact string — not the default — so the
+// client takes the V1 branch. An empty or whitespace-only
+// value is a no-op (the default is preserved), so a
+// misconfigured operator does not silently route clients to
+// the unimplemented V1 surface.
+func TestV1StatusHandler_OverrideViaSetter(t *testing.T) {
+	prev := advertisedMemosVersion
+	t.Cleanup(func() { advertisedMemosVersion = prev })
+
+	// Empty value is a no-op: probe still reports the default.
+	advertisedMemosVersion = "0.21.0"
+	SetAdvertisedVersion("")
+	app := newTestApp(t)
+	h := v1StatusHandler(app)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/status", nil)
+	w := httptest.NewRecorder()
+	require.NoError(t, h(makeEventFor(app, req, w)))
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	assert.Equal(t, "0.21.0", body["profile"].(map[string]any)["version"],
+		"an empty SetAdvertisedVersion call must not change the advertised version")
+
+	// Non-empty value overrides.
+	SetAdvertisedVersion("0.31.0")
+	w = httptest.NewRecorder()
+	require.NoError(t, h(makeEventFor(app, req, w)))
+	body = nil
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	assert.Equal(t, "0.31.0", body["profile"].(map[string]any)["version"],
+		"SetAdvertisedVersion must override the default and stay overridden for subsequent requests")
 }
 
 // TestV1PingHandler_ReturnsOk covers the trivial
@@ -309,11 +354,11 @@ func TestPassthroughBody_PassesThrough(t *testing.T) {
 //
 // On the pre-ship-1 build:
 //
-//   * GET /api/v1/instance/profile was routed
+//   - GET /api/v1/instance/profile was routed
 //     (the table already had the row) and answered
 //     200 application/json via the in-process connect
 //     proxy, so the V1 client could parse it.
-//   * GET /api/v1/auth/me was *also* routed, but
+//   - GET /api/v1/auth/me was *also* routed, but
 //     the AuthService handler returned
 //     `{"user": <viewer>}`; if the PAT verification
 //     failed the response was `{"user": null}` and
