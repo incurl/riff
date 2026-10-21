@@ -103,7 +103,102 @@ func TestCompile_VisibilityIn(t *testing.T) {
 
 func TestCompile_ContentContains(t *testing.T) {
 	got := mustCompile(t, `content.contains("roadmap")`)
-	assert.Equal(t, `content ~ "roadmap"`, inline(got))
+	assert.Equal(t, `content ~ "%roadmap%"`, inline(got))
+}
+
+// ---------------------------------------------------------------------------
+// String matching. `.startsWith` / `.endsWith` share `.contains`'s `~`
+// operator and differ only in where the compiler puts the wildcard,
+// so they are expressible where the package used to claim they were not.
+// ---------------------------------------------------------------------------
+
+func TestCompile_StringMatchWildcardPadding(t *testing.T) {
+	for _, tc := range []struct {
+		src  string
+		want string
+	}{
+		{`content.contains("a")`, `content ~ "%a%"`},
+		{`content.startsWith("a")`, `content ~ "a%"`},
+		{`content.endsWith("a")`, `content ~ "%a"`},
+	} {
+		assert.Equal(t, tc.want, inline(mustCompile(t, tc.src)), tc.src)
+	}
+}
+
+// PocketBase escapes a bound value and wraps it in `%…%` only when the
+// value carries no unescaped `%`; a value that does passes through
+// verbatim. Padding here means the emitted pattern always contains a
+// wildcard, so the database's heuristic never overrides the operator.
+// escapeLikeLiteral additionally neutralises the user's own metacharacters
+// so they cannot widen or narrow the match.
+func TestCompile_StringMatchEscapesMetacharacters(t *testing.T) {
+	for _, tc := range []struct {
+		src  string
+		want string
+	}{
+		{`content.contains("50%")`, `content ~ "%50\%%"`},
+		{`content.startsWith("50%")`, `content ~ "50\%%"`},
+		{`content.contains("a_b")`, `content ~ "%a\_b%"`},
+		{`content.startsWith("a_b")`, `content ~ "a\_b%"`},
+		// An escape the caller already wrote is preserved, not doubled.
+		{`content.contains("a\%b")`, `content ~ "%a\%b%"`},
+	} {
+		assert.Equal(t, tc.want, inline(mustCompile(t, tc.src)), tc.src)
+	}
+}
+
+// `content.contains("100%")` used to bind the raw value; PocketBase saw
+// the unescaped `%`, skipped its own wrapping, and ran `LIKE '100%'` —
+// a *prefix* match on a literal percent sign. Padding fixes that.
+func TestCompile_ContainsPercentNoLongerBecomesPrefix(t *testing.T) {
+	assert.Equal(t, `content ~ "%100\%%"`, inline(mustCompile(t, `content.contains("100%")`)))
+}
+
+// `matches` is a string-matching method but has no LIKE equivalent, so
+// it must be refused by name rather than falling through to `.contains`
+// and quietly returning a substring search.
+func TestCompile_MatchesIsRefusedNotDegraded(t *testing.T) {
+	for _, src := range []string{
+		`content.matches("a")`,
+		`filename.matches("a")`,
+		`title.matches("a")`,
+	} {
+		_, err := compileExpr(t, src, attachmentFields()...)
+		require.Errorf(t, err, "%q should be rejected", src)
+		assert.Contains(t, err.Error(), "matches")
+	}
+}
+
+// The three operators work on any registered scalar column, not just
+// content, which is what the attachment contract's filename example
+// already relied on for `.contains`.
+func TestCompile_StringMatchOnAnyScalarField(t *testing.T) {
+	assert.Equal(t, `filename ~ "po%"`, inline(mustCompile(t, `filename.startsWith("po")`, attachmentFields()...)))
+	assert.Equal(t, `filename ~ "%.png"`, inline(mustCompile(t, `filename.endsWith(".png")`, attachmentFields()...)))
+}
+
+// A JSON-array column has no prefix/suffix semantics, so only
+// `.contains` (membership) is accepted there.
+func TestCompile_StringMatchRejectsOnListField(t *testing.T) {
+	for _, src := range []string{`tags.startsWith("wo")`, `tags.endsWith("rk")`} {
+		_, err := compileExpr(t, src)
+		require.Errorf(t, err, "%q should be rejected", src)
+		assert.Contains(t, err.Error(), "list field")
+	}
+}
+
+// Negation flips `~` to `!~`, which inverts the padding too — the
+// complement of "starts with" is "does not start with".
+func TestCompile_NegatesStringMatch(t *testing.T) {
+	assert.Equal(t, `content !~ "a%"`, inline(mustCompile(t, `!content.startsWith("a")`)))
+	assert.Equal(t, `content !~ "%a"`, inline(mustCompile(t, `!content.endsWith("a")`)))
+}
+
+// A non-literal or wrong-typed argument is still refused; the padding
+// must not turn a runtime value into filter text.
+func TestCompile_StringMatchRequiresStringLiteral(t *testing.T) {
+	_, err := compileExpr(t, `content.startsWith(space)`)
+	require.Error(t, err)
 }
 
 // tags.exists / `tag in [...]` compile to PocketBase's `?=`, which its
@@ -293,8 +388,7 @@ func TestCompile_RejectsInexpressibleConstructs(t *testing.T) {
 		`tags.all("y")`,
 		`tags.exists_one("z")`,
 		`size(content) > 10`,
-		`content.startsWith("a")`,
-		`content.endsWith("b")`,
+		// `matches` is still refused: LIKE has no regex engine.
 		`content.matches("c")`,
 		`created_ts.getFullYear() == 2025`,
 		`created_ts > duration("24h")`,
@@ -504,7 +598,7 @@ func quoteValue(v any) string {
 func TestCompile_NegatesComparison(t *testing.T) {
 	assert.Equal(t, `space != "a"`, inline(mustCompile(t, `!space == "a"`)))
 	assert.Equal(t, `space = "a"`, inline(mustCompile(t, `!!space == "a"`)))
-	assert.Equal(t, `content !~ "x"`, inline(mustCompile(t, `!content.contains("x")`)))
+	assert.Equal(t, `content !~ "%x%"`, inline(mustCompile(t, `!content.contains("x")`)))
 }
 
 func TestCompile_NegatesThroughAnd(t *testing.T) {
@@ -632,7 +726,8 @@ func TestCompile_BooleanLiterals(t *testing.T) {
 // example. The `~` operator is the same one content.contains uses,
 // just bound to whatever column the schema names.
 func TestCompile_FieldContains(t *testing.T) {
-	assert.Equal(t, `filename ~ "test"`, inline(mustCompile(t, `filename.contains("test")`, attachmentFields()...)))
+	// The pattern arrives pre-padded (`%test%`); see likeWildcards.
+	assert.Equal(t, `filename ~ "%test%"`, inline(mustCompile(t, `filename.contains("test")`, attachmentFields()...)))
 
 	// A list field membership-tests instead of substring-matching.
 	assert.Equal(t, mustCompile(t, `tags.exists("work")`).Fragment,

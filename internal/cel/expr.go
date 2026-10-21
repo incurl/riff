@@ -1214,56 +1214,53 @@ func (p *parser) callBuiltin(name string, args []*expr) (*expr, error) {
 		return &expr{kind: nodeValue, val: sizeRef{column: f.Column}}, nil
 	}
 
-	// content.contains(...) -> the `~` operator, which PocketBase's
-	// filter builder expands to `LIKE ('%' || param || '%')`.
+	// String matching: `.contains`, `.startsWith` and `.endsWith` all
+	// compile to the `~` operator, which PocketBase's filter builder
+	// expands to `LIKE` with `ESCAPE '\'`. The three differ only in the
+	// wildcard padding around the pattern, so `stringMatch` and
+	// `likeWildcards` are the single places that know the mapping.
 	//
-	// startsWith / endsWith / matches are NOT expressible: the filter
-	// language has no wildcard escaping, no "starts with" operator and
-	// no regex. They are rejected rather than approximated, because a
-	// `LIKE 'a%'` that silently becomes a contains-search would return
-	// the wrong rows.
-	if _, isContent := strings.CutPrefix(name, "content."); isContent {
-		if !strings.HasSuffix(name, ".contains") {
-			return nil, errors.Errorf(
-				"%s is not supported; the filter language only offers `content.contains(…)`", name)
-		}
-		s, err := oneStringArg(name, args)
-		if err != nil {
-			return nil, err
-		}
-		lit := p.literal(s)
-		return &expr{
-			fragment: "content ~ " + lit.fragment,
-			args:     lit.args,
-			kind:     nodePredicate,
-			op:       opCompare,
-			cmpOp:    "~",
-			parts:    []*expr{{fragment: "content"}, lit},
-		}, nil
-	}
-
-	// Any other registered column supports `field.contains("text")` on
-	// the same `~` operator. This is what the attachment contract
-	// documents (`filename.contains("test")`) and what `content.contains`
-	// already did for one hard-coded name.
-	if recv, ok := strings.CutSuffix(name, ".contains"); ok {
-		if f, ok := p.fields[recv]; ok {
+	// The padding is done here rather than by PocketBase. `wrapLikeParams`
+	// (tools/search/filter.go) escapes a bound value and wraps it in
+	// `%…%` only when that value carries no unescaped `%`; a value that
+	// does passes through verbatim so a caller can supply their own
+	// wildcards. Binding "a%" therefore yields `LIKE '%a%%'`, which the
+	// SQL LIKE collapses to "starts with a". Because every padded pattern
+	// below contains at least one unescaped `%`, the database's heuristic
+	// never overrides the operator chosen here.
+	//
+	// `matches` is still rejected: LIKE has no regex engine, and silently
+	// degrading it to a substring search would return the wrong rows.
+	if recv, op, ok := cutStringMatch(name); ok {
+		if f, found := p.fields[recv]; found {
 			s, err := oneStringArg(name, args)
 			if err != nil {
 				return nil, err
 			}
 			if f.Kind == FieldJSONList {
+				// A JSON-array column has no LIKE padding semantics;
+				// membership is the only meaningful test (jsonListPredicate).
+				if op != matchContains {
+					return nil, errors.Errorf("%s.%s(...) is not supported on a list field", recv, op)
+				}
 				return jsonListPredicate(f.Column, s, p)
 			}
-			lit := p.literal(s)
-			return &expr{
-				fragment: f.Column + " ~ " + lit.fragment,
-				args:     lit.args,
-				kind:     nodePredicate,
-				op:       opCompare,
-				cmpOp:    "~",
-				parts:    []*expr{{fragment: f.Column, kind: nodeValue}, lit},
-			}, nil
+			return p.stringMatch(f.Column, op, s), nil
+		}
+	}
+
+	// A string-matching method on a receiver this schema does not
+	// register, or on `content` when the schema names it directly.
+	// `content.matches(…)` lands here and must be refused by name rather
+	// than falling through to a default that would degrade it to a
+	// substring search — the exact failure mode this dispatch exists to
+	// prevent.
+	if recv, tail, found := strings.Cut(name, "."); found && recv != "" {
+		if _, registered := p.fields[recv]; !registered || recv == "content" {
+			if isStringMatchMethod(tail) {
+				return nil, errors.Errorf("%s is not supported by the filter language; %s.%s(…) would not behave as written",
+					name, recv, tail)
+			}
 		}
 	}
 
@@ -1324,6 +1321,114 @@ func jsonListPredicate(column, element string, p *parser) (*expr, error) {
 
 func oneStringArg(name string, args []*expr) (string, error) {
 	return oneStringArgAt(name, args, 0)
+}
+
+// matchKind is the string-match operator a `.contains` / `.startsWith` /
+// `.endsWith` call asked for. The CEL spelling is used verbatim in error
+// messages so a caller is told what it actually wrote.
+type matchKind string
+
+const (
+	matchContains   matchKind = "contains"
+	matchStartsWith matchKind = "startsWith"
+	matchEndsWith   matchKind = "endsWith"
+)
+
+// isStringMatchMethod reports whether a method name is one of the CEL
+// string-matching methods. `matches` is included even though it is not
+// expressible: recognising it is what lets the caller be told the
+// operator is unsupported instead of having it silently collapse into
+// `.contains` and return the wrong rows.
+func isStringMatchMethod(name string) bool {
+	switch name {
+	case string(matchContains), string(matchStartsWith), string(matchEndsWith), "matches":
+		return true
+	}
+	return false
+}
+
+// cutStringMatch splits `field.operator` into its receiver and the
+// string-match operator. The third result is false when the trailing
+// segment is not one of the three supported operators, which is how
+// `content.matches(…)` and `tags.all(…)` fall through to their own
+// branches instead of being mistaken for a match.
+func cutStringMatch(name string) (recv string, op matchKind, ok bool) {
+	recv, tail, found := strings.Cut(name, ".")
+	if !found || recv == "" {
+		return "", "", false
+	}
+	switch matchKind(tail) {
+	case matchContains, matchStartsWith, matchEndsWith:
+		return recv, matchKind(tail), true
+	}
+	return "", "", false
+}
+
+// likeWildcards renders the bound pattern for the three match kinds:
+//
+//	contains   -> %<escaped>%
+//	startsWith -> <escaped>%
+//	endsWith   -> %<escaped>
+//
+// Padding explicitly also fixes a latent bug in `contains`. PocketBase's
+// heuristic keyed off the *raw* value, so `contains("100%")` bound a
+// value with an unescaped `%`, skipped the wrapping, and ran
+// `LIKE '100%'` — a prefix match on a literal percent sign. Padding
+// makes it `%100\%%`, which is what the caller meant.
+func likeWildcards(op matchKind, s string) string {
+	escaped := escapeLikeLiteral(s)
+	switch op {
+	case matchStartsWith:
+		return escaped + "%"
+	case matchEndsWith:
+		return "%" + escaped
+	default:
+		return "%" + escaped + "%"
+	}
+}
+
+// escapeLikeLiteral escapes the LIKE metacharacters for the
+// `ESCAPE '\'` clause PocketBase emits alongside `LIKE`. An escape that
+// was already present is left alone, so a caller who deliberately passed
+// `a\%b` keeps their own escape rather than having the backslash
+// doubled. This mirrors escapeUnescapedChars in
+// pocketbase/tools/search/filter.go.
+func escapeLikeLiteral(s string) string {
+	rs := []rune(s)
+	out := make([]rune, 0, len(rs))
+	esc := false
+	for _, r := range rs {
+		switch {
+		case esc:
+			// A character after an existing escape is always literal.
+			out = append(out, r)
+			esc = false
+		case r == '\\':
+			out = append(out, r)
+			esc = true
+		case r == '%' || r == '_':
+			out = append(out, '\\', r)
+		default:
+			out = append(out, r)
+		}
+	}
+	return string(out)
+}
+
+// stringMatch renders `column ~ {:pat}`. The bound value carries the
+// wildcard padding, and the node keeps `~` as its cmpOp so `negate` can
+// flip it to `!~` — which is why this is an opCompare rather than a
+// bespoke node.
+func (p *parser) stringMatch(column string, op matchKind, s string) *expr {
+	lit := p.literal(likeWildcards(op, s))
+	return &expr{
+		fragment: column + " ~ " + lit.fragment,
+		args:     lit.args,
+		kind:     nodePredicate,
+		op:       opCompare,
+		cmpOp:    "~",
+		parts:    []*expr{{fragment: column, kind: nodeValue}, lit},
+	}
 }
 
 func oneStringArgAt(name string, args []*expr, idx int) (string, error) {

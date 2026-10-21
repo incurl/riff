@@ -48,6 +48,8 @@
 //
 //	content.contains(s)      -> `content ~ s`
 //	<field>.contains(s)      -> `column ~ s` for any scalar field
+//	content.startsWith(s)    -> `content ~ s%`
+//	content.endsWith(s)      -> `content ~ %s`
 //	tags.exists(s)           -> JSON-array membership, see below
 //	tags.exists(e, e == s)   -> the same membership test
 //	sets.contains(col, s)    -> JSON-array membership
@@ -56,6 +58,16 @@
 //	timestamp(rfc3339)       -> that instant, pinned format
 //	timestamp(unixSeconds)   -> that instant (CEL's int conversion)
 //	duration("24h")          -> only as `now ± duration(…)`
+//
+// The three string matches differ only in the wildcard padding, and the
+// padding is done by the compiler rather than by PocketBase. PocketBase
+// escapes a bound value and wraps it in `%…%` only when that value
+// carries no unescaped `%`; a value that does passes through verbatim so
+// a caller can supply their own wildcards. Binding "a%" therefore yields
+// `LIKE '%a%%'`, which the SQL LIKE collapses to "starts with a". Doing
+// the padding here keeps the operator the only thing that decides the
+// shape, and escapeLikeLiteral additionally neutralises the caller's own
+// `%` and `_` so they cannot widen the match.
 //
 // `now ± duration(...)` is folded at compile time: the filter language
 // has no arithmetic, but when one operand is a pinned instant and the
@@ -72,9 +84,9 @@
 //
 // Rejected, because the filter language has no equivalent:
 //
-//	content.startsWith / endsWith / matches
-//	  There is no wildcard escaping and no "starts with" operator,
-//	  so these would silently degrade to a contains-search.
+//	content.matches
+//	  LIKE has no regex engine, and silently degrading it to a
+//	  substring search would return the wrong rows.
 //	size(x) other than `== 0` / `!= 0` on a list field
 //	  No length function.
 //	sets.intersects / sets.equivalent

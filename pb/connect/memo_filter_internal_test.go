@@ -174,6 +174,80 @@ func TestListMemos_ContentFilter(t *testing.T) {
 	require.Len(t, ids, 0)
 }
 
+// TestListMemos_StringMatchFilters pins the LIKE semantics of
+// `.contains` / `.startsWith` / `.endsWith` end-to-end against a real
+// PocketBase query, because the unit tests in internal/cel can only pin
+// the emitted pattern, not how the database interprets it.
+//
+// The wildcard padding the compiler applies only means "starts with"
+// because PocketBase skips its own `%…%` wrapping for a bound value that
+// already contains an unescaped `%`. That is documented in
+// wrapLikeParams (tools/search/filter.go), so this test fails if a
+// PocketBase upgrade changes it.
+func TestListMemos_StringMatchFilters(t *testing.T) {
+	app := newTestApp(t)
+	alice := newUser(t, app, "alice")
+	newFilterMemo(t, app, alice.Id, "roadmap notes", nil)
+	newFilterMemo(t, app, alice.Id, "the roadmap", nil)
+	newFilterMemo(t, app, alice.Id, "old roadmap", nil)
+
+	count := func(filter string) int {
+		t.Helper()
+		return len(listMemoIDs(t, app, &v1.ListMemosRequest{Filter: filter}))
+	}
+
+	assert.Equal(t, 1, count(`content.startsWith("roadmap")`),
+		"startsWith must anchor at the beginning, not match any position")
+	assert.Equal(t, 2, count(`content.endsWith("roadmap")`),
+		"endsWith must anchor at the end")
+	assert.Equal(t, 3, count(`content.contains("roadmap")`))
+	assert.Equal(t, 0, count(`content.startsWith("nomatch")`))
+	assert.Equal(t, 0, count(`content.endsWith("nomatch")`))
+
+	// Negation inverts the whole padded match, so it is the exact
+	// complement: 3 - 1 = 2 for startsWith, 3 - 2 = 1 for endsWith.
+	assert.Equal(t, 2, count(`!content.startsWith("roadmap")`))
+	assert.Equal(t, 1, count(`!content.endsWith("roadmap")`))
+}
+
+// TestListMemos_StringMatchEscapesUserMetacharacters pins the escaping.
+// A literal `%` or `_` in the search text must not act as a wildcard:
+// `contains("10_0")` has to match "10_0 marker" and must NOT also match
+// "100 marker".
+//
+// This is a regression guard for a real bug: before the compiler padded
+// and escaped its own patterns, `contains("100%")` bound the raw value,
+// PocketBase saw the unescaped `%`, skipped its wrapping, and ran
+// `LIKE '100%'` — a *prefix* match on a literal percent sign, which
+// silently returned the wrong rows.
+func TestListMemos_StringMatchEscapesUserMetacharacters(t *testing.T) {
+	app := newTestApp(t)
+	alice := newUser(t, app, "alice")
+	newFilterMemo(t, app, alice.Id, "10_0 marker", nil)
+	newFilterMemo(t, app, alice.Id, "100 marker", nil)
+	newFilterMemo(t, app, alice.Id, "100% done", nil)
+	newFilterMemo(t, app, alice.Id, "really 100% great", nil)
+
+	count := func(filter string) int {
+		t.Helper()
+		return len(listMemoIDs(t, app, &v1.ListMemosRequest{Filter: filter}))
+	}
+
+	assert.Equal(t, 1, count(`content.contains("10_0")`),
+		"_ must be literal: 100 marker must not match 10_0")
+	assert.Equal(t, 2, count(`content.contains("100%")`),
+		"% must be literal and the match must be a substring search, "+
+			"so 'really 100% great' counts too")
+	assert.Equal(t, 1, count(`content.startsWith("100%")`),
+		"startsWith anchors at the start")
+	// The literal `%` still matches only the literal percent sign, and the
+	// anchor still applies, so only the memo that literally begins that way
+	// is returned.
+	assert.Equal(t, 1, count(`content.startsWith("really 100%")`))
+	assert.Equal(t, 0, count(`content.startsWith("really 99%")`),
+		"a different literal before the percent must not match")
+}
+
 func TestListMemos_VisibilityFilter(t *testing.T) {
 	app := newTestApp(t)
 	alice := newUser(t, app, "alice")
@@ -333,7 +407,9 @@ func TestListMemos_RejectsUnsupportedFilter(t *testing.T) {
 		`nonsense == "x"`,
 		`visibility == "PUBLIK"`,
 		`sets.equivalent(tags, ["a"])`,
-		`content.startsWith("a")`,
+		// `startsWith`/`endsWith` are supported now; `matches` is the
+		// string-matching operator with no LIKE equivalent.
+		`content.matches("a")`,
 		`space == "spaces/nope" || nonsense == "y"`,
 	} {
 		_, err := NewMemoServer(app).ListMemos(t.Context(), &v1.ListMemosRequest{Filter: filter})
@@ -785,10 +861,13 @@ func TestMemoView_ValidatesFilter(t *testing.T) {
 	require.NoError(t, err)
 
 	// The same call with a filter the feed would reject answers the
-	// question the SPA's Validate button asks.
+	// question the SPA's Validate button asks. `matches` is the right
+	// example here: LIKE has no regex engine, so it is refused, while
+	// `startsWith` and `endsWith` compile (see
+	// TestListMemos_StringMatchFilters).
 	_, err = users.CreateMemoView(ctx, &v1.CreateMemoViewRequest{
 		Parent:       "users/alice",
-		MemoView:     &v1.MemoView{Title: "bad", Filter: `content.startsWith("x")`},
+		MemoView:     &v1.MemoView{Title: "bad", Filter: `content.matches("x")`},
 		ValidateOnly: true,
 	})
 	require.Error(t, err)
