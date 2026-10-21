@@ -35,6 +35,15 @@ riff is a self-hosted PocketBase backend serving memos, patches, samples, and sp
 
 Run from the repository root unless a command starts with `cd`.
 
+On this workstation the toolchain binaries are outside the default PATH of
+non-interactive shells: `node` and `pnpm` live in `~/.local/bin` (and `pnpm`
+must run under *that* Node — the v20 on `PATH` dies with
+`No such built-in module: node:sqlite`), while `buf` and `golangci-lint` live
+in `~/go/bin`. Prefix the command rather than relying on the interactive
+shell: `PATH="$HOME/.local/bin:$PATH" pnpm test`,
+`PATH="$HOME/go/bin:$PATH" golangci-lint run`, or, from `proto/`,
+`PATH="$HOME/go/bin:$PWD/../web/node_modules/.bin:$PATH" buf generate`.
+
 ```bash
 # Backend
 go run -buildvcs=true . serve                    # Serve (CalVer derived from HEAD commit date; `serve` is required — the root command only prints help)
