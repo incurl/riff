@@ -1052,12 +1052,16 @@ func v0ResolveMemoName(e *core.RequestEvent, v0ID int64) (string, error) {
 	if v1 := resolveV0IDForRequest(e.Request.Context(), v0ID); v1 != "" {
 		return v1, nil
 	}
-	// Fall through to a fresh list. The V0
-	// list call uses the same wrap helper as
-	// `v0MemoListHandler` so the filter and
-	// page-size match what the V0 client saw
-	// on its list call.
-	body, err := v0MemoListToV1ListMemos(nil, nil, e.Request.URL.Query())
+	// Fall through to a fresh list.
+	//
+	// The request's query string is deliberately NOT
+	// forwarded: `?pinned=true` on an organizer or
+	// patch call is a leftover from the client's
+	// list request, and now that ListMemos honours
+	// the CEL filter an unpinned memo would drop out
+	// of this lookup. An id resolution has to consider
+	// every memo the caller can see.
+	body, err := v0MemoListToV1ListMemos(nil, nil, nil)
 	if err != nil {
 		return "", err
 	}

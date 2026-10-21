@@ -310,12 +310,17 @@ func v0MemoListToV1ListMemos(_ []byte, _ map[string]string, q url.Values) ([]byt
 	// handler scopes the list to the caller's
 	// own memos by default (the V0 client is
 	// always signed in as the active user).
+	// The V1 `filter` field is an AIP-132 CEL expression, not a
+	// PocketBase filter string: a comparison needs `==`, and a bare
+	// identifier is not a complete predicate. `pinned = true` (the
+	// PocketBase spelling) is rejected by internal/cel, so the
+	// pinned filter is written as `pinned == true`.
 	filter := ""
 	if pinned := q.Get("pinned"); pinned != "" {
 		if pinned == "true" {
-			filter = "pinned = true"
+			filter = "pinned == true"
 		} else {
-			filter = "pinned = false"
+			filter = "pinned == false"
 		}
 	}
 	pageSize := int32(50)

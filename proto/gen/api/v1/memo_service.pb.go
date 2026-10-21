@@ -775,7 +775,9 @@ type ListMemosRequest struct {
 	// Provide this to retrieve the subsequent page.
 	PageToken string `protobuf:"bytes,2,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
 	// Optional. The state of the memos to list.
-	// Default to `NORMAL`. Set to `ARCHIVED` to list archived memos.
+	// When unset, no state constraint is applied: normal and archived memos
+	// are both returned. Set to `NORMAL` to exclude archived memos, or
+	// `ARCHIVED` to list archived memos only.
 	State State `protobuf:"varint,3,opt,name=state,proto3,enum=memos.api.v1.State" json:"state,omitempty"`
 	// Optional. The order to sort results by.
 	// Default to "create_time desc".
@@ -793,7 +795,8 @@ type ListMemosRequest struct {
 	//	visibility (string: PRIVATE | PROTECTED | PUBLIC | SPACE),
 	//	space (string resource name, or null when the memo has no space;
 	//	  supports == and comparisons against null, e.g. space != null),
-	//	tags (list<string>; match with `"work" in tags`, not `tag == "work"`),
+	//	tags (list<string>; use `"work" in tags`, `tag in ["work"]` or
+	//	  `tags.exists("work")`),
 	//	has_task_list / has_link / has_code / has_incomplete_tasks (bool),
 	//	has_location (bool; true when the memo has a location attached).
 	//

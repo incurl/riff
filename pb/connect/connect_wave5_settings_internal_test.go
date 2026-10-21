@@ -168,7 +168,7 @@ func TestMemoView_CRUD(t *testing.T) {
 		Parent: "users/alice",
 		MemoView: &v1.MemoView{
 			Title:  "My patches",
-			Filter: "tag == \"patches\"",
+			Filter: `tag in ["patches"]`,
 			Icon:   &v1.MemoView_Icon{Value: &v1.MemoView_Icon_Lucide{Lucide: "leaf"}},
 		},
 	})
@@ -193,13 +193,13 @@ func TestMemoView_CRUD(t *testing.T) {
 	updated, err := users.UpdateMemoView(ctx, &v1.UpdateMemoViewRequest{
 		MemoView: &v1.MemoView{
 			Name:   created.GetName(),
-			Filter: "tag == \"samples\"",
+			Filter: `tag in ["samples"]`,
 		},
 		UpdateMask: mask,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "My patches", updated.GetTitle(), "title untouched by mask")
-	assert.Equal(t, "tag == \"samples\"", updated.GetFilter())
+	assert.Equal(t, `tag in ["samples"]`, updated.GetFilter())
 
 	// Delete.
 	_, err = users.DeleteMemoView(ctx, &v1.DeleteMemoViewRequest{Name: created.GetName()})

@@ -1048,9 +1048,12 @@ type ListAttachmentsRequest struct {
 	// Optional. A page token, received from a previous `ListAttachments` call.
 	// Provide this to retrieve the subsequent page.
 	PageToken string `protobuf:"bytes,2,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
-	// Optional. Filter to apply to the list results.
-	// Example: "mime_type==\"image/png\"" or "filename.contains(\"test\")"
-	// Supported operators: =, !=, <, <=, >, >=, : (contains), in
+	// Optional. A CEL expression to filter the list results.
+	// Example: "mime_type == \"image/png\"" or "filename.contains(\"test\")"
+	// Supported operators: ==, !=, <, <=, >, >=, `field.contains(...)`, `in [...]`.
+	// Expressions the PocketBase filter grammar cannot express (for example
+	// `content.startsWith`, `size(x)` other than `== 0` on a list field, or set
+	// algebra) are rejected with INVALID_ARGUMENT rather than ignored.
 	// Supported fields: creator, filename, mime_type, create_time, memo_id, space.
 	// `creator` is the linked memo's creator, or the uploader for an unlinked
 	// attachment. It supports equality with a User resource name.

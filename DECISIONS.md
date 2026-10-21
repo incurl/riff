@@ -5,6 +5,197 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## `ListMemos` discarded `request.filter`: a CEL compiler targeting PocketBase's *filter grammar*, not SQL (2026-10-21)
+
+Every memo filter in the SPA was a no-op. `ListMemos` called
+`FindRecordsByFilter(memos, "", ...)` — the filter was read
+off the request and thrown away — so space, creator, tag,
+content search, visibility, calendar range, pinned and saved
+views all silently returned the unfiltered feed.
+`ListAttachments` had the same bug with `memo_id == null`.
+
+The fix is `internal/cel`, which compiles the AIP-132 CEL
+expression into the string PocketBase's query builder
+understands, plus the per-collection field schema in
+`pb/connect/cel_fields.go`.
+
+**The target is not SQL.** The first implementation emitted
+raw SQL fragments (`json_array_contains(tags, :x)`) and
+nothing worked: PocketBase does not pass the filter through to
+SQLite. `tools/search` parses it with
+`github.com/ganigeorgiev/fexpr` first, and the vocabulary is
+tiny — `= != < <= > >= ~ !~ ?= ?!=` joined by `&&` `||`, with
+`(...)` for grouping. It has **no arithmetic**, **no negation
+operator** (`!x` is "invalid sign operator"), and exactly two
+functions (`geoDistance`, `strftime`). Everything the compiler
+emits has to survive that parser.
+
+Three consequences worth keeping:
+
+* **An operand may not be parenthesised.** `(space) = "x"` is
+  "invalid or incomplete filter expression"; `space = "x"` is
+  fine. Groups are only legal around whole expressions.
+* **Timestamps are TEXT.** Autodate columns store
+  `"2006-01-02 15:04:05.000Z"` (`tools/types.DefaultDateLayout`),
+  so `timestamp("…")` and `now` bind that *string*. Binding a
+  Unix epoch would compare a string to a number and match
+  nothing — every calendar filter would return empty.
+  `timestamp()` itself accepts both forms CEL defines, a
+  string (RFC 3339) and an integer (Unix seconds), because the
+  SPA's calendar emits the integer one —
+  `buildTimestampRangeFilter` in
+  `web/src/lib/calendar-utils.ts` writes
+  `created_ts >= timestamp(1749340800)` — while saved views and
+  the docs spell it with a string. Accepting only one form
+  rejects the other as `CodeInvalidArgument`, which is how
+  every calendar day and month view broke.
+* **Derived predicates are ordinary dotted JSON paths.**
+  `has_link` compiles to `payload.property.has_link = true`;
+  PocketBase splits the field name on `.` and extracts the JSON
+  path itself. (`json_extract(payload, '$.…')` is *not* a
+  filter function and is rejected as "unknown function".)
+
+**`?= does not work on a JSON column.** It resolves only for
+fields PocketBase models as multi-match, which are relations.
+riff's `tags` is a plain `JSONField`, so `tags ?= "work"`
+returns zero rows. Membership compiles instead to four anchored
+LIKE patterns (`internal/cel.jsonListMember`) covering every
+position an element can occupy in the serialised array. The
+anchors are load-bearing: `tags ~ '"work"'` also matches
+`"workout"` and `"xwork"`, which is the bug
+`TestListMemos_TagFilterMatchesWholeElements` pins. The
+patterns assume the serialiser emits no space after commas,
+which is what PocketBase's JSONField does.
+
+**Negation is pushed down by De Morgan** (`internal/cel.negate`)
+because fexpr has no `!`. `!(a && b)` becomes `!a || !b`, and a
+comparison has its operator flipped. Three things have no
+negated form and are rejected rather than approximated: a
+derived predicate (`!has_link`), an ordering comparison
+(`!(created_ts > now)` — the bounds cannot be inverted without
+the value's type), and a list-membership test.
+
+**Unsupported input is a 400, not a silent unfiltered feed.**
+An unknown field, an unknown function, `content.startsWith`,
+`size(x)`, `sets.equivalent`, `tags.all`, or arithmetic all
+return `CodeInvalidArgument`. Each of those would otherwise
+degrade into "returns everything", which is indistinguishable
+from "filtering works" for the user. `Field.Const` turns a
+typo like `visibility == "PUBLIK"` into an error rather than a
+query that matches nothing.
+
+**The V0 shaper was writing PocketBase syntax into the CEL
+field.** `pb/api/upstream_memos_v0_convert.go` emitted
+`pinned = true` (single `=`, bare identifier) into
+`ListMemosRequest.filter`, which the compiler correctly
+rejects — `TestV0PatPath_MoeMemosBoot` caught it, and it is the
+test AGENTS.md calls the riskiest possible outcome of a V0
+change. It now emits `pinned == true`.
+
+**And `v0ResolveMemoName` had to stop forwarding the query
+string.** It reused `v0MemoListToV1ListMemos` "so the filter
+and page-size match what the V0 client saw on its list call".
+That was only safe while the filter was ignored: a PATCH or
+organizer call carries `?pinned=true` from the client's earlier
+list request, and with filters honoured an *unpinned* memo drops
+out of the lookup, so the resolve 404s. An id resolution has to
+see every memo the caller can.
+
+`ListMemosRequest.state` was ignored in the same way; it is now
+honoured (`memoStateFilter`), AND-ed with the CEL filter. An
+unspecified state means "no constraint", not `NORMAL` — the home
+feed leaves it unset and must see archived memos too.
+
+### The contract and the compiler disagreed, and neither side saw it
+
+The first implementation rejected six expressions that the API,
+the MCP tool description or a saved-view example told the user to
+write. Every one of them surfaced as `CodeInvalidArgument` on a
+filter the UI had just suggested:
+
+* `"work" in tags` — `proto/api/v1/memo_service.proto` documents
+  it, and it is the placeholder of the SPA's quick-find CEL mode.
+  The parser only understood `field in [list]`; the reversed form
+  fell out of `parseCmp` as a stray `in` token.
+* `tags.exists(t, t == "urgent")` — the element-binding macro's
+  predicate names a variable the grammar had no binding for.
+* `now - duration("168h")` — arithmetic was rejected outright.
+* `filename.contains("test")` — only `content.contains` was
+  hard-coded, so the attachment contract's own example failed.
+* `!has_location` and `size(tags) == 0` — two of the examples the
+  saved-view dialog ships.
+* `true` — the "match everything" filter a saved view stores, and
+  the filter the wave-5 CRUD test itself uses.
+
+The fix keeps the "reject what the grammar cannot express" rule
+and makes the expressible half of the documented dialect compile:
+
+* `"x" in <list field>` reaches the same `jsonListMember` test as
+  `tag in […]` (`parseValueIn`).
+* `tags.exists(e, e == "x")` is parsed by `parseCallArgs`, which
+  accepts only the equality form (`e` on either side) and rejects
+  the rest with a message naming the supported shape.
+* `now ± duration(...)` folds to a bound timestamp in
+  `parseAddSub`; every other arithmetic operator still errors, and
+  a bare `duration(...)` operand is rejected outright so it can
+  never be bound as a value.
+* Any registered scalar field supports `.contains`, so
+  `filename.contains` works; on a list field it means membership.
+* `Field.NegatedExpr` supplies the complement of a derived
+  predicate, the only way `!has_location` can compile. Without it,
+  negating a derived field is still an error.
+* `size(<list field>) == 0` / `!= 0` compiles to the empty-array /
+  NULL test. `tags` is `[]` for an untagged memo, and the pair
+  also covers rows written before the tag hook existed.
+* A bare `true` / `false` becomes `id != ""` / `id = ""`: the
+  grammar has no comparison-free boolean, and every collection has
+  an `id`.
+* `tag == "x"` — the spelling older saved views carry — compiles to
+  the same membership test, because membership is the only reading
+  a scalar equality can have on a list. `tag != "x"` is still
+  rejected: the complement of the four anchored LIKE patterns has
+  no expression.
+
+**`attachments.creator` needed a fallback, not a column.** The
+proto documents it as "the linked memo's creator, or the uploader
+for an unlinked attachment", but `creator` is only stamped on
+orphan uploads (that stamp is the rebind guard). A plain column
+comparison therefore matched no bound attachment at all.
+`Field.FallbackColumn` / `FallbackWhen` compile equality to
+`((memo.author = x) || ((creator = x) && (memo = null)))`;
+inequality is rejected because the complement of that disjunction
+is not expressible.
+
+**A saved view is validated when it is written.** The SPA's
+"Validate" button calls `CreateMemoView(validate_only: true)`,
+which used to return the request unchanged — so a filter the feed
+would reject was blessed by the validator and then 400ed every
+feed that selected the view. `validateMemoViewFilter` now compiles
+it with the schema `ListMemos` uses, and an update that touches
+`filter` does the same. The example list in
+`web/src/pages/MemoViews.tsx` was pruned to the compilable subset:
+regex, `startsWith`, quantifiers, `size(content)` and set algebra
+have no PocketBase equivalent, and offering them in the UI was a
+promise the server could not keep.
+
+The lesson is about where the test goes. A compiler unit test can
+be green while the documented syntax is rejected — the old suite
+pinned the *rejection* of `tags.exists(t, …)` and
+`now - duration(...)` as correct behaviour. The round trip is now
+pinned at the API boundary instead
+(`TestListMemos_TagMembershipDocumentedForms` walks all four
+spellings of the same filter against a real app).
+
+The contract text itself was wrong in two places and is fixed in
+the proto sources (regenerated with `buf generate`): `state`'s
+"Default to `NORMAL`" (the implementation applies no constraint
+when it is unset), and the attachment filter's "Supported
+operators: `=, !=, …, : (contains), in`" — `:` is PocketBase
+syntax, not CEL, and the real surface is `==`, the comparisons,
+`field.contains(...)` and `in [...]`.
+
+
+
 ## MoeMemos saw `createdTs: 0` and `size: 0` on every row: the V0 shaper read protojson fields as the wrong JSON types (2026-10-20)
 
 The report was two symptoms in one: *"MoeMemos uploads are not

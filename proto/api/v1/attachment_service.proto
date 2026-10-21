@@ -277,9 +277,12 @@ message ListAttachmentsRequest {
   // Provide this to retrieve the subsequent page.
   string page_token = 2 [(google.api.field_behavior) = OPTIONAL];
 
-  // Optional. Filter to apply to the list results.
-  // Example: "mime_type==\"image/png\"" or "filename.contains(\"test\")"
-  // Supported operators: =, !=, <, <=, >, >=, : (contains), in
+  // Optional. A CEL expression to filter the list results.
+  // Example: "mime_type == \"image/png\"" or "filename.contains(\"test\")"
+  // Supported operators: ==, !=, <, <=, >, >=, `field.contains(...)`, `in [...]`.
+  // Expressions the PocketBase filter grammar cannot express (for example
+  // `content.startsWith`, `size(x)` other than `== 0` on a list field, or set
+  // algebra) are rejected with INVALID_ARGUMENT rather than ignored.
   // Supported fields: creator, filename, mime_type, create_time, memo_id, space.
   // `creator` is the linked memo's creator, or the uploader for an unlinked
   // attachment. It supports equality with a User resource name.

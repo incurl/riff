@@ -38,7 +38,16 @@ func NewAttachmentServer(app core.App) *AttachmentServer {
 func (s *AttachmentServer) ListAttachments(ctx context.Context, req *v1.ListAttachmentsRequest) (*v1.ListAttachmentsResponse, error) {
 	limit, offset := paginationFromRequest(0, int(req.GetPageSize()))
 
-	rows, err := s.app.FindRecordsByFilter("attachments", "", "-created", limit, offset)
+	// The SPA sends the same AIP-132 CEL the memo list takes. It was
+	// previously discarded, so `memo_id == null` (the
+	// unused-attachment library filter) and the per-type filters
+	// returned every attachment the caller could read.
+	filterSQL, filterArgs, err := attachmentCELFilter(s.app, req.GetFilter())
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err.Error())
+	}
+
+	rows, err := s.app.FindRecordsByFilter("attachments", filterSQL, "-created", limit, offset, filterArgs)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
 	}
@@ -135,6 +144,7 @@ func canAccessAttachment(app core.App, ctx context.Context, rec *core.Record) bo
 //     from the creator of the linked memo"). The column is
 //     only stamped on unlinked rows, so a bound row falls back
 //     to its memo's author to keep the field populated.
+//
 // MemoAttachmentsAsProto returns the attachment rows currently bound to
 // `memoID`, in the wire shape the V0 REST shaper needs.
 //

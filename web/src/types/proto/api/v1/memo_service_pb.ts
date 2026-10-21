@@ -543,7 +543,9 @@ export type ListMemosRequest = Message<"memos.api.v1.ListMemosRequest"> & {
 
   /**
    * Optional. The state of the memos to list.
-   * Default to `NORMAL`. Set to `ARCHIVED` to list archived memos.
+   * When unset, no state constraint is applied: normal and archived memos
+   * are both returned. Set to `NORMAL` to exclude archived memos, or
+   * `ARCHIVED` to list archived memos only.
    *
    * @generated from field: memos.api.v1.State state = 3;
    */
@@ -570,7 +572,8 @@ export type ListMemosRequest = Message<"memos.api.v1.ListMemosRequest"> & {
    *   visibility (string: PRIVATE | PROTECTED | PUBLIC | SPACE),
    *   space (string resource name, or null when the memo has no space;
    *     supports == and comparisons against null, e.g. space != null),
-   *   tags (list<string>; match with `"work" in tags`, not `tag == "work"`),
+   *   tags (list<string>; use `"work" in tags`, `tag in ["work"]` or
+   *     `tags.exists("work")`),
    *   has_task_list / has_link / has_code / has_incomplete_tasks (bool),
    *   has_location (bool; true when the memo has a location attached).
    * Note: the time fields here are created_ts / updated_ts, which differ from

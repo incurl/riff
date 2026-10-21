@@ -77,7 +77,27 @@ func (s *MemoServer) ListMemos(ctx context.Context, req *v1.ListMemosRequest) (*
 	}
 	limit, offset := paginationFromRequest(0, int(req.GetPageSize()))
 
-	rows, err := s.app.FindRecordsByFilter(memos, "", "-created", limit, offset)
+	// `filter` is the AIP-132 CEL expression the SPA sends (see
+	// web/src/hooks/useMemoFilters.ts). It used to be discarded,
+	// which made every filter — space, creator, tag, search,
+	// visibility, calendar range — a no-op that silently returned
+	// the unfiltered feed.
+	filterSQL, filterArgs, err := memoCELFilter(s.app, req.GetFilter())
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err.Error())
+	}
+	// `state` is a separate request field, not part of the CEL
+	// expression; the SPA sets it on the Archived page and leaves
+	// it unset (STATE_UNSPECIFIED) on the home feed.
+	if st := req.GetState(); st != v1.State_STATE_UNSPECIFIED {
+		stateSQL, stateArgs, err := memoStateFilter(st)
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInvalidArgument, err.Error())
+		}
+		filterSQL, filterArgs = joinFilters(filterSQL, filterArgs, stateSQL, stateArgs)
+	}
+
+	rows, err := s.app.FindRecordsByFilter(memos, filterSQL, "-created", limit, offset, filterArgs)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
 	}

@@ -58,9 +58,12 @@ paths:
                 - name: filter
                   in: query
                   description: |-
-                    Optional. Filter to apply to the list results.
-                     Example: "mime_type==\"image/png\"" or "filename.contains(\"test\")"
-                     Supported operators: =, !=, <, <=, >, >=, : (contains), in
+                    Optional. A CEL expression to filter the list results.
+                     Example: "mime_type == \"image/png\"" or "filename.contains(\"test\")"
+                     Supported operators: ==, !=, <, <=, >, >=, `field.contains(...)`, `in [...]`.
+                     Expressions the PocketBase filter grammar cannot express (for example
+                     `content.startsWith`, `size(x)` other than `== 0` on a list field, or set
+                     algebra) are rejected with INVALID_ARGUMENT rather than ignored.
                      Supported fields: creator, filename, mime_type, create_time, memo_id, space.
                      `creator` is the linked memo's creator, or the uploader for an unlinked
                      attachment. It supports equality with a User resource name.
@@ -704,7 +707,9 @@ paths:
                   in: query
                   description: |-
                     Optional. The state of the memos to list.
-                     Default to `NORMAL`. Set to `ARCHIVED` to list archived memos.
+                     When unset, no state constraint is applied: normal and archived memos
+                     are both returned. Set to `NORMAL` to exclude archived memos, or
+                     `ARCHIVED` to list archived memos only.
                   schema:
                     enum:
                         - STATE_UNSPECIFIED
@@ -736,7 +741,8 @@ paths:
                        visibility (string: PRIVATE | PROTECTED | PUBLIC | SPACE),
                        space (string resource name, or null when the memo has no space;
                          supports == and comparisons against null, e.g. space != null),
-                       tags (list<string>; match with `"work" in tags`, not `tag == "work"`),
+                       tags (list<string>; use `"work" in tags`, `tag in ["work"]` or
+                         `tags.exists("work")`),
                        has_task_list / has_link / has_code / has_incomplete_tasks (bool),
                        has_location (bool; true when the memo has a location attached).
                      Note: the time fields here are created_ts / updated_ts, which differ from

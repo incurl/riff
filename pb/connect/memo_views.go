@@ -101,10 +101,14 @@ func (s *UserServer) CreateMemoView(ctx context.Context, req *v1.CreateMemoViewR
 	if req.MemoView.GetFilter() == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, "filter is required")
 	}
+	if err := validateMemoViewFilter(s.app, req.MemoView.GetFilter()); err != nil {
+		return nil, err
+	}
 	if req.GetValidateOnly() {
-		// No schema validation we can do beyond the obvious checks; return
-		// the request as-is so the SPA can render a preview without hitting
-		// the DB.
+		// The filter compiled against the same schema ListMemos uses,
+		// so the SPA's "Validate" button now answers the question it
+		// asks. Before this, any string was accepted and a view that
+		// could not be evaluated 400ed every feed that selected it.
 		return req.MemoView, nil
 	}
 
@@ -167,6 +171,9 @@ func (s *UserServer) UpdateMemoView(ctx context.Context, req *v1.UpdateMemoViewR
 		rec.Set("title", req.MemoView.GetTitle())
 	}
 	if touch("filter") && req.MemoView.GetFilter() != "" {
+		if err := validateMemoViewFilter(s.app, req.MemoView.GetFilter()); err != nil {
+			return nil, err
+		}
 		rec.Set("filter", req.MemoView.GetFilter())
 	}
 	if touch("icon") {
@@ -246,6 +253,18 @@ func recordToMemoView(user *core.Record, rec *core.Record) *v1.MemoView {
 		view.Icon = &v1.MemoView_Icon{Value: &v1.MemoView_Icon_Lucide{Lucide: rec.GetString("icon_value")}}
 	}
 	return view
+}
+
+// validateMemoViewFilter compiles a saved view's filter with the same
+// field schema ListMemos uses. A view whose filter cannot compile is
+// rejected at write time: otherwise it is stored happily and every
+// feed request that selects it answers CodeInvalidArgument, which the
+// user reads as a broken page rather than a bad saved filter.
+func validateMemoViewFilter(app core.App, filter string) error {
+	if _, _, err := memoCELFilter(app, filter); err != nil {
+		return connect.NewError(connect.CodeInvalidArgument, "filter is invalid: "+err.Error())
+	}
+	return nil
 }
 
 // setMemoViewIcon applies the proto's icon oneof to the record.
