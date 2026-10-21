@@ -67,9 +67,13 @@ func (s *SketchServer) ListMySketches(ctx context.Context, req *v1.ListMySketche
 	if viewer == nil {
 		return nil, connect.NewError(connect.CodeUnauthenticated, "authentication required")
 	}
+	limit, offset, err := pageWindow(req.GetPageSize(), req.GetPageToken())
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err.Error())
+	}
 	rows, err := s.app.FindRecordsByFilter("memos",
 		"author = {:uid} && sketch != null", "-created",
-		int(req.GetPageSize()), 0,
+		limit, offset,
 		map[string]any{"uid": viewer.Id})
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
@@ -80,7 +84,7 @@ func (s *SketchServer) ListMySketches(ctx context.Context, req *v1.ListMySketche
 			out = append(out, m)
 		}
 	}
-	return &v1.ListMySketchesResponse{Memos: out}, nil
+	return &v1.ListMySketchesResponse{Memos: out, NextPageToken: nextPageToken(offset, limit, len(rows))}, nil
 }
 
 // GetSketch returns a single sketch memo by

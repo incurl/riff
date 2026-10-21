@@ -75,7 +75,10 @@ func (s *MemoServer) ListMemos(ctx context.Context, req *v1.ListMemosRequest) (*
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
 	}
-	limit, offset := paginationFromRequest(0, int(req.GetPageSize()))
+	limit, offset, err := pageWindow(req.GetPageSize(), req.GetPageToken())
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err.Error())
+	}
 
 	// `filter` is the AIP-132 CEL expression the SPA sends (see
 	// web/src/hooks/useMemoFilters.ts). It used to be discarded,
@@ -124,7 +127,7 @@ func (s *MemoServer) ListMemos(ctx context.Context, req *v1.ListMemosRequest) (*
 		}
 		out = append(out, recordToMemo(ctx, s.app, r))
 	}
-	return &v1.ListMemosResponse{Memos: out, NextPageToken: ""}, nil
+	return &v1.ListMemosResponse{Memos: out, NextPageToken: nextPageToken(offset, limit, len(rows))}, nil
 }
 
 // requestInfoFor builds the RequestInfo the record rule engine reads. It
@@ -358,7 +361,10 @@ func (s *MemoServer) ListMemoComments(ctx context.Context, req *v1.ListMemoComme
 		return nil, connect.NewError(connect.CodeNotFound, "memo not found")
 	}
 
-	limit, offset := paginationFromRequest(0, int(req.GetPageSize()))
+	limit, offset, err := pageWindow(req.GetPageSize(), req.GetPageToken())
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err.Error())
+	}
 	order := req.GetOrderBy()
 	if order == "" {
 		order = "created"
@@ -383,7 +389,7 @@ func (s *MemoServer) ListMemoComments(ctx context.Context, req *v1.ListMemoComme
 		}
 		out = append(out, recordToMemo(ctx, s.app, comment))
 	}
-	return &v1.ListMemoCommentsResponse{Memos: out, NextPageToken: ""}, nil
+	return &v1.ListMemoCommentsResponse{Memos: out, NextPageToken: nextPageToken(offset, limit, len(rels))}, nil
 }
 
 // CreateMemoComment creates a reply. A comment is an independent memo joined to
@@ -480,9 +486,24 @@ func (s *MemoServer) ListMemoAttachments(ctx context.Context, req *v1.ListMemoAt
 	if !canViewMemo(s.app, ctx, rec) {
 		return nil, connect.NewError(connect.CodeNotFound, "memo not found")
 	}
+	limit, offset, err := pageWindow(req.GetPageSize(), req.GetPageToken())
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err.Error())
+	}
+	// The attachment set is assembled in memory (one memo's patches and
+	// samples), so the page is a slice of it rather than a query offset.
+	all := memoAttachments(ctx, s.app, id)
+	if offset > len(all) {
+		offset = len(all)
+	}
+	end := offset + limit
+	if end > len(all) {
+		end = len(all)
+	}
+	page := all[offset:end]
 	return &v1.ListMemoAttachmentsResponse{
-		Attachments:   memoAttachments(ctx, s.app, id),
-		NextPageToken: "",
+		Attachments:   page,
+		NextPageToken: nextPageToken(offset, limit, len(page)),
 	}, nil
 }
 

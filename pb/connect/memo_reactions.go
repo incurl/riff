@@ -27,7 +27,10 @@ func (s *MemoServer) ListMemoReactions(ctx context.Context, req *v1.ListMemoReac
 		return nil, connect.NewError(connect.CodeNotFound, "memo not found")
 	}
 
-	limit, offset := paginationFromRequest(0, int(req.GetPageSize()))
+	limit, offset, err := pageWindow(req.GetPageSize(), req.GetPageToken())
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err.Error())
+	}
 	rows, err := s.app.FindRecordsByFilter("reactions",
 		"memo={:id}", "-created", limit, offset, map[string]any{"id": memoID})
 	if err != nil {
@@ -38,7 +41,7 @@ func (s *MemoServer) ListMemoReactions(ctx context.Context, req *v1.ListMemoReac
 	for _, r := range rows {
 		out = append(out, recordToReaction(s.app, memoID, r))
 	}
-	return &v1.ListMemoReactionsResponse{Reactions: out, NextPageToken: ""}, nil
+	return &v1.ListMemoReactionsResponse{Reactions: out, NextPageToken: nextPageToken(offset, limit, len(rows))}, nil
 }
 
 // UpsertMemoReaction adds the caller's reaction of the given type to a memo.

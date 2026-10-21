@@ -121,7 +121,10 @@ func (s *UserServer) ListPersonalAccessTokens(ctx context.Context, req *v1.ListP
 		return nil, connect.NewError(connect.CodePermissionDenied, "you may only list your own personal access tokens")
 	}
 
-	limit, offset := paginationFromRequest(0, int(req.GetPageSize()))
+	limit, offset, err := pageWindow(req.GetPageSize(), req.GetPageToken())
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err.Error())
+	}
 	rows, err := s.app.FindRecordsByFilter("personal_access_tokens",
 		"user={:uid}", "-created_at", limit, offset, map[string]any{"uid": target.Id})
 	if err != nil {
@@ -131,7 +134,7 @@ func (s *UserServer) ListPersonalAccessTokens(ctx context.Context, req *v1.ListP
 	for _, r := range rows {
 		out = append(out, recordToPersonalAccessToken(s.app, r))
 	}
-	return &v1.ListPersonalAccessTokensResponse{PersonalAccessTokens: out}, nil
+	return &v1.ListPersonalAccessTokensResponse{PersonalAccessTokens: out, NextPageToken: nextPageToken(offset, limit, len(rows))}, nil
 }
 
 // CreatePersonalAccessToken mints a fresh PAT for the user

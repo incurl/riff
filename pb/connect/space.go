@@ -65,7 +65,10 @@ func (s *SpaceServer) ListSpaces(ctx context.Context, req *v1.ListSpacesRequest)
 	if viewerID == "" {
 		return nil, connect.NewError(connect.CodeUnauthenticated, "authentication required")
 	}
-	limit, offset := paginationFromRequest(0, int(req.GetPageSize()))
+	limit, offset, err := pageWindow(req.GetPageSize(), req.GetPageToken())
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err.Error())
+	}
 
 	memberships, err := s.app.FindRecordsByFilter("space_members",
 		"user={:uid} && status='ACTIVE'",
@@ -99,7 +102,7 @@ func (s *SpaceServer) ListSpaces(ctx context.Context, req *v1.ListSpacesRequest)
 	for _, r := range rows {
 		out = append(out, recordToSpace(s.app, r, viewerID))
 	}
-	return &v1.ListSpacesResponse{Spaces: out, NextPageToken: ""}, nil
+	return &v1.ListSpacesResponse{Spaces: out, NextPageToken: nextPageToken(offset, limit, len(rows))}, nil
 }
 
 // CreateSpace creates a new space. The OnRecordCreateRequest
@@ -214,7 +217,10 @@ func (s *SpaceServer) ListSpaceMembers(ctx context.Context, req *v1.ListSpaceMem
 	if !hooks.IsActiveMember(s.app, viewerID, rec.Id) {
 		return nil, connect.NewError(connect.CodeNotFound, "space not found")
 	}
-	limit, offset := paginationFromRequest(0, int(req.GetPageSize()))
+	limit, offset, err := pageWindow(req.GetPageSize(), req.GetPageToken())
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err.Error())
+	}
 	rows, err := s.app.FindRecordsByFilter("space_members",
 		"space={:sid} && status='ACTIVE'",
 		"", limit, offset,
@@ -227,7 +233,7 @@ func (s *SpaceServer) ListSpaceMembers(ctx context.Context, req *v1.ListSpaceMem
 	for _, r := range rows {
 		out = append(out, recordToSpaceMember(s.app, r))
 	}
-	return &v1.ListSpaceMembersResponse{SpaceMembers: out, NextPageToken: ""}, nil
+	return &v1.ListSpaceMembersResponse{SpaceMembers: out, NextPageToken: nextPageToken(offset, limit, len(rows))}, nil
 }
 
 // CreateSpaceInvitation invites a user to a space with the
@@ -305,7 +311,10 @@ func (s *SpaceServer) ListSpaceInvitations(ctx context.Context, req *v1.ListSpac
 	if !hooks.IsActiveAdmin(s.app, viewerID, rec.Id) {
 		return nil, connect.NewError(connect.CodePermissionDenied, "only space admins can list invitations")
 	}
-	limit, offset := paginationFromRequest(0, int(req.GetPageSize()))
+	limit, offset, err := pageWindow(req.GetPageSize(), req.GetPageToken())
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err.Error())
+	}
 	rows, err := s.app.FindRecordsByFilter("space_members",
 		"space={:sid} && status='INVITED'",
 		"", limit, offset,
@@ -318,7 +327,7 @@ func (s *SpaceServer) ListSpaceInvitations(ctx context.Context, req *v1.ListSpac
 	for _, r := range rows {
 		out = append(out, recordToSpaceInvitation(s.app, r))
 	}
-	return &v1.ListSpaceInvitationsResponse{SpaceInvitations: out, NextPageToken: ""}, nil
+	return &v1.ListSpaceInvitationsResponse{SpaceInvitations: out, NextPageToken: nextPageToken(offset, limit, len(rows))}, nil
 }
 
 // ListUserSpaceInvitations returns invitations addressed to
@@ -328,7 +337,10 @@ func (s *SpaceServer) ListUserSpaceInvitations(ctx context.Context, req *v1.List
 	if viewerID == "" {
 		return nil, connect.NewError(connect.CodeUnauthenticated, "authentication required")
 	}
-	limit, offset := paginationFromRequest(0, int(req.GetPageSize()))
+	limit, offset, err := pageWindow(req.GetPageSize(), req.GetPageToken())
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err.Error())
+	}
 	rows, err := s.app.FindRecordsByFilter("space_members",
 		"user={:uid} && status='INVITED'",
 		"", limit, offset,
@@ -341,7 +353,7 @@ func (s *SpaceServer) ListUserSpaceInvitations(ctx context.Context, req *v1.List
 	for _, r := range rows {
 		out = append(out, recordToSpaceInvitation(s.app, r))
 	}
-	return &v1.ListUserSpaceInvitationsResponse{SpaceInvitations: out, NextPageToken: ""}, nil
+	return &v1.ListUserSpaceInvitationsResponse{SpaceInvitations: out, NextPageToken: nextPageToken(offset, limit, len(rows))}, nil
 }
 
 // AcceptSpaceInvitation flips an INVITED row to ACTIVE. Only the invitee (the

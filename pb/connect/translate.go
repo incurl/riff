@@ -1,6 +1,10 @@
 package connect
 
 import (
+	"encoding/base64"
+	"strconv"
+
+	"github.com/pkg/errors"
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/pocketbase/pocketbase/tools/types"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
@@ -17,21 +21,69 @@ func timestampToProto(dt types.DateTime) *timestamppb.Timestamp {
 	return timestamppb.New(dt.Time())
 }
 
-// paginationFromRequest translates Memos' page-size/offset
-// pair into PocketBase's limit/offset. Memos uses 0-indexed
-// page numbers; we translate to limit/offset (page * perPage).
-// perPage is clamped to [1, 100] to prevent abuse.
-func paginationFromRequest(page, perPage int) (limit, offset int) {
-	if page < 0 {
-		page = 0
+// defaultPageSize and maxPageSize are the AIP-132 bounds the protos
+// document: 50 when page_size is unset, coerced down to 1000 above
+// that.
+const (
+	defaultPageSize = 50
+	maxPageSize     = 1000
+)
+
+// pageWindow resolves an AIP-132 `page_size` / `page_token` pair into
+// PocketBase's limit/offset. The token is opaque to clients: it is the
+// base64url form of the result-set offset the previous page ended at.
+func pageWindow(perPage int32, token string) (limit, offset int, err error) {
+	limit = int(perPage)
+	if limit < 1 {
+		limit = defaultPageSize
 	}
-	if perPage < 1 {
-		perPage = 30
+	if limit > maxPageSize {
+		limit = maxPageSize
 	}
-	if perPage > 100 {
-		perPage = 100
+	offset, err = pageOffset(token)
+	if err != nil {
+		return 0, 0, err
 	}
-	return perPage, page * perPage
+	return limit, offset, nil
+}
+
+// pageOffset decodes a page token into a result-set offset. An empty
+// token is the first page. Anything that is not a non-negative integer
+// under the base64url encoding is an error: silently starting at zero
+// would hand the client the first page again on every call, which is
+// the failure mode the token exists to prevent.
+func pageOffset(token string) (int, error) {
+	if token == "" {
+		return 0, nil
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(token)
+	if err != nil {
+		return 0, errors.New("invalid page token")
+	}
+	offset, convErr := strconv.Atoi(string(raw))
+	if convErr != nil || offset < 0 {
+		return 0, errors.New("invalid page token")
+	}
+	return offset, nil
+}
+
+// encodePageToken is the inverse of pageOffset.
+func encodePageToken(offset int) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(strconv.Itoa(offset)))
+}
+
+// nextPageToken returns the token that resumes after (offset, limit),
+// or "" when the page was not full.
+//
+// The signal is the number of rows the query returned, not the number
+// of items that survived the per-row access checks or the stub filter:
+// a full page whose rows were all filtered out still has successors,
+// and stopping there would silently truncate the feed.
+func nextPageToken(offset, limit, fetched int) string {
+	if limit < 1 || fetched < limit {
+		return ""
+	}
+	return encodePageToken(offset + limit)
 }
 
 // lookupUsername resolves a user id to a username. Returns ""

@@ -36,7 +36,10 @@ func NewAttachmentServer(app core.App) *AttachmentServer {
 // from the unified `attachments` collection, filtered by the
 // caller's read access.
 func (s *AttachmentServer) ListAttachments(ctx context.Context, req *v1.ListAttachmentsRequest) (*v1.ListAttachmentsResponse, error) {
-	limit, offset := paginationFromRequest(0, int(req.GetPageSize()))
+	limit, offset, err := pageWindow(req.GetPageSize(), req.GetPageToken())
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err.Error())
+	}
 
 	// The SPA sends the same AIP-132 CEL the memo list takes. It was
 	// previously discarded, so `memo_id == null` (the
@@ -61,7 +64,7 @@ func (s *AttachmentServer) ListAttachments(ctx context.Context, req *v1.ListAtta
 			out = append(out, a)
 		}
 	}
-	return &v1.ListAttachmentsResponse{Attachments: out, NextPageToken: ""}, nil
+	return &v1.ListAttachmentsResponse{Attachments: out, NextPageToken: nextPageToken(offset, limit, len(rows))}, nil
 }
 
 // canAccessAttachment returns true if the caller can read

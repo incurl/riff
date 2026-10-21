@@ -5,6 +5,66 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## Every `List*` RPC returned one page: `page_token` was ignored and `next_page_token` was always empty (2026-10-21)
+
+Pagination was declared everywhere and implemented nowhere. Every
+Connect list handler called `paginationFromRequest(0, …)` — page 0,
+literally — and answered `NextPageToken: ""`. The SPA's
+`useInfiniteMemos` / `useInfiniteAttachments` pass the token straight
+back as `pageToken` and read `nextPageToken` as the next page param, so
+an empty token told React Query there was no next page: infinite
+scroll stopped after the first screen. The `do { … } while (pageToken)`
+loops in `useSpaceQueries` / `useUserQueries` had the same shape and
+always ran exactly once. `ListDevices` and `ListMySketches` even
+carried a comment describing offset pagination while fetching
+`page_size, 0` and returning no token.
+
+**The token is the base64url of the offset**, and the decode lives in
+`pb/connect/translate.go` (`pageWindow` / `pageOffset` /
+`encodePageToken` / `nextPageToken`). Offset rather than a cursor
+because the handlers already talk to PocketBase in
+`FindRecordsByFilter(limit, offset)` and the sort keys (`-created`,
+`username`, `created`) have no unique tiebreaker to build a keyset
+cursor on. The caveat of offset pagination is standard and accepted: a
+row inserted between two pages shifts the window, so a page boundary
+can skip or repeat one item under concurrent writes.
+
+**The next token is derived from the fetched row count, not from the
+response length.** `ListMemos`, `ListAttachments` and
+`ListMemoComments` post-filter every row through the collection's
+`ViewRule` (and `ListMemos` also drops the V0 upload stubs). A page
+can therefore legitimately return fewer items than `page_size` while
+more rows exist; using `len(out)` would end pagination at the first
+page whose rows were all private — the exact "my feed stops after a
+few memos" symptom this change removes. The tests pin that case
+(`TestListMemos_PageTokenContinuesPastFilteredRows`: page one is empty
+and still carries a token).
+
+Three smaller decisions:
+
+* **An invalid token is `CodeInvalidArgument`.** Silently falling back
+  to offset 0 would hand the client the first page on every call, and a
+  client that loops until the token is empty would never terminate.
+* **`page_size` follows the proto**: 50 when unset, coerced to 1000.
+  The old helper silently defaulted to 30 and clamped at 100, which
+  contradicted the documented AIP-132 contract on every list request.
+* **`ListMemoAttachments` paginates in memory.** It assembles one
+  memo's patch/sample set itself rather than querying it, so the page
+  is a slice of that list and the next-token rule is the same.
+
+Applied to every handler whose request declares `page_token`:
+`ListMemos`, `ListMemoComments`, `ListMemoAttachments`,
+`ListMemoRelations`, `ListMemoReactions`, `ListAttachments`,
+`ListSpaces`, `ListSpaceMembers`, `ListSpaceInvitations`,
+`ListUserSpaceInvitations`, `ListUsers`, `ListUserNotifications`,
+`ListPersonalAccessTokens`, `ListDevices`, `ListMySketches`.
+
+Not fixed here: `order_by` is still ignored by `ListMemos` /
+`ListAttachments` (the sort is hardcoded), and the token does not
+fingerprint the filter or sort, so reusing a token with a different
+query resumes at the same offset in a different result set.
+
+
 ## `ListMemos` discarded `request.filter`: a CEL compiler targeting PocketBase's *filter grammar*, not SQL (2026-10-21)
 
 Every memo filter in the SPA was a no-op. `ListMemos` called

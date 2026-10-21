@@ -62,7 +62,10 @@ func (s *UserServer) ListUsers(ctx context.Context, req *v1.ListUsersRequest) (*
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
 	}
-	limit, offset := paginationFromRequest(0, int(req.GetPageSize()))
+	limit, offset, err := pageWindow(req.GetPageSize(), req.GetPageToken())
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err.Error())
+	}
 	rows, err := s.app.FindRecordsByFilter(users, "", "username", limit, offset)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
@@ -71,7 +74,7 @@ func (s *UserServer) ListUsers(ctx context.Context, req *v1.ListUsersRequest) (*
 	for _, r := range rows {
 		out = append(out, recordToUser(r))
 	}
-	return &v1.ListUsersResponse{Users: out, NextPageToken: ""}, nil
+	return &v1.ListUsersResponse{Users: out, NextPageToken: nextPageToken(offset, limit, len(rows))}, nil
 }
 
 // BatchGetUsers resolves usernames to users. Unknown usernames are skipped

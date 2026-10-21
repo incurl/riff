@@ -25,7 +25,10 @@ func (s *MemoServer) ListMemoRelations(ctx context.Context, req *v1.ListMemoRela
 		return nil, connect.NewError(connect.CodeNotFound, "memo not found")
 	}
 
-	limit, offset := paginationFromRequest(0, int(req.GetPageSize()))
+	limit, offset, err := pageWindow(req.GetPageSize(), req.GetPageToken())
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err.Error())
+	}
 	rows, err := s.app.FindRecordsByFilter("memo_relations",
 		"memo={:id}", "-created", limit, offset, map[string]any{"id": memoID})
 	if err != nil {
@@ -36,7 +39,7 @@ func (s *MemoServer) ListMemoRelations(ctx context.Context, req *v1.ListMemoRela
 	for _, r := range rows {
 		out = append(out, recordToMemoRelation(s.app, r))
 	}
-	return &v1.ListMemoRelationsResponse{Relations: out, NextPageToken: ""}, nil
+	return &v1.ListMemoRelationsResponse{Relations: out, NextPageToken: nextPageToken(offset, limit, len(rows))}, nil
 }
 
 // SetMemoRelations replaces the full set of REFERENCE relations a memo owns.

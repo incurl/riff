@@ -53,17 +53,21 @@ func NewDeviceServer(app core.App) *DeviceServer {
 // The result is sorted by created-desc so the most
 // recently paired device is the first card on the
 // SPA. Pagination is offset-based: page_size is
-// clamped to 1..100 and page_token is a base64
-// offset the proto package encodes for us; an empty
-// page_token means "from the start".
+// clamped to 1..1000 and page_token is an opaque
+// base64 offset (see pageWindow / nextPageToken);
+// an empty page_token means "from the start".
 func (s *DeviceServer) ListDevices(ctx context.Context, req *v1.ListDevicesRequest) (*v1.ListDevicesResponse, error) {
 	viewer := CurrentUser(ctx)
 	if viewer == nil {
 		return nil, connect.NewError(connect.CodeUnauthenticated, "authentication required")
 	}
+	limit, offset, err := pageWindow(req.GetPageSize(), req.GetPageToken())
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err.Error())
+	}
 	rows, err := s.app.FindRecordsByFilter("po33_devices",
 		"user = {:uid}", "-created",
-		int(req.GetPageSize()), 0,
+		limit, offset,
 		map[string]any{"uid": viewer.Id})
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
@@ -74,7 +78,7 @@ func (s *DeviceServer) ListDevices(ctx context.Context, req *v1.ListDevicesReque
 			out = append(out, d)
 		}
 	}
-	return &v1.ListDevicesResponse{Devices: out}, nil
+	return &v1.ListDevicesResponse{Devices: out, NextPageToken: nextPageToken(offset, limit, len(rows))}, nil
 }
 
 // GetDevice returns a single device by resource name.

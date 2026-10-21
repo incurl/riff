@@ -37,7 +37,10 @@ func (s *UserServer) ListUserNotifications(ctx context.Context, req *v1.ListUser
 		return nil, connect.NewError(connect.CodePermissionDenied, "you may only list your own notifications")
 	}
 
-	limit, offset := paginationFromRequest(0, int(req.GetPageSize()))
+	limit, offset, err := pageWindow(req.GetPageSize(), req.GetPageToken())
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err.Error())
+	}
 	rows, err := s.app.FindRecordsByFilter("notifications", "user={:uid}", "-created", limit, offset, map[string]any{"uid": target.Id})
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
@@ -51,7 +54,7 @@ func (s *UserServer) ListUserNotifications(ctx context.Context, req *v1.ListUser
 		}
 		out = append(out, n)
 	}
-	return &v1.ListUserNotificationsResponse{Notifications: out, NextPageToken: ""}, nil
+	return &v1.ListUserNotificationsResponse{Notifications: out, NextPageToken: nextPageToken(offset, limit, len(rows))}, nil
 }
 
 // UpdateUserNotification mutates a notification's status (UNREAD/ARCHIVED).
