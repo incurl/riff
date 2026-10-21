@@ -5840,3 +5840,77 @@ round-trips `user.name`, so the id never appears); and
 `AuthServer.verifyPassword` reads riff's bcrypt `password_hash`
 column, not PocketBase's auth `password`, so a harness record
 created by a bare `app.Save` has nothing to verify.
+
+## The `externalLink` fix verified end-to-end (and why a device may not see it)
+
+The absolute-`externalLink` change above was verified by driving the
+**exact V0 three-step** the MoeMemos client performs against a live
+app, decoding ids with `json.Decoder.UseNumber` (how the client's
+`Int`/`Long` decoder sees them — a `float64` hop silently corrupts a
+64-bit id and produces `404 memo id not found`):
+
+| Step | Result |
+| --- | --- |
+| `POST /api/v1/memo` | `200`, `id: 5172917733476627008` |
+| `POST /api/v1/resource/blob` | `200`, `externalLink: https://riff.example/file/attachments/<uid>/pic.jpg` |
+| `PATCH /api/v1/memo/{id}` with `resourceIdList` | `200`, `resourceList[0]` populated, `memoId` set |
+| `GET /api/v1/memo` (the feed the client renders) | `200`, absolute `externalLink`, `uid` present, `size: 659` |
+| `GET /o/r/{uid}`, `?thumbnail=true`, `/file/attachments/{uid}/pic.jpg` | `200 image/jpeg` |
+
+V1 is equally correct: `"size":"659"` is emitted as a **JSON
+string**, matching `MemosV1Service/Ext.swift`'s
+`if let s = self.size, let s = Int(s)`, and `externalLink` / `memo`
+are absolute and populated.
+
+### Why an existing device may still not render the image
+
+The client caches by URL string, so a device that already downloaded
+attachments under the **relative** URL has an entry keyed to
+`/file/attachments/...` (`ServiceUtils.swift:38`,
+`SHA256(url.absoluteString)`), and the server now emits an absolute
+URL that hashes differently. But the client short-circuits
+**before** any request:
+
+```swift
+// SyncingRemoteService.ensureLocalResourceFile
+if let localPath = resource.localPath, FileManager.default.fileExists(atPath: localPath) {
+    return URL(fileURLWithPath: localPath)
+}
+```
+
+`localPath` is persisted in Core Data and is **never invalidated by
+a URL change**, so an upgraded install keeps serving whatever was
+cached under the old URL and never re-issues the download. **This is
+a client-side cache-invalidation gap that no server-side change can
+fix** — it is the most likely explanation for "the fix did not
+work". Clearing the app's cache (or re-syncing the affected rows)
+is what makes the new URL take effect.
+
+### Remaining shape gaps (measured, not assumed)
+
+Comparing riff's emitted shape against both clients' decoders:
+
+| Field | SPA (TS) | iOS V0 client | riff V0 | riff V1 | Verdict |
+| --- | --- | --- | --- | --- | --- |
+| `size` | number | `integer` | number | **string** (matches the V1 client schema) | consistent |
+| `externalLink` | URL | used verbatim | absolute | absolute | fixed |
+| `uid` | unused | builds `/o/r/{uid}` | present | n/a | ok |
+| `memoId` | unused | association | present | `memo` | ok |
+| `type` | `image/*` prefix | `mimeType.hasPrefix("image/")` | `image/jpeg` | `image/jpeg` | ok |
+
+**No wire-shape mismatch remains on either surface.**
+
+### Two caveats recorded deliberately (not changed)
+
+1. **`?thumbnail=true` is dead on the iOS path.** `MemosV0Resource.url(for:)`
+   returns `externalLink` verbatim, so iOS never asks for a
+   thumbnail and always fetches full-size bytes. Emitting
+   `…?thumbnail=true` for image types would give the client the
+   600px JPEG, but it is a behaviour change and has **not** been
+   made.
+2. **`stableLongHash` can emit negative V0 ids.** It returns
+   `int64(uint64FNVHash)`, which overflows `MaxInt64` roughly half
+   the time. Swift's `Int(...)` parses those fine and
+   `v0IDFromV1` round-trips them, so it works — but any code that
+   reads a V0 id through a `float64` JSON hop corrupts it. Always
+   decode V0 ids with `json.Decoder.UseNumber`.
