@@ -205,6 +205,37 @@ const MemoDetail = () => {
     el.scrollIntoView({ behavior: "smooth", block: "center" });
   }, [hash, memo, memoName, comments]);
 
+  // The sketch player mounts below the
+  // memo body when the memo carries
+  // a `payload.sketch` envelope. The
+  // .p33 patch blob is one of the
+  // attachments; the .wav sample
+  // attachments drive the player
+  // (one sample per PO-33 slot). The
+  // "Push to my device" dialog sits
+  // alongside the player.
+  //
+  // These hooks must run before any early return: the loading,
+  // not-found and denial branches below return early, and a hook that
+  // runs only after them changes the hook count between renders
+  // ("Rendered more hooks than during the previous render").
+  const sketchPayload = displayMemo?.payload?.sketch;
+  const sketchSamples = useReactMemo(() => {
+    if (!sketchPayload || !displayMemo) {
+      return [];
+    }
+    return (displayMemo.attachments ?? [])
+      .filter((att) => att.filename.toLowerCase().endsWith(".wav"))
+      .map((att, index) => ({
+        id: att.name,
+        url: att.externalLink ?? "",
+        slot: index % 16,
+        label: att.filename,
+      }));
+  }, [sketchPayload, displayMemo]);
+  const t = useTranslate();
+  const sketchDialog = useDialog(false);
+
   // Keep the query mounted while revalidating a cached denial. Redirecting
   // earlier would abort the request that could confirm restored access.
   if (!isShareMode && directUnavailable && directFetchStatus === "idle" && !directError) return <Navigate to="/404" replace />;
@@ -226,32 +257,6 @@ const MemoDetail = () => {
     new Set([displayMemo, ...comments].flatMap((item) => [item.creator, ...(item.reactions ?? []).map((reaction) => reaction.creator)])),
   );
 
-  // The sketch player mounts below the
-  // memo body when the memo carries
-  // a `payload.sketch` envelope. The
-  // .p33 patch blob is one of the
-  // attachments; the .wav sample
-  // attachments drive the player
-  // (one sample per PO-33 slot). The
-  // "Push to my device" dialog sits
-  // alongside the player.
-  const sketchPayload = displayMemo?.payload?.sketch;
-  const sketchSamples = useReactMemo(() => {
-    if (!sketchPayload || !displayMemo) {
-      return [];
-    }
-    return (displayMemo.attachments ?? [])
-      .filter((att) => att.filename.toLowerCase().endsWith(".wav"))
-      .map((att, index) => ({
-        id: att.name,
-        url: att.externalLink ?? "",
-        slot: index % 16,
-        label: att.filename,
-      }));
-  }, [sketchPayload, displayMemo]);
-
-  const t = useTranslate();
-  const sketchDialog = useDialog(false);
   return (
     <section className="@container flex min-h-full w-full flex-col items-center pb-8 pt-3 md:pt-6">
       <MentionResolutionProvider contents={mentionResolutionContents} userNames={userResolutionNames}>

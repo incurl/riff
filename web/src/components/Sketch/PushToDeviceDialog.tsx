@@ -72,7 +72,7 @@ const PushToDeviceDialog = ({ memoName, open, onOpenChange }: PushToDeviceDialog
   // The poll hook is only enabled
   // after the user has clicked
   // Push and we have a push_id.
-  const { status } = usePushStatus(activeDeviceName, activePushId, {
+  const { status, error: pollError } = usePushStatus(activeDeviceName, activePushId, {
     enabled: open && Boolean(activePushId) && Boolean(activeDeviceName),
   });
 
@@ -167,6 +167,11 @@ const PushToDeviceDialog = ({ memoName, open, onOpenChange }: PushToDeviceDialog
             {pushError.generic ? (
               <p className="text-destructive text-xs" role="alert">
                 {t("memo.sketch.push.push-error")}
+              </p>
+            ) : null}
+            {pollError ? (
+              <p className="text-destructive text-xs" role="alert">
+                {t("memo.sketch.push.poll-error")}
               </p>
             ) : null}
           </div>
