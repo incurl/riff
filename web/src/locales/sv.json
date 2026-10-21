@@ -313,7 +313,39 @@
     "layout-list-description": "En enda kolumn med läsbredd",
     "on-this-memo": "På detta PM",
     "parent-memo": "Överordnat PM",
-    "view-options": "Visningsalternativ"
+    "view-options": "Visningsalternativ",
+    "sketch": {
+      "player": {
+        "title": "Sketch player",
+        "play": "Play",
+        "pause": "Pause",
+        "stop": "Stop",
+        "no-samples": "This sketch has no samples to play.",
+        "loading": "Loading samples…",
+        "bpm": "{{bpm}} BPM",
+        "step": "Step {{current}} / 16",
+        "version": "v{{version}}",
+        "device-fingerprint": "Recorded by {{fingerprint}}"
+      },
+      "push": {
+        "open": "Push to my device",
+        "dialog-title": "Push sketch to a PO-33",
+        "select-device": "Choose a device",
+        "no-devices": "Pair a PO-33 before you can push sketches.",
+        "push": "Push",
+        "cancel": "Cancel",
+        "queued": "Queued",
+        "sending": "Sending…",
+        "delivered": "Delivered",
+        "failed": "Push failed",
+        "expired": "Push expired",
+        "device-label": "{{label}} · {{fingerprint}}",
+        "device-fingerprint-short": "{{fingerprint}}",
+        "rate-limited": "Too many pushes. Try again in a moment.",
+        "push-error": "Could not queue the push. Please try again.",
+        "poll-error": "Lost the connection to the device poll."
+      }
+    }
   },
   "message": {
     "archived-successfully": "Arkiverad framgångsrikt",
