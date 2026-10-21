@@ -174,6 +174,7 @@ Tests live next to the code (`*_test.go`) or in the same package's `*_test.go` b
 - Use `@/` for absolute imports.
 - Follow Biome formatting: 2-space indent, double quotes, semicolons, 140-character line width.
 - Put server data in React Query hooks under `web/src/hooks/`; keep UI-only state in contexts or component state.
+- Copied/shareable URLs must be absolute. Build them from `profile.instanceUrl` when set (it already carries any sub-path and the router path is concatenated verbatim, so that path must start with `/`), otherwise from `window.location.origin` plus `withBasePath` / `BASE_URL`. `MemoDetailSidebar.tsx` and `MemoActionMenu/hooks.ts` are the reference implementations; a missing leading slash produced `https://hostmemos/{id}` when `instanceUrl` was configured.
 - Use Tailwind CSS v4 utilities, `cn()` for class merging, and CVA for variants.
 - Reuse Base UI primitives and existing components before adding new UI primitives.
 - Keep generated proto TypeScript under `web/src/types/proto/` out of manual edits and Biome rewrites.

@@ -112,13 +112,16 @@ export const useMemoActionHandlers = ({ memo, parentPage, onEdit, setDeleteDialo
 
   const handleCopyLink = useCallback(() => {
     // See MemoDetailSidebar.handleCopyLink for the contract. When the admin
-    // set `instanceUrl` we trust it (and the path is a router-level memo
-    // name, no sub-path prefix); when they didn't, the SPA's own origin
-    // plus the basename is always the correct public shape.
+    // set `instanceUrl` we trust it (and the path is router-level, no sub-path
+    // prefix); when they didn't, the SPA's own origin plus the basename is
+    // always the correct public shape.
     const host = profile.instanceUrl ? profile.instanceUrl.replace(/\/+$/, "") : window.location.origin;
     // A comment's link lands on the comment inside its parent memo, as the comment previews do.
-    const routerPath = memo.parent ? `${memo.parent}#${extractMemoIdFromName(memo.name)}` : memo.name;
-    const path = profile.instanceUrl ? routerPath : withBasePath(`/${routerPath}`);
+    // The leading slash is load-bearing: with `instanceUrl` set the router
+    // path is concatenated onto the host verbatim, so a bare `memo.name`
+    // produced `https://hostmemos/{id}`.
+    const routerPath = memo.parent ? `/${memo.parent}#${extractMemoIdFromName(memo.name)}` : `/${memo.name}`;
+    const path = profile.instanceUrl ? routerPath : withBasePath(routerPath);
     copy(`${host}${path}`);
     toast.success(t("message.succeed-copy-link"));
   }, [memo.name, memo.parent, t, profile.instanceUrl]);
