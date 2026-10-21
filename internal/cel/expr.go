@@ -134,6 +134,41 @@ func (p *parser) timeLiteral(t time.Time) *expr {
 //                 parsePrimary
 // -------------------------------------------------------------------------
 
+// Limits on a single filter expression.
+//
+// Every term in a filter compiles to its own clause in the emitted
+// PocketBase filter, so both the length and the nesting depth are a
+// direct multiplier on the work the database has to do. Both are bounded
+// here so a hostile or accidentally pasted filter is reported as a clean
+// error instead of being compiled at all.
+//
+// maxFilterLength mirrors the `ParserExpressionSizeLimit(8 << 10)`
+// upstream Memos applies (filter/engine.go), so a filter that works
+// against upstream also works here.
+const (
+	maxFilterLength = 8 << 10
+	// maxParseDepth bounds the recursive descent. The only two
+	// recursive productions are grouping (`( … )`) and negation
+	// (`!`), so this is the only way an input can drive the goroutine
+	// stack. Go's stack starts at 8 KiB and doubles up to 1 GiB, so a
+	// very deep chain would otherwise grow the stack without bound
+	// before any other limit could apply.
+	maxParseDepth = 256
+)
+
+// enter records one level of nesting, refusing to descend further. It
+// is paired with leave by the two recursive productions (parsePrimary's
+// group and parseNot).
+func (p *parser) enter() error {
+	p.depth++
+	if p.depth > maxParseDepth {
+		return errors.Errorf("filter is nested more than %d levels deep", maxParseDepth)
+	}
+	return nil
+}
+
+func (p *parser) leave() { p.depth-- }
+
 func (p *parser) parseOr() (*expr, error) {
 	left, err := p.parseAnd()
 	if err != nil {
@@ -208,6 +243,10 @@ func (p *parser) parseNot() (*expr, error) {
 	if !p.isPunct("!") {
 		return p.parseCmp()
 	}
+	if err := p.enter(); err != nil {
+		return nil, err
+	}
+	defer p.leave()
 	p.advance()
 	// Recurse through parseNot so `!!x` cancels out; parseCmp for the
 	// single case so `!x == y` negates the comparison, not the column.
@@ -741,6 +780,10 @@ func (p *parser) parsePrimary() (*expr, error) {
 		}
 	case tkPunct:
 		if t.lit == "(" {
+			if err := p.enter(); err != nil {
+				return nil, err
+			}
+			defer p.leave()
 			p.advance()
 			inner, err := p.parseOr()
 			if err != nil {

@@ -110,6 +110,9 @@ func Compile(expr string, opts Options) (*Expression, error) {
 	if strings.TrimSpace(expr) == "" {
 		return nil, errors.New("empty expression")
 	}
+	if len(expr) > maxFilterLength {
+		return nil, errors.Errorf("filter is %d bytes, over the %d byte limit", len(expr), maxFilterLength)
+	}
 	if opts.Now.IsZero() {
 		opts.Now = time.Now()
 	}
@@ -182,6 +185,10 @@ type parser struct {
 	// expression gets its own name so two equal values in an
 	// `AND` do not collide in the single Argv map.
 	seq int
+	// depth counts nested grouping and negation. The recursive descent
+	// has no other recursion, so this is the only place a hostile input
+	// could exhaust the goroutine stack; see maxParseDepth.
+	depth int
 }
 
 func (p *parser) peek() token { return p.tok }

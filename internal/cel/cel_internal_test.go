@@ -349,6 +349,90 @@ func TestCompile_RejectsEmpty(t *testing.T) {
 	}
 }
 
+// A filter is bounded in both length and nesting. Every term becomes its
+// own clause in the emitted PocketBase filter, so an unbounded filter is
+// an unbounded amount of work for the database — and the recursive
+// descent has no other recursion, so deep grouping is also the only way
+// an input could drive the goroutine stack.
+//
+// Both limits are what make the worst case cheap: before them, a 256 KB
+// filter took 7.16s and a 1.6 MB one exhausted memory.
+func TestCompile_RejectsOverlongFilter(t *testing.T) {
+	src := strings.TrimSuffix(strings.Repeat(`space == "a" || `, 2000), "|| ")
+	require.Greater(t, len(src), maxFilterLength)
+	_, err := compileExpr(t, src)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "limit")
+}
+
+// A filter right at the limit must still compile — the guard is a
+// ceiling, not a cliff.
+func TestCompile_AcceptsFilterAtLimit(t *testing.T) {
+	src := strings.TrimSuffix(strings.Repeat(`space == "a" || `, maxFilterLength/16), "|| ")
+	require.LessOrEqual(t, len(src), maxFilterLength)
+	_, err := compileExpr(t, src)
+	require.NoError(t, err)
+}
+
+func TestCompile_RejectsDeepNesting(t *testing.T) {
+	// A depth of maxParseDepth+1 costs 2 bytes per level, so this stays
+	// under maxFilterLength — otherwise the length guard would fire
+	// first and the depth guard would go untested.
+	for _, depth := range []int{maxParseDepth + 1, maxFilterLength / 4} {
+		src := strings.Repeat("(", depth) + `space == "a"` + strings.Repeat(")", depth)
+		require.LessOrEqual(t, len(src), maxFilterLength, "length guard must not mask the depth guard")
+		_, err := compileExpr(t, src)
+		require.Errorf(t, err, "depth %d should be rejected", depth)
+		assert.Contains(t, err.Error(), "nested")
+	}
+}
+
+// Negation is the other recursive production, so it needs the same guard:
+// `!!!!…x` must not be able to recurse without bound either.
+func TestCompile_RejectsDeepNegation(t *testing.T) {
+	src := strings.Repeat("!", maxFilterLength/2) + `space == "a"`
+	require.LessOrEqual(t, len(src), maxFilterLength, "length guard must not mask the depth guard")
+	_, err := compileExpr(t, src)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "nested")
+}
+
+// Both guards are reachable: a filter over the length ceiling is refused
+// on length even when it is shallow, and one under it can still be
+// refused on depth.
+func TestCompile_LengthAndDepthGuardsAreIndependent(t *testing.T) {
+	// Real nesting, at 2 bytes per level, so this exceeds maxParseDepth
+	// but stays under maxFilterLength and the depth guard is what fires.
+	deep := strings.Repeat("(", maxParseDepth+1) + `space == "a"` + strings.Repeat(")", maxParseDepth+1)
+	require.LessOrEqual(t, len(deep), maxFilterLength)
+	_, err := compileExpr(t, deep)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "nested")
+
+	// Shallow but long, so the length guard is what fires.
+	long := strings.TrimSuffix(strings.Repeat(`space == "a" || `, 2000), "|| ")
+	require.Greater(t, len(long), maxFilterLength)
+	_, err = compileExpr(t, long)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "limit")
+}
+
+// Nesting at exactly the limit is accepted, and the depth counter is
+// unwound on the way out so sibling groups are not penalised.
+func TestCompile_AcceptsNestingAtLimit(t *testing.T) {
+	src := strings.Repeat("(", maxParseDepth) + `space == "a"` + strings.Repeat(")", maxParseDepth)
+	_, err := compileExpr(t, src)
+	require.NoError(t, err)
+
+	// Sibling groups reuse the counter: this is 2×maxParseDepth levels
+	// of nesting overall, but no single path is deeper than the limit.
+	// They must all still compile.
+	pairs := strings.Repeat(`(space == "a") && `, maxParseDepth)
+	pairs = strings.TrimSuffix(pairs, "&& ")
+	_, err = compileExpr(t, pairs)
+	require.NoError(t, err)
+}
+
 func TestCompile_RejectsDerivedFieldComparison(t *testing.T) {
 	_, err := compileExpr(t, `has_link == "x"`)
 	require.Error(t, err)

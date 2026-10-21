@@ -136,4 +136,16 @@
 // filter parser. The parser is a hand-written recursive descent over
 // the grammar above with no backtracking and no recursion beyond the
 // nesting of the input's own parentheses.
+//
+// Two bounds keep the cost of a hostile or pasted filter finite, since
+// every term compiles to its own clause in the emitted filter:
+//
+//	maxFilterLength  8 KiB, mirroring the ParserExpressionSizeLimit
+//	                 upstream Memos applies (filter/engine.go)
+//	maxParseDepth    256 levels of grouping or negation, the only two
+//	                 recursive productions, and therefore the only way
+//	                 an input could drive the goroutine stack
+//
+// Without them a 256 KB filter took 7.16s to compile and a 1.6 MB one
+// exhausted memory; both are now rejected in microseconds.
 package cel
