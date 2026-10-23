@@ -5,6 +5,154 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## Phase 1 of FTS: the index exists, nothing queries it yet (2026-10-23)
+
+Adding SQLite FTS5 to riff, after establishing that neither riff nor
+upstream Memos uses it (see "The search row in the website response
+claimed FTS" above) and that the Unicode case fold was the one real
+parity gap. `pb/migrations/1910000000_create_memos_fts.go` creates an
+FTS5 external-content index over `memos.content` plus three triggers,
+and **nothing in riff reads it yet**: `ListMemos` still compiles
+`content.contains(…)` to `LIKE`. The query path is a separate commit.
+
+**The DDL-in-a-transaction question, settled empirically.** PocketBase
+runs every migration inside `RunInTransaction`
+(`core/migrations_runner.go:130`), so `CREATE VIRTUAL TABLE … USING
+FTS5` executes inside a SQLite transaction. I had flagged this as
+possibly fatal for FTS5 shadow tables. It is not — the table, all
+three triggers and the `'rebuild'` backfill all apply cleanly inside the
+migration tx. `TestCreateMemosFTSIndex_CreatedInsideMigrationTransaction`
+is the test that keeps that true; had it failed, the fallback was an
+OnBootstrap hook outside the tx. Raw DDL through
+`txApp.DB().NewQuery(...).Execute()` is the established pattern —
+PocketBase's own `_collections` init migration uses it.
+
+**Triggers, not `pb/hooks`.** An `AFTER INSERT/UPDATE/DELETE` trigger
+runs in the same transaction as the row write, so the index cannot
+desynchronise from `memos`. riff's detached-hook workers have needed six
+separate teardown fixes (see "Known Issues"), so structural immunity is
+worth more here than the convenience of Go callbacks. The delete half
+needs FTS5's `'delete'` command form: an external-content index stores
+no rows of its own, so a plain `DELETE` cannot find them. The update
+trigger must do **both** halves, or an edited memo stays findable by text
+it no longer contains — `TestCreateMemosFTSIndex_TracksWrites` asserts
+each half separately for that reason.
+
+**External content (`content='memos'`)** means only the inverted index
+is stored: the memo body is not duplicated and cannot drift from the
+source text.
+
+**Tokenizer behaviour is measured, not assumed.** `unicode61` with
+`remove_diacritics 2` folds case over the full Unicode range and makes
+`café` match `cafe` — the two things the LIKE path could not do, and
+the actual reason this work exists. But it does **not** segment CJK:
+`カフェで` indexes as one token, so a bare `カフェ` query does not match
+it while `カフェ*` does. I wrote that assertion as a guess, it failed,
+and a throwaway probe established the real behaviour; the test now
+records the measured numbers rather than my expectation. A Latin-script
+term inside a CJK document is findable (`incident` hits). Worth knowing
+before a Japanese user reports that search "misses".
+
+**Two dbx scan traps, both hit.** `All(&[]sql.NullString)` compiles and
+returns `len 1` with a zero value — dbx never populates it, so a
+membership check reads "false" for a table that plainly exists. dbx
+rejects `[]map[string]any` outright ("must be a slice of struct or
+NullStringMap rows"). The supported shape is a slice of struct, which
+is what `ftsTableExists` uses. A plain string target returns
+`sql.ErrNoRows` on no match, which is the *expected* answer on a fresh
+instance and is indistinguishable from a real failure.
+
+**Deliberately not yet done:** the query path. Two constraints shape
+it and are recorded here so the next phase does not rediscover them.
+(1) PocketBase's filter grammar **cannot express `MATCH`** —
+`MultiMatchSubQuery` is only ever populated for *relations*
+(`record_field_resolver_runner.go`), so FTS cannot be a `FilterField` in
+`internal/cel` and must sit on the other side of
+`FindRecordsByFilter`. (2) The escape hatch is `app.RecordQuery(col)`,
+which returns a bare `*dbx.SelectQuery` (`core/record_query.go:26`),
+so a `memos.id IN (SELECT rowid FROM memos_fts WHERE … MATCH …)`
+predicate can be added as a raw `AndWhere` and `q.All(&records)` still
+hydrates real `*core.Record`. `CanAccessRecord` keeps applying, so the
+ViewRule still governs who sees a hit — the plugin this index is
+modelled on had no access control at all and would have leaked every
+PRIVATE memo.
+
+## The search row in the website response claimed FTS; there is no FTS (2026-10-23)
+
+Asked to evaluate riff's "FTS status" and how it aligns with upstream
+Memos, the honest answer is that the question rests on a stale doc row,
+not on code. `docs/community-website-response.md` §8 listed search as
+"`memos.content` LIKE / FTS (the `pb/api/feed.go` SQL filter)". Every
+part of that is wrong.
+
+**There is no FTS in riff, and none in upstream Memos.** A repo-wide
+search for `fts5|virtual table|bm25|ts_rank|unicode61|trigram` across
+Go/proto/TS/SQL returns nothing in source. The only `fts5` hits in
+`git log -S fts5` are inside `pb_data/auxiliary.db`, a committed
+binary SQLite file matched by content — a false positive worth knowing
+about, because it reads like a smoking gun. Upstream's search renderer
+(`plugin/filter/render.go` at `8770b186`) uses `LIKE`/`ILIKE` only. The
+one apparent upstream FTS hit, `plugin/cron/parser.go`, is the word
+"shifts". FTS5 *is* available — `modernc.org/sqlite`'s generated
+`sqlite_linux_amd64.go` compiles with `-DSQLITE_ENABLE_FTS5` — so this
+would be reachable if either project ever wanted it.
+
+`pb/api/feed.go` cannot be where search happens: the route accepts
+`page`, `per_page`, `space` and `tag`, and has no text-search parameter
+in its current form or in any revision of the file that added search to
+riff. Search reaches the SPA through the Connect `ListMemos` RPC, where
+`web/src/hooks/useMemoFilters.ts` builds `content.contains("…")` and
+`internal/cel/` compiles it to `content LIKE '%…%' ESCAPE '\'`.
+
+The row's neighbours were stale in the same way and are corrected in the
+same edit. The table's sketch-subset column said
+`WHERE source='sketch'`, and the paragraph below it promised that
+"`idx_memos_source` … covers the subset scan". Migration `1860000001`
+dropped the flat `source` column, folding that signal into the presence
+of the `sketch` JSON column (`isSketchMemo`,
+`pb/connect/sketch_service_lifecycle.go`), and `grep -rn idx_memos_source
+pb/migrations/` now matches nothing. The real predicate is
+`author = {:uid} && sketch != null` (`pb/connect/sketch_service.go`).
+A sketch-subset scan is therefore an unindexed scan of a JSON column,
+which is a weaker claim than the doc made and worth stating plainly.
+
+**The one genuine parity gap is Unicode case folding, not FTS.**
+Upstream `8770b186` ("fix: add Unicode case-insensitive search for
+SQLite", #5559, 2026-02-02) registers a custom SQLite scalar function
+`memos_unicode_lower` via `msqlite.RegisterScalarFunction`, backed by
+`golang.org/x/text/cases.Fold`, and renders contains as
+`memos_unicode_lower(col) LIKE memos_unicode_lower(arg)`. riff has
+none of it: no `cases.Fold`, no `RegisterScalarFunction`, no
+`ConnectHook`. `golang.org/x/text v0.43.0` is already in `go.mod` as an
+indirect dependency, so the fix is close to free dependency-wise.
+
+The cause is structural and worth recording before anyone proposes
+"just wrap it in LOWER". **PocketBase's filter grammar applies no case
+folding**: in `pocketbase@v0.40.5/tools/search/filter.go` there is no
+`LOWER(` anywhere in the package, and `~` emits a bare
+`left LIKE right ESCAPE '\'`. The only `COLLATE NOCASE` in all of
+PocketBase is on the `email` column. Upstream owns its SQL renderer;
+riff compiles into PocketBase's grammar and cannot reach past it, so it
+cannot wrap a bound operand. The honest options are a folded shadow
+column populated at write time (migration + backfill + hook) or a custom
+filter path, not a one-line tweak.
+
+**This also makes a shipped frontend comment false.**
+`web/src/utils/search-match.ts` opens by saying it matches "the same way
+the server's `content.contains` filter does … The server folds with
+Unicode case folding (`cases.Fold`)". That text is inherited verbatim
+from upstream's #6335, where it was true because upstream *did* have
+`memos_unicode_lower` by then. The riff server does not fold at all, so
+the highlighter is built to agree with a server riff does not have: it
+can highlight a match the query never returned. The comment is left
+alone here — it describes upstream's behaviour, and rewriting it would
+mislead whoever does port the fold — but it is wrong about *this*
+server today.
+
+One row in riff's favour: `startsWith`/`endsWith` have no upstream
+equivalent. Neither project ranks search results; both sort by time
+(`-created`). Neither returns snippets.
+
 ## Every `List*` RPC returned one page: `page_token` was ignored and `next_page_token` was always empty (2026-10-21)
 
 Pagination was declared everywhere and implemented nowhere. Every
