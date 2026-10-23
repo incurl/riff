@@ -284,17 +284,23 @@ expects. All of them ride on the existing `memos` table:
 
 | Primitive | Where it lives | Sketch subset |
 | --- | --- | --- |
-| Tags | `memos.tags` (json) | `WHERE source='sketch' AND ...` filter |
+| Tags | `memos.tags` (json) | `sketch != null` filter |
 | Comments | `memo_relations` where `type='COMMENT'` | same |
 | Reactions | `memo_reactions` table | same |
 | Hashtag extraction | `pb/hooks/memos.go::extractHashtags` | same |
 | Mentions | `memos.payload.mentions` (extracted by the markdown service) | same |
-| Search | `memos.content` LIKE / FTS (the `pb/api/feed.go` SQL filter) | same |
+| Search | `memos.content` `LIKE` via the CEL compiler (`internal/cel/`, invoked by the `ListMemos` Connect RPC — **not** `pb/api/feed.go`, which has no text-search parameter at all). There is no FTS: neither riff nor upstream Memos uses SQLite FTS5, though the driver does compile it in. | same |
 
-The `source='sketch'` predicate is a single WHERE-clause addition
-to the feed query. No new index strategy; the existing
-`idx_memos_source` (the migration 1840000003 added it) covers
-the subset scan.
+The sketch subset predicate is `sketch != null`, not `source = 'sketch'`.
+The 1860xxx series dropped the flat `source` column — its presence in the
+`sketch` JSON column is the same signal, which is how
+`pb/connect/sketch_service_lifecycle.go::isSketchMemo` detects one — so
+neither the `source='sketch'` WHERE clause nor the `idx_memos_source`
+index this section previously described exists any more. A sketch-subset
+scan is a scan of the `sketch` JSON column with no supporting index; the
+per-column indexes that remain are `idx_memos_author`, `idx_memos_space`,
+`idx_memos_created` and `idx_memos_pinned` (migrations 1700000020 and
+1860000001).
 
 ---
 
