@@ -1,13 +1,28 @@
 /**
- * Locates search terms inside rendered text the same way the server's `content.contains`
- * filter does: as case-folded substrings. The server folds with Unicode case folding
- * (`cases.Fold`), which JavaScript has no direct equivalent for; upper-casing then
- * lower-casing each code point is the standard approximation and agrees with folding
- * on the cases that matter in practice (`ß` → `ss`, final sigma → `σ`, `İ` → `i̇`).
+ * Locates search terms inside rendered text so a hit can be highlighted in place.
+ *
+ * The server has two matching modes, and this file tracks neither exactly — it is a
+ * highlight, not a filter, so being slightly more permissive than the server is
+ * harmless (an over-highlighted word is inside a row that already matched) while being
+ * stricter would hide a match the server did return.
+ *
+ *  - LIKE (the default, `RIFF_FTS` unset). SQLite's LIKE case-folds ASCII only, so a
+ *    non-ASCII term matches only its exact spelling. This file folds case, so it will
+ *    highlight a case variant the LIKE query did *not* match. That is the safe direction:
+ *    the row is already in the result set for some other reason, or the highlight is
+ *    simply absent. It cannot invent a row.
+ *  - FTS5 (`RIFF_FTS=1`). `unicode61` folds case across the full Unicode range and
+ *    `remove_diacritics 2` folds diacritics, so folding here is much closer to the
+ *    server. Note it still is not identical: unicode61 does not perform the full
+ *    case-folding that maps `ß` to `ss`, so `ß` is not highlighted from `ss`.
  *
  * Folding can change a string's length, so matching runs on the folded text and every
  * folded code unit remembers which original offset it came from. The ranges returned
  * are therefore always valid offsets into the original text.
+ *
+ * Neither mode tokenises: a search for `incident` highlights inside `incident-report`,
+ * and FTS will not return that row for `incident*`-less matching unless the whole
+ * token is present.
  */
 
 export interface TextRange {
