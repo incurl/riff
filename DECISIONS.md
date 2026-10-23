@@ -5,6 +5,49 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## `RIFF_FTS` is a runtime flag; FTS5-in-modernc is a build property (2026-10-23)
+
+Two things that sound identical and are not, recorded because conflating
+them wastes an hour.
+
+**FTS5 availability is a build-time property of the dependency.**
+`modernc.org/sqlite` transpiles SQLite's C to Go and emits one file per
+platform, each carrying a hardcoded `-D` flag list. `-DSQLITE_ENABLE_FTS5`
+is present in `linux/{amd64,arm64,arm,386,loong64,ppc64le,riscv64,s390x}`,
+`darwin/{amd64,arm64}`, `windows/{,386}` and the BSDs — i.e. every platform
+riff ships — but only **20 of 289** generated files carry it, so
+"modernc supports FTS5" is true for riff's release matrix and false in
+general. There is no riff-side switch: no build tag, no `-tags fts5`, no
+Dockerfile change. Verified by building with the Dockerfile's exact flags
+(`CGO_ENABLED=0 -trimpath -tags netgo,osusergo -extldflags -static`), booting
+the result, and confirming `memos_fts` plus all three triggers exist in a
+fresh database.
+
+**`RIFF_FTS` is a runtime env var** (`main.go` → `envBool` → `Profile.FTS` →
+`connect.SetFTSSearch`). It is an `os.Getenv` read once at process start, so
+changing it needs a container restart and never a rebuild. It only decides
+whether the index is *queried*: the migration builds it unconditionally, so
+an unset flag means paying the write cost of three triggers on every memo
+insert and getting none of the query benefit. Documented for operators in
+`scripts/compose.yaml`, `scripts/entrypoint-supervisord.sh` and `fly.toml`;
+in the entrypoint it is deliberately *not* exported with a default, because
+unset and `"0"` are identical to `envBool` and a default would only hide the
+override.
+
+**CI now runs the FTS tests with `CGO_ENABLED=0`.** Everything else runs with
+cgo enabled, so nothing exercised the release configuration. The property
+also rests entirely on a third-party `-D` list: modernc ships **no** FTS
+test and its changelog never mentions the flag, so a dependency bump that
+dropped it would surface as `CREATE VIRTUAL TABLE` failing, aborting the
+migration and therefore bootstrap — in production, not in CI. Negative
+control: `CREATE VIRTUAL TABLE … USING FTS5` succeeds under `CGO_ENABLED=0`
+on this machine, so the assertion is live rather than vacuous.
+
+One caveat found on the way, pre-existing and unrelated to FTS: PocketBase
+warns on **every boot** that `modernc.org/libc v1.79.0` "differs from the
+expected and tested v1.77.1 … could result in unexpected build or runtime
+errors". Worth a separate pin-back.
+
 ## Phase 2 of FTS: the index is wired to ListMemos, behind RIFF_FTS (2026-10-23)
 
 `pb/connect/memo_fts.go` adds the read side. With `RIFF_FTS=1`

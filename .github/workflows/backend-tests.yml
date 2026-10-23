@@ -84,6 +84,22 @@ jobs:
         env:
           DRIVER: sqlite
 
+      - name: Verify FTS5 is available with CGO disabled
+        # riff's memo content search uses SQLite FTS5 (migration
+        # 1910000000_create_memos_fts). FTS5 is not a riff build flag:
+        # it is compiled into modernc.org/sqlite's generated per-platform
+        # Go sources, which every release build (Dockerfile line 32,
+        # release.yml CGO_ENABLED=0) links against. The rest of this
+        # workflow runs with CGO enabled, which never exercises the
+        # release configuration.
+        #
+        # modernc ships no FTS test and never mentions the flag in its
+        # changelog, so a future dependency bump that drops it would
+        # otherwise surface as a boot failure in production — CREATE
+        # VIRTUAL TABLE errors and aborts the migration. This turns that
+        # into a CI failure instead. Runs in ~2s.
+        run: CGO_ENABLED=0 go test -count=1 -run TestCreateMemosFTSIndex ./pb/migrations/
+
       - name: Upload coverage
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: codecov/codecov-action@v5
