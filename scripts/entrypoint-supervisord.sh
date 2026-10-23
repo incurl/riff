@@ -51,6 +51,23 @@ export ACME_EMAIL
 : "${CADDYFILE:=Caddyfile}"
 export CADDYFILE
 
+# RIFF_FTS: serve memo content search from the SQLite FTS5 index
+# instead of a LIKE scan. Defaults OFF, so a bare `docker run` behaves
+# exactly as it did before the index existed.
+#
+# The index is always built (migration 1910000000_create_memos_fts),
+# so leaving this off still pays the write cost of maintaining it and
+# gets none of the query benefit — set RIFF_FTS=1 to actually use it.
+#
+# This is read once by the riff binary at startup via os.Getenv, so
+# changing it needs a container restart, never a rebuild. No default is
+# exported for it: an unset variable and an explicit "0" behave
+# identically (envBool treats an unset value as false), and leaving it
+# unset keeps the override visible in the operator's compose file
+# rather than buried in an entrypoint.
+# : "${RIFF_FTS:=0}"
+# export RIFF_FTS
+
 # exec so supervisord becomes PID 1 and gets the container's
 # signals. `nodaemon=true` keeps it in the foreground, which is
 # what we want for a container init.
