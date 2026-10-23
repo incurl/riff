@@ -36,6 +36,10 @@ type Profile struct {
 	InstanceURL string
 	// RateLimit enables the request rate limiter. Off restores unbounded behavior.
 	RateLimit bool
+	// FTS enables the SQLite full-text index on the memo list's content
+	// search. Off keeps the `LIKE` scan, which is correct but scans every
+	// row and case-folds ASCII only.
+	FTS bool
 	// TrustedProxies lists the proxies whose forwarding headers identify the
 	// client: CIDRs, addresses, or the keywords "private" and "none".
 	TrustedProxies []string

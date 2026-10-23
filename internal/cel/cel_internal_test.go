@@ -783,3 +783,74 @@ func TestCompile_AttachmentCreatorFallback(t *testing.T) {
 	_, err := compileExpr(t, `creator != "users/alice"`, attachmentFields()...)
 	require.Error(t, err)
 }
+
+// TestCompile_ReportsTextMatches pins the TextMatches report that
+// pb/connect/memo_fts.go uses to decide whether an FTS index can
+// replace a LIKE clause.
+//
+// The report has to carry the *unpadded* literal: the fragment only
+// ever contains the padded, escaped pattern, so a caller cannot recover
+// the caller's own text from it.
+//
+// A negated term must NOT be reported. `!content.contains("x")`
+// compiles to `content !~ …`, and an index narrows to "contains x";
+// substituting it would turn a negative filter into a positive one and
+// return exactly the wrong rows. Absence is the safe signal — the
+// caller keeps the LIKE clause and stays correct.
+func TestCompile_ReportsTextMatches(t *testing.T) {
+	t.Run("plain contains is reported", func(t *testing.T) {
+		got := mustCompile(t, `content.contains("roadmap")`)
+		require.Len(t, got.TextMatches, 1)
+		assert.Equal(t, "content", got.TextMatches[0].Field)
+		assert.Equal(t, "contains", got.TextMatches[0].Op)
+		assert.Equal(t, "roadmap", got.TextMatches[0].Value)
+		assert.NotEmpty(t, got.TextMatches[0].ArgKey)
+		assert.Equal(t, "%roadmap%", got.Argv[got.TextMatches[0].ArgKey],
+			"ArgKey must point at the padded LIKE pattern")
+	})
+
+	t.Run("starts and ends are reported with their operator", func(t *testing.T) {
+		sw := mustCompile(t, `content.startsWith("ab")`).TextMatches
+		require.Len(t, sw, 1)
+		assert.Equal(t, "startsWith", sw[0].Op)
+		assert.Equal(t, "ab", sw[0].Value)
+
+		ew := mustCompile(t, `content.endsWith("yz")`).TextMatches
+		require.Len(t, ew, 1)
+		assert.Equal(t, "endsWith", ew[0].Op)
+	})
+
+	t.Run("negated term is not reported", func(t *testing.T) {
+		assert.Empty(t, mustCompile(t, `!content.contains("x")`).TextMatches,
+			"an index would invert the meaning; the caller must keep LIKE")
+		assert.Empty(t, mustCompile(t, `!(content.contains("x"))`).TextMatches)
+		// Negation pushed down through a conjunction.
+		assert.Empty(t, mustCompile(t, `!(content.contains("x") && space == "s")`).TextMatches)
+	})
+
+	t.Run("conjunction reports each term in source order", func(t *testing.T) {
+		got := mustCompile(t, `content.contains("alpha") && content.contains("beta")`)
+		require.Len(t, got.TextMatches, 2)
+		assert.Equal(t, "alpha", got.TextMatches[0].Value)
+		assert.Equal(t, "beta", got.TextMatches[1].Value)
+	})
+
+	t.Run("non-string terms are ignored", func(t *testing.T) {
+		assert.Empty(t, mustCompile(t, `space == "s"`).TextMatches)
+		assert.Empty(t, mustCompile(t, `size(tags) == 0`).TextMatches)
+		assert.Empty(t, mustCompile(t, `"work" in tags`).TextMatches)
+	})
+
+	t.Run("a non-text conjunct does not suppress a text one", func(t *testing.T) {
+		got := mustCompile(t, `content.contains("roadmap") && space == "s"`)
+		require.Len(t, got.TextMatches, 1, "the index narrows rows; the conjunct still has to apply")
+		assert.Equal(t, "roadmap", got.TextMatches[0].Value)
+	})
+
+	t.Run("escaped metacharacters are reported unpadded", func(t *testing.T) {
+		got := mustCompile(t, `content.contains("100%")`)
+		require.Len(t, got.TextMatches, 1)
+		assert.Equal(t, "100%", got.TextMatches[0].Value,
+			"the caller wrote 100%, not the escaped LIKE pattern")
+	})
+}

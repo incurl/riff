@@ -71,6 +71,19 @@ import (
 // interceptor chain so every request that
 // reaches PushSketch can read the signer via
 // PendingPullSignerFromContext.
+// ftsSearch is set from Profile.FTS (RIFF_FTS) by SetFTSSearch before
+// Register runs. It is a package-level pointer rather than a parameter
+// because Register is called from a dozen test files that pass no
+// profile; the setter keeps every one of them compiling unchanged.
+var ftsSearch bool
+
+// SetFTSSearch enables the FTS5-backed content search for the servers
+// this package registers. It must be called before Register.
+//
+// Off by default: an instance only changes search behaviour when an
+// operator sets RIFF_FTS=1.
+func SetFTSSearch(enabled bool) { ftsSearch = enabled }
+
 func Register(app core.App, limiter ratelimit.Limiter) error {
 	// Bootstrap the signer. The hook runs
 	// before the HTTP listener is bound,
@@ -90,7 +103,9 @@ func Register(app core.App, limiter ratelimit.Limiter) error {
 	apiv1connect.RegisterAuthServiceHandler(srv, NewAuthServer(app, limiter))
 	apiv1connect.RegisterUserServiceHandler(srv, NewUserServer(app))
 	apiv1connect.RegisterSpaceServiceHandler(srv, NewSpaceServer(app))
-	apiv1connect.RegisterMemoServiceHandler(srv, NewMemoServer(app))
+	memoSrv := NewMemoServer(app)
+	memoSrv.SetFTSSearch(ftsSearch)
+	apiv1connect.RegisterMemoServiceHandler(srv, memoSrv)
 	apiv1connect.RegisterAttachmentServiceHandler(srv, NewAttachmentServer(app))
 	apiv1connect.RegisterInstanceServiceHandler(srv, NewInstanceServer(app))
 	apiv1connect.RegisterAIServiceHandler(srv, NewAIServer(app))

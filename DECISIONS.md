@@ -5,6 +5,94 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## Phase 2 of FTS: the index is wired to ListMemos, behind RIFF_FTS (2026-10-23)
+
+`pb/connect/memo_fts.go` adds the read side. With `RIFF_FTS=1`
+(`Profile.FTS`, threaded through `connect.SetFTSSearch` before
+`Register`), a *positive* `content.contains("…")` is served by the
+FTS5 index instead of the `LIKE` scan; with the flag unset every path
+is byte-for-byte the behaviour that shipped. `ListMemos` is the only
+caller — `ListAttachments` and the REST surfaces still use LIKE.
+
+**The LIKE clause is dropped when the index takes over, and that is
+load-bearing rather than an optimisation.** Keeping both would *shrink*
+the result set: `LIKE '%cafe%'` does not match `café`, so the two
+predicates disagree and the intersection drops rows the index just
+matched. The index narrows the same rows the LIKE clause did, so
+removing it is a like-for-like substitution.
+
+**Negated terms must never be rewritten.** `!content.contains("x")`
+means "every memo that does NOT contain x"; an index narrows to
+"contains x" and cannot express the complement, so substituting it
+would invert the filter and return exactly the wrong rows.
+`cel.Expression` therefore grew a `TextMatches` report, and
+`collectTextMatches` deliberately omits any term whose `cmpOp` is not
+`~` — `negate` flips `~` to `!~` in place (`out := *e;
+out.cmpOp = flipped`), so the comparison is the reliable signal.
+Absence is the safe direction: the caller keeps its LIKE clause.
+`TestCompile_ReportsTextMatches` and
+`TestFTS_NegatedSearchKeepsTheLikePath` pin this.
+
+**Only a single plain `contains` is rewritten.** Two positive terms are
+an intersection that one MATCH expression cannot express faithfully
+(`contains("a") && startsWith("b")` is not a two-word AND), and
+`startsWith`/`endsWith` have no equivalent in a token index. Both cases
+fall back to LIKE rather than approximate.
+
+**dbx does not substitute identifiers inside an `Exp`.** This cost two
+debug cycles and is worth writing down:
+`DB.processSQL` (which rewrites `{{…}}` / `[[…]]`) runs in
+`NewQuery`/`Select`, but `Exp.Build` (`dbx/expression.go:164`)
+returns the fragment *verbatim*. So `dbx.NewExp("{{memos}}.[[rowid]] …")`
+reaches SQLite literally and fails with `no such column: memos_fts`.
+The predicate uses bare identifiers instead; they are riff's own
+constants, never user input.
+
+**`bm25()` needs the table joined, not merely referenced.** It is an
+auxiliary function of the virtual table, so it is only in scope once
+`memos_fts` is an actual join in the query. Ordering by it while the
+FTS table appears only inside a subquery fails with `no such column`.
+The fix is `InnerJoin("memos_fts", …)` on `rowid`, added only on the
+FTS path — relevance ordering applied to a non-search feed would
+reorder the whole home feed or fail outright.
+
+**Search text is never interpreted as FTS5 query syntax.** MATCH is a
+language: a bare `"` opens a phrase and bare AND/OR/NOT/* change the
+meaning, so a user searching `O'Brien` would hit a syntax error and
+`a OR b` would silently double the results. Each whitespace-separated
+word is quoted into its own phrase (inner `"` doubled) and joined with
+an implicit AND, which is what a user typing several words expects.
+
+**The security property, and proof the test has teeth.**
+`TestFTS_PrivateMemoIsNeverLeaked` asserts that an anonymous caller
+searching a word inside a PRIVATE memo does not get it, and that
+neither user gets the other's. The FTS table has no access control of
+its own; it may only ever narrow candidates, and `CanAccessRecord`
+against `memos.ViewRule` still decides every hit. I mutation-tested
+it: making the FTS path return rows without the per-row
+`CanAccessRecord` check turns the test red on both assertions. (My
+first mutation attempt appeared to pass — it was defeated by
+`findMemos` overwriting the variable I mutated, not by a weak test.
+Second attempt, on the real skip point, failed as intended.)
+
+Two test-side corrections worth recording, because both were my error
+rather than the code's: `newFilterMemo` forces `visibility: PUBLIC`
+*before* applying `extra`, so my `{"visibility":"PRIVATE"}` override
+never took effect and I briefly asserted the wrong thing about what
+Bob should see; and the compiler emits an **unquoted** column
+(`content ~ {:_a0}`), so a rewrite that looked for the quoted form
+silently never fired. That second one is the dangerous shape of bug —
+a no-op is invisible, and only the folding test caught it.
+
+**Verification.** `TestFTS_FindsTheSameRowsAsLIKE` compares the two
+paths element-wise across five filters, because enabling FTS must not
+change what a user finds; `TestFTS_FoldsCaseUnlikeLIKE` asserts the
+one intended divergence, and asserts it against *both* paths so the
+difference cannot be quietly lost. Full `./pb/...` and `./internal/...`
+pass except the known `TempDir RemoveAll` teardown flake in
+`TestAttachmentService_Empty`, which passes in isolation and touches
+no file this change modifies.
+
 ## Phase 1 of FTS: the index exists, nothing queries it yet (2026-10-23)
 
 Adding SQLite FTS5 to riff, after establishing that neither riff nor

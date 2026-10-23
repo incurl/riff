@@ -152,6 +152,10 @@ func main() {
 	// so a slow OnServe bootstrap does not race a
 	// fast first request: the OnServe hook runs
 	// before the HTTP listener is bound.
+	// RIFF_FTS routes memo content search through the SQLite FTS5
+	// index instead of the LIKE scan. Set before Register so the memo
+	// server picks the mode up at construction.
+	connect.SetFTSSearch(prof.FTS)
 	if err := connect.Register(app, rateLimiter); err != nil {
 		log.Fatal(err)
 	}
@@ -229,6 +233,9 @@ func buildProfileFromEnv() *profile.Profile {
 	}
 	if envBool("RIFF_RATE_LIMIT") {
 		p.RateLimit = true
+	}
+	if envBool("RIFF_FTS") {
+		p.FTS = true
 	}
 	return p
 }

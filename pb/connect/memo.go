@@ -61,9 +61,20 @@ type MemoServer struct {
 	// leaves it nil and the methods fall back to the package-level
 	// singleton built once via sync.Once.
 	linkMetaFetcher *linkmeta.HTMLMetaFetcher
+	// ftsSearch routes memo content search through the SQLite FTS5
+	// index (see memo_fts.go) instead of the LIKE scan. Set from
+	// Profile.FTS via SetFTSSearch; off by default so an instance only
+	// changes search behaviour when an operator asks for it.
+	ftsSearch bool
 }
 
 func NewMemoServer(app core.App) *MemoServer { return &MemoServer{app: app} }
+
+// SetFTSSearch enables or disables the FTS5-backed content search for
+// this server. It mirrors setLinkMetaFetcher: a setter rather than a
+// constructor argument, because NewMemoServer is called from a dozen
+// test files and a variadic option there would be noise in every one.
+func (s *MemoServer) SetFTSSearch(enabled bool) { s.ftsSearch = enabled }
 
 // ListMemos returns a paginated list of memos the caller can
 // read. The list rule on the memos collection already filters
@@ -100,7 +111,23 @@ func (s *MemoServer) ListMemos(ctx context.Context, req *v1.ListMemosRequest) (*
 		filterSQL, filterArgs = joinFilters(filterSQL, filterArgs, stateSQL, stateArgs)
 	}
 
-	rows, err := s.app.FindRecordsByFilter(memos, filterSQL, "-created", limit, offset, filterArgs)
+	// With FTS on, a *positive* content-match term is served by the
+	// index instead of the LIKE scan: the index narrows rows and
+	// tokenises them, which LIKE cannot do (no index, ASCII-only case
+	// folding). The LIKE clause is then dropped, because keeping both
+	// would shrink the result set — LIKE cannot match the folded
+	// spelling FTS just matched, so the two disagree.
+	//
+	// collectTextMatches never reports a negated term, so `!contains`
+	// and friends keep their LIKE clause and stay correct.
+	ftsQuery := ""
+	if s.ftsSearch {
+		filterSQL, filterArgs, ftsQuery = memoFTSRewrite(
+			req.GetFilter(), filterSQL, filterArgs,
+		)
+	}
+
+	rows, err := s.findMemos(memos, filterSQL, limit, offset, filterArgs, ftsQuery)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
 	}

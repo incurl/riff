@@ -40,6 +40,11 @@ type expr struct {
 	// predicate. It is empty for every other node, and negate falls
 	// back to an error when neither an operator nor this is available.
 	notFragment string
+	// textMatch is set only on a node that `stringMatch` built. It
+	// reports the unpadded literal the caller wrote, which the
+	// LIKE clause in the fragment cannot give back (it carries the
+	// padded, escaped pattern instead).
+	textMatch *TextMatch
 }
 
 type nodeKind int
@@ -1428,7 +1433,26 @@ func (p *parser) stringMatch(column string, op matchKind, s string) *expr {
 		op:       opCompare,
 		cmpOp:    "~",
 		parts:    []*expr{{fragment: column, kind: nodeValue}, lit},
+		textMatch: &TextMatch{
+			// Field is the column, not the CEL name: the fragment only
+			// ever carries the column, and the caller (memo_fts.go)
+			// needs to know which one this was on.
+			Field:  column,
+			Op:     string(op),
+			Value:  s,
+			ArgKey: singleArgKey(lit.args),
+		},
 	}
+}
+
+// singleArgKey returns the single parameter key in m, or "" when m does
+// not hold exactly one. The literal helper always allocates one, so the
+// guard is defensive rather than expected.
+func singleArgKey(m map[string]any) string {
+	for k := range m {
+		return k
+	}
+	return ""
 }
 
 func oneStringArgAt(name string, args []*expr, idx int) (string, error) {

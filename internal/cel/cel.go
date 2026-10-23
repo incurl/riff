@@ -101,6 +101,34 @@ type Expression struct {
 	// Argv is the bound parameters, keyed by the placeholder names
 	// used in Fragment.
 	Argv map[string]any
+	// TextMatches holds every top-level string-match term the
+	// expression compiled to, in source order: the field, the
+	// operator (contains / startsWith / endsWith) and the literal the
+	// caller wrote. It is empty when the expression has none.
+	//
+	// The LIKE clause these terms produced is still present in
+	// Fragment — this is a *report*, not a removal. A caller with its
+	// own full-text index can use the report to drop the LIKE clause
+	// and substitute the index, which is the only way to get tokenised
+	// matching (see pb/connect/memo_fts.go). Dropping LIKE is safe
+	// there because the index narrows the same rows; keeping both
+	// would *shrink* the result set, since LIKE cannot match a
+	// diacritic-folded or case-folded spelling that FTS does match.
+	TextMatches []TextMatch
+}
+
+// TextMatch is one string-match term from a compiled expression.
+type TextMatch struct {
+	// Field is the CEL field name, e.g. "content".
+	Field string
+	// Op is the operator: matchContains, matchStartsWith or
+	// matchEndsWith (the internal/cel matchKind values).
+	Op string
+	// Value is the literal the caller wrote, unpadded and unescaped.
+	Value string
+	// ArgKey is the Argv key the LIKE clause binds, or "" when the
+	// term did not reach the fragment (it was simplified away).
+	ArgKey string
 }
 
 // Compile parses expr against the field schema and returns the
@@ -136,7 +164,43 @@ func Compile(expr string, opts Options) (*Expression, error) {
 	if out.kind != nodePredicate {
 		return nil, errors.Errorf("expression does not produce a boolean; compare it with == or !=")
 	}
-	return &Expression{Fragment: out.fragment, Argv: out.args}, nil
+	return &Expression{
+		Fragment:    out.fragment,
+		Argv:        out.args,
+		TextMatches: collectTextMatches(out),
+	}, nil
+}
+
+// collectTextMatches walks the compiled tree and returns every
+// string-match term, in source order.
+//
+// A term under a `!` is deliberately *not* reported: negation inverts
+// the LIKE clause to `!~`, so dropping that clause for an index would
+// turn "not contains" into "contains" and return the wrong rows. The
+// caller must be able to tell the two apart, and absence is the safe
+// signal — it keeps the LIKE clause and stays correct.
+func collectTextMatches(root *expr) []TextMatch {
+	if root == nil {
+		return nil
+	}
+	var out []TextMatch
+	var walk func(n *expr)
+	walk = func(n *expr) {
+		if n == nil {
+			return
+		}
+		// A negated join is opNot-ish; `negate` flips cmpOp rather than
+		// wrapping, so the reliable signal is a non-positive operator.
+		if n.textMatch != nil && n.cmpOp == "~" {
+			out = append(out, *n.textMatch)
+			return
+		}
+		for _, p := range n.parts {
+			walk(p)
+		}
+	}
+	walk(root)
+	return out
 }
 
 func indexFields(fs []Field) map[string]Field {
