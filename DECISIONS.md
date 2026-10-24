@@ -48,6 +48,45 @@ warns on **every boot** that `modernc.org/libc v1.79.0` "differs from the
 expected and tested v1.77.1 … could result in unexpected build or runtime
 errors". Worth a separate pin-back.
 
+## RIFF_FTS defaults ON in the image (2026-10-24)
+
+The flag was originally documented as OFF by default everywhere, with the
+rationale that an instance should not change search behaviour until an
+operator asks. The entrypoint now defaults it to **1** instead, so a bare
+`docker run` and the Fly deploy get the indexed search.
+
+That is a deliberate change of default, and it is worth being explicit
+about what it means, because the *index* was always built either way:
+migration `1910000000_create_memos_fts` creates `memos_fts` and its
+triggers unconditionally. The flag only decides whether the index is
+**queried**. So the "OFF by default" position was never really a
+conservative one — it paid the write cost of three triggers on every
+memo insert and got none of the benefit. Defaulting to ON is the
+cheaper default, and the search-behaviour change is the intended
+point of the feature.
+
+**The three deployment paths now disagree deliberately**, and the
+precedence is worth knowing:
+
+  - `scripts/compose.yaml` passes `RIFF_FTS=${RIFF_FTS:-0}` — it sets
+    the variable *explicitly*, so the entrypoint's `:=` default never
+    fires. Compose gets the LIKE scan unless the operator sets 1.
+  - `scripts/entrypoint-supervisord.sh` does `: "${RIFF_FTS:=1}"`, which
+    applies only when the variable is **unset**. A bare `docker run`
+    gets the indexed search; `docker run -e RIFF_FTS=0` gets LIKE.
+  - `fly.toml` has no compose file, so the entrypoint default applies
+    and Fly gets the indexed search.
+
+Verified the shell semantics directly: unset → 1, `RIFF_FTS=0` → 0.
+
+The search-behaviour difference, restated for the operator docs: FTS
+folds case across the whole Unicode range and strips diacritics, so
+`cafe` finds `café` and `блины` finds `Блины`, where a LIKE scan folds
+ASCII only and found neither. FTS matches whole tokens rather than
+substrings, so `カフェ` does not match `カフェで` (use `カフェ*`).
+Negated searches and `startsWith`/`endsWith` keep using LIKE and are
+unaffected.
+
 ## The FTS rewrite left a dangling `&&`: every search-plus-condition was a 500 (2026-10-24)
 
 Found in production: `ListMemos` answered **500** for any filter that

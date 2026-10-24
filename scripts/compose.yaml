@@ -31,23 +31,26 @@ services:
       - ACME_EMAIL=${ACME_EMAIL:-ops@example.com}
       - RIFF_INSTANCE_URL=${RIFF_INSTANCE_URL:-https://example.com/community}
       # RIFF_FTS=1 serves memo content search from the SQLite FTS5
-      # index instead of a LIKE scan. It is OFF by default.
+      # index instead of a LIKE scan.
       #
       # The index itself is ALWAYS built — migration
       # 1910000000_create_memos_fts creates memos_fts and its triggers
-      # unconditionally — so an unset value means you pay the write
-      # cost of maintaining the index and get none of the query
-      # benefit. Off is the safe default for a new instance: with it
-      # unset, search behaves exactly as it always has.
+      # unconditionally — so the flag only decides whether the index is
+      # *queried*. With it off you pay the write cost of maintaining the
+      # index and get none of the query benefit.
       #
-      # Turning it on changes search behaviour in one visible way: FTS
-      # folds case across the whole Unicode range and strips
-      # diacritics, so "cafe" finds "café" and "блины" finds "Блины".
-      # A LIKE scan only folds ASCII, so those searches returned
-      # nothing before. It does NOT match substrings: FTS is
-      # token-based, so "カフェ" does not match "カフェで" (use
+      # The behaviour difference: FTS folds case across the whole Unicode
+      # range and strips diacritics, so "cafe" finds "café" and "блины"
+      # finds "Блины". A LIKE scan folds ASCII only, so those searches
+      # returned nothing. FTS matches whole tokens rather than
+      # substrings, so "カフェ" does not match "カフェで" (use
       # "カフェ*"). Negated searches (`!content.contains(...)`) and
       # startsWith/endsWith keep using LIKE and are unaffected.
+      #
+      # This defaults to 0 here, while the image's entrypoint defaults
+      # it to 1: compose passes the value explicitly, so the entrypoint
+      # default only applies to a bare `docker run` and to the Fly
+      # deploy (which has no compose file). Set it to 1 here to match.
       #
       # Read once at process start (os.Getenv), so changing it needs a
       # container restart, never a rebuild.

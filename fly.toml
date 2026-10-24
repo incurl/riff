@@ -132,16 +132,20 @@ swap_size_mb = 512
   #   3. redeploy.
   # RIFF_RATE_LIMIT = "1"
   # RIFF_FTS = "1" serves memo content search from the SQLite FTS5 index
-  # instead of a LIKE scan. It is deliberately unset here, because the
-  # index is ALWAYS built (migration 1910000000_create_memos_fts) and an
-  # unset value means the write cost of maintaining it is paid without any
-  # query benefit. Enable it once the search behaviour has been checked on
-  # real data: FTS folds case across the whole Unicode range and strips
-  # diacritics ("cafe" finds "café"), which a LIKE scan cannot do, but it
-  # matches whole tokens rather than substrings, so "カフェ" will not match
-  # "カフェで". Negated searches and startsWith/endsWith keep using LIKE and
-  # are unaffected. Read once at startup, so redeploy after changing it.
-  # RIFF_FTS = "1"
+  # instead of a LIKE scan. It is deliberately unset here: the image's
+  # entrypoint defaults it to 1, and Fly has no compose file to override
+  # that, so the deployed behaviour is already the indexed search. Set it
+  # to "0" to fall back to the LIKE scan.
+  #
+  # The index is ALWAYS built (migration 1910000000_create_memos_fts), so
+  # the flag only decides whether it is queried. The behaviour difference:
+  # FTS folds case across the whole Unicode range and strips diacritics
+  # ("cafe" finds "café"), which a LIKE scan cannot do, but it matches
+  # whole tokens rather than substrings, so "カフェ" will not match
+  # "カフェで". Negated searches and startsWith/endsWith keep using LIKE
+  # and are unaffected. Read once at startup, so redeploy after changing
+  # it.
+  # RIFF_FTS = "0"
 
 # Persistent riff data. Everything PocketBase writes resolves inside this
 # mount: main.go pins the data dir to the relative "./pb_data", supervisord
