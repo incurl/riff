@@ -393,6 +393,8 @@ func splitTopLevel(s string) ([]string, []string) {
 			depth++
 		case ')':
 			depth--
+		default:
+			// Not a bracket; the connective check below handles it.
 		}
 		if depth != 0 {
 			continue
