@@ -87,6 +87,59 @@ substrings, so `カフェ` does not match `カフェで` (use `カフェ*`).
 Negated searches and `startsWith`/`endsWith` keep using LIKE and are
 unaffected.
 
+## A byte cut in snippetOf made every ListMemos response a 500 (2026-10-24)
+
+The production 500 was `marshal message: string field contains invalid
+UTF-8`. protojson refuses to marshal a string field that is not valid
+UTF-8, so **one bad string turned the whole ListMemos response into a
+500 for every reader** — the feed was broken for everyone, not just for
+the memo that had the problem.
+
+**Two independent sources, both fixed.**
+
+**1. `snippetOf` truncated on a byte boundary.** `cut := content[:n]`
+with n=120. When that cut landed inside a multi-byte character it left
+a lone continuation byte in the snippet — `Ã` for `é`, `æ` for
+`東`. This is not invalid *input*: it is ordinary CJK, Cyrillic or
+emoji content whose 120th byte happens to fall mid-character. The
+snippet is a *derived* field, so the corruption was introduced by riff
+itself, and it happened only for the subset of memos where the cut
+landed badly — which is why it looked intermittent and was not
+reproducible from a filter shape.
+
+The fix walks the cut back to the start of the rune it landed in. The
+identical helper in `pb/hooks/notifications_helpers_content.go` had
+the same bug, and the same fix.
+
+**2. The stored `content` could itself be invalid UTF-8.** PocketBase
+does not validate text fields on save, and the ZIP import path
+(`readContentBytes`) does `string(data)` on raw archive bytes with no
+UTF-8 check — so an imported archive can put invalid bytes into
+`memos.content`, and then `Memo.content` (not just the snippet) makes
+the response unmarshalable. The import now replaces invalid bytes with
+U+FFFD, and the read path sanitises what it emits, so a row that
+already holds bad bytes cannot poison the feed.
+
+**What could *not* have caused it, checked rather than assumed:**
+protojson rejects a lone surrogate on *input* ("invalid escape code"),
+and `encoding/json` (the REST/V0/V1 surfaces) replaces invalid bytes
+with U+FFFD. So neither the Connect JSON body nor the REST surfaces
+can inject invalid UTF-8 — it had to come from the import path or from
+a direct database write.
+
+**Why it took so long to find.** The symptom was a 500 on an endpoint
+whose *input* looked fine, and there was no log line: connect-go does
+not log handler errors, and riff's only interceptor (`WithAuth`) passed
+them through untouched. `flyctl logs` was clean while the browser saw
+500s. The fix for that is separate and now committed — `WithErrorLogging`
+logs the procedure and the error, so the next occurrence names itself.
+
+The general lesson, recorded because it generalises: **a derived field
+computed by slicing a string is a correctness boundary, not a
+formatting detail.** `content[:n]` looks safe and is not, and the
+failure surfaces far from its cause — in the serializer, on a request
+that has nothing to do with text.
+
 ## The FTS rewrite left a dangling `&&`: every search-plus-condition was a 500 (2026-10-24)
 
 Found in production: `ListMemos` answered **500** for any filter that

@@ -14,6 +14,8 @@
 package connect
 
 import (
+	"unicode/utf8"
+
 	"archive/zip"
 	"context"
 	"encoding/json"
@@ -391,6 +393,14 @@ func readContentBytes(zr *zip.ReadCloser, rec *exportMemoRecord) string {
 		data, err := io.ReadAll(rc)
 		if err != nil {
 			return ""
+		}
+		// The archive's bytes are not validated as UTF-8 anywhere, and
+		// an invalid sequence stored in `memos.content` makes the whole
+		// ListMemos response unmarshalable ("string field contains
+		// invalid UTF-8"), poisoning the feed for every reader. Replace
+		// the invalid bytes with U+FFFD rather than storing them.
+		if !utf8.Valid(data) {
+			data = []byte(strings.ToValidUTF8(string(data), string(utf8.RuneError)))
 		}
 		return string(data)
 	}

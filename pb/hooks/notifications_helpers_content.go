@@ -1,6 +1,8 @@
 package hooks
 
 import (
+	"unicode/utf8"
+
 	"strings"
 
 	"github.com/pocketbase/pocketbase/core"
@@ -113,14 +115,37 @@ func memoParentID(app core.App, memoID string) string {
 // Ellipsis suffix is a single Unicode character so the result
 // always ends in a visible marker even when the content is short.
 func snippetOf(content string, n int) string {
+	// Sanitise first: a short content is returned verbatim, so an
+	// invalid byte would otherwise survive into the snippet.
+	content = validUTF8(content)
 	if n <= 0 || len(content) <= n {
 		return content
 	}
+	// Cut on a *rune* boundary, not a byte boundary. A byte cut can
+	// land inside a multi-byte character and leave a lone continuation
+	// byte behind, which is not valid UTF-8. The same bug in
+	// pb/connect/memos_translate.go made every ListMemos response a
+	// 500 ("marshal message: string field contains invalid UTF-8")
+	// for any memo whose 120th byte fell inside a Cyrillic, CJK or
+	// emoji character.
 	cut := content[:n]
+	for len(cut) > 0 && !utf8.ValidString(cut) {
+		cut = cut[:len(cut)-1]
+	}
 	if idx := lastSpace(cut); idx > n/2 {
 		cut = cut[:idx]
 	}
 	return cut + "…"
+}
+
+// validUTF8 returns s unchanged when it is valid UTF-8, and otherwise
+// replaces the invalid bytes with U+FFFD. See the identical helper in
+// pb/connect/memos_translate.go.
+func validUTF8(s string) string {
+	if utf8.ValidString(s) {
+		return s
+	}
+	return strings.ToValidUTF8(s, string(utf8.RuneError))
 }
 
 func lastSpace(s string) int {

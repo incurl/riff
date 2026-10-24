@@ -1,6 +1,9 @@
 package connect
 
 import (
+	"strings"
+	"unicode/utf8"
+
 	"context"
 	"encoding/json"
 	"errors"
@@ -48,7 +51,7 @@ func recordToMemo(ctx context.Context, app core.App, rec *core.Record) *v1.Memo 
 		Creator:     "users/" + username,
 		CreateTime:  timestampToProto(rec.GetDateTime("created")),
 		UpdateTime:  timestampToProto(rec.GetDateTime("updated")),
-		Content:     rec.GetString("content"),
+		Content:     validUTF8(rec.GetString("content")),
 		Visibility:  visibilityToProto(rec.GetString("visibility")),
 		Tags:        rec.GetStringSlice("tags"),
 		Snippet:     snippetOf(rec.GetString("content"), 120),
@@ -384,13 +387,57 @@ func stateFromProto(s v1.State) string {
 	}
 }
 
-// snippetOf returns the first n bytes of content, trimmed at
-// a word boundary if possible.
+// validUTF8 returns s unchanged when it is valid UTF-8, and otherwise
+// replaces the invalid bytes with U+FFFD.
+//
+// A memo whose stored `content` is not valid UTF-8 makes the whole
+// ListMemos response unmarshalable: protojson refuses to marshal a
+// string field that is not valid UTF-8 ("string field contains invalid
+// UTF-8"), so one bad row turns the entire feed into a 500 for every
+// reader. The bytes can reach the database through a path that does
+// not validate them — the ZIP import reads raw archive bytes — and
+// PocketBase does not validate text fields on save.
+//
+// Sanitising on the way out keeps a bad row from poisoning the feed.
+// The stored bytes are left alone: repairing them in place would
+// rewrite the user's data, and the row is still readable, just not
+// renderable as text.
+func validUTF8(s string) string {
+	if utf8.ValidString(s) {
+		return s
+	}
+	return strings.ToValidUTF8(s, string(utf8.RuneError))
+}
+
+// snippetOf returns the first n bytes of content, trimmed at a word
+// boundary if possible, on a rune boundary so the result is always
+// valid UTF-8.
 func snippetOf(content string, n int) string {
+	// Sanitise first: a short content is returned verbatim, so an
+	// invalid byte would otherwise survive into the snippet.
+	content = validUTF8(content)
 	if len(content) <= n {
 		return content
 	}
-	cut := content[:n]
+	// Cut on a *rune* boundary, not a byte boundary. A byte cut can
+	// land in the middle of a multi-byte character and leave a lone
+	// continuation byte in the result, which is not valid UTF-8.
+	// protojson refuses to marshal an invalid string, so the whole
+	// ListMemos response became a 500:
+	//
+	//	marshal message: string field contains invalid UTF-8
+	//
+	// A memo whose 120th byte falls inside a Cyrillic, CJK or emoji
+	// character is enough to trigger it — and only *some* memos are
+	// affected, which is why it looked intermittent.
+	cut := content
+	if len(content) > n {
+		cut = content[:n]
+		// Walk back to the start of the rune the cut landed in.
+		for len(cut) > 0 && !utf8.ValidString(cut) {
+			cut = cut[:len(cut)-1]
+		}
+	}
 	if idx := lastSpace(cut); idx > n/2 {
 		cut = cut[:idx]
 	}
