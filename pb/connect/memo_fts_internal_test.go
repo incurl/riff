@@ -348,6 +348,28 @@ func TestFTS_SearchCombinedWithOtherFilters(t *testing.T) {
 			"FTS and LIKE must agree for %q — the surviving conjunct must still filter", filter)
 	}
 
+	// The `state` request field is joined onto the compiled CEL filter
+	// *before* the FTS rewrite runs, so the fragment the rewrite sees
+	// already carries a second clause. The Archived page sets it, and
+	// it is a separate request field rather than part of the CEL
+	// expression.
+	for _, st := range []v1.State{
+		v1.State_STATE_UNSPECIFIED,
+		v1.State_NORMAL,
+		v1.State_ARCHIVED,
+		v1.State_DRAFT,
+	} {
+		for _, filter := range []string{
+			`content.contains("roadmap")`,
+			`content.contains("roadmap") && pinned`,
+		} {
+			_, err := fts.ListMemos(t.Context(), &v1.ListMemosRequest{
+				Filter: filter, State: st,
+			})
+			require.NoError(t, err, "state=%v filter=%q must not error", st, filter)
+		}
+	}
+
 	// Spot-check that the conjunct really did narrow, rather than being
 	// dropped along with the LIKE clause.
 	assert.Len(t, contents(fts, `content.contains("roadmap") && visibility in ["PRIVATE"]`), 0,
