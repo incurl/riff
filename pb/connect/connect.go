@@ -38,6 +38,7 @@ package connect
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -97,6 +98,7 @@ func Register(app core.App, limiter ratelimit.Limiter) error {
 	srv := connect.NewServer(
 		WithAuth(app),
 		WithSignedURLSigner(InstallSignedURLSignerForREST),
+		WithErrorLogging(),
 	)
 
 	// Implemented services.
@@ -249,6 +251,48 @@ func WithAuth(app core.App) connect.ServerInterceptor {
 				}
 			}
 			return next(ctx, spec, stream)
+		})
+	}
+}
+
+// WithErrorLogging logs every handler error the Connect server
+// returns, so a 5xx is visible in the server log instead of only in
+// the browser.
+//
+// Without it, a connect handler that returns
+// connect.CodeInternal produces a 500 response and *no log line at
+// all*: connect-go does not log handler errors, and the only
+// interceptor riff registered (WithAuth) passes them through
+// untouched. A 500 that a user reports therefore had nothing to
+// diagnose it from — the log stream was clean and only the response
+// body carried the message.
+//
+// The procedure and the error are logged, not the request body: the
+// body can contain the user's filter text, and a filter is not worth
+// a log line. Internal errors are logged at Error; a client mistake
+// (InvalidArgument and friends) is not, because those are expected
+// and would drown the signal.
+func WithErrorLogging() connect.ServerInterceptor {
+	return func(next connect.ServerFunc) connect.ServerFunc {
+		return connect.ServerFunc(func(ctx context.Context, spec connect.Spec, stream connect.ServerStream) error {
+			err := next(ctx, spec, stream)
+			if err == nil {
+				return nil
+			}
+			code := connect.CodeOf(err)
+			if code == connect.CodeInternal || code == connect.CodeUnknown {
+				slog.Error("connect handler failed",
+					"procedure", spec.Procedure,
+					"code", code.String(),
+					"err", err.Error(),
+				)
+				return err
+			}
+			slog.Info("connect handler rejected",
+				"procedure", spec.Procedure,
+				"code", code.String(),
+			)
+			return err
 		})
 	}
 }
