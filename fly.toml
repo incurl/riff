@@ -132,10 +132,10 @@ swap_size_mb = 512
   #   3. redeploy.
   # RIFF_RATE_LIMIT = "1"
   # RIFF_FTS = "1" serves memo content search from the SQLite FTS5 index
-  # instead of a LIKE scan. It is deliberately unset here: the image's
-  # entrypoint defaults it to 1, and Fly has no compose file to override
-  # that, so the deployed behaviour is already the indexed search. Set it
-  # to "0" to fall back to the LIKE scan.
+  # instead of a LIKE scan. It is deliberately unset here, so this app
+  # keeps the LIKE scan until someone opts in: set it to "1" to enable
+  # the indexed search. Enable it once the behaviour below has been
+  # checked on real data.
   #
   # The index is ALWAYS built (migration 1910000000_create_memos_fts), so
   # the flag only decides whether it is queried. The behaviour difference:

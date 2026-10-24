@@ -52,8 +52,12 @@ export ACME_EMAIL
 export CADDYFILE
 
 # RIFF_FTS: serve memo content search from the SQLite FTS5 index
-# instead of a LIKE scan. Defaults ON, so a bare `docker run` gets the
-# indexed search; set RIFF_FTS=0 to fall back to the LIKE scan.
+# instead of a LIKE scan. OFF unless the operator sets it.
+#
+# No default is exported on purpose, so there is one less place for the
+# value to be set implicitly: unset and an explicit "0" are identical
+# to envBool, and leaving it unset keeps the override visible in the
+# operator's compose file or fly.toml rather than buried here.
 #
 # The index is always built (migration 1910000000_create_memos_fts),
 # so the flag only decides whether it is *queried*. With it off you pay
@@ -67,14 +71,11 @@ export CADDYFILE
 # so "カフェ" does not match "カフェで" (use "カフェ*"). Negated
 # searches and startsWith/endsWith keep using LIKE and are unaffected.
 #
-# This is read once by the riff binary at startup via os.Getenv, so
-# changing it needs a container restart, never a rebuild.
+# Read once by the riff binary at startup via os.Getenv, so changing it
+# needs a container restart, never a rebuild.
 #
-# Note that scripts/compose.yaml passes RIFF_FTS explicitly (its own
-# default of 0), so this entrypoint default only applies to a bare
-# `docker run` and to the Fly deploy, which has no compose file.
-: "${RIFF_FTS:=1}"
-export RIFF_FTS
+# : "${RIFF_FTS:=0}"
+# export RIFF_FTS
 
 # exec so supervisord becomes PID 1 and gets the container's
 # signals. `nodaemon=true` keeps it in the foreground, which is

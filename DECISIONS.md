@@ -48,44 +48,49 @@ warns on **every boot** that `modernc.org/libc v1.79.0` "differs from the
 expected and tested v1.77.1 … could result in unexpected build or runtime
 errors". Worth a separate pin-back.
 
-## RIFF_FTS defaults ON in the image (2026-10-24)
+## `RIFF_FTS` stays OFF by default, and the docs now say so in three places (2026-10-24)
 
-The flag was originally documented as OFF by default everywhere, with the
-rationale that an instance should not change search behaviour until an
-operator asks. The entrypoint now defaults it to **1** instead, so a bare
-`docker run` and the Fly deploy get the indexed search.
+`RIFF_FTS` gates whether memo content search is served by the SQLite FTS5
+index or by the `LIKE` scan. The default was briefly flipped to ON in the
+entrypoint and then reverted; it now defaults **OFF** everywhere.
 
-That is a deliberate change of default, and it is worth being explicit
-about what it means, because the *index* was always built either way:
-migration `1910000000_create_memos_fts` creates `memos_fts` and its
-triggers unconditionally. The flag only decides whether the index is
-**queried**. So the "OFF by default" position was never really a
-conservative one — it paid the write cost of three triggers on every
-memo insert and got none of the benefit. Defaulting to ON is the
-cheaper default, and the search-behaviour change is the intended
-point of the feature.
+**OFF is the right default, and the reason is not conservatism about
+behaviour — it is that the flag is not what costs anything.** Migration
+`1910000000_create_memos_fts` builds `memos_fts` and its three triggers
+unconditionally, so an instance pays the index-maintenance cost on every
+memo write either way. The flag only decides whether the index is
+**queried**. Turning it on is therefore free at the margin, and turning it
+off does not avoid any work — it just declines to use what is already
+being maintained.
 
-**The three deployment paths now disagree deliberately**, and the
-precedence is worth knowing:
+What OFF does buy is a smaller blast radius: the index and the FTS query
+path are the newest code in the search surface, and the day this was
+written they had already produced two production 500s (a dangling `&&` in
+the LIKE-clause rewrite, and invalid UTF-8 from a byte-sliced snippet).
+Leaving the flag off means those could be fixed and verified on real data
+before any instance switched over. Enable it with `RIFF_FTS=1` once the
+behaviour below has been checked.
 
-  - `scripts/compose.yaml` passes `RIFF_FTS=${RIFF_FTS:-0}` — it sets
-    the variable *explicitly*, so the entrypoint's `:=` default never
-    fires. Compose gets the LIKE scan unless the operator sets 1.
-  - `scripts/entrypoint-supervisord.sh` does `: "${RIFF_FTS:=1}"`, which
-    applies only when the variable is **unset**. A bare `docker run`
-    gets the indexed search; `docker run -e RIFF_FTS=0` gets LIKE.
-  - `fly.toml` has no compose file, so the entrypoint default applies
-    and Fly gets the indexed search.
+**The three deployment paths, and how the value actually resolves:**
 
-Verified the shell semantics directly: unset → 1, `RIFF_FTS=0` → 0.
+  - `scripts/compose.yaml` passes `RIFF_FTS=${RIFF_FTS:-0}` — it sets the
+    variable *explicitly*, so an entrypoint `:=` default would never fire.
+  - `scripts/entrypoint-supervisord.sh` deliberately exports **no**
+    default. Unset and an explicit `0` are identical to `envBool`, and
+    leaving it unset keeps the override visible in the operator's compose
+    file or `fly.toml` instead of buried in an entrypoint.
+  - `fly.toml` leaves it commented out, so a Fly deploy keeps the `LIKE`
+    scan until someone sets `RIFF_FTS = "1"`.
 
-The search-behaviour difference, restated for the operator docs: FTS
-folds case across the whole Unicode range and strips diacritics, so
-`cafe` finds `café` and `блины` finds `Блины`, where a LIKE scan folds
-ASCII only and found neither. FTS matches whole tokens rather than
-substrings, so `カフェ` does not match `カフェで` (use `カフェ*`).
-Negated searches and `startsWith`/`endsWith` keep using LIKE and are
-unaffected.
+Verified the shell semantics directly: unset → `envBool` false,
+`RIFF_FTS=0` → false, `RIFF_FTS=1` → true.
+
+The behaviour difference, for the operator docs: FTS folds case across the
+whole Unicode range and strips diacritics, so `cafe` finds `café` and
+`блины` finds `Блины`, where a `LIKE` scan folds ASCII only and found
+neither. FTS matches whole tokens rather than substrings, so `カフェ` does
+not match `カフェで` (use `カフェ*`). Negated searches and
+`startsWith`/`endsWith` keep using `LIKE` and are unaffected.
 
 ## A byte cut in snippetOf made every ListMemos response a 500 (2026-10-24)
 
