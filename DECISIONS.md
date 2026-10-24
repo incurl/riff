@@ -48,6 +48,56 @@ warns on **every boot** that `modernc.org/libc v1.79.0` "differs from the
 expected and tested v1.77.1 … could result in unexpected build or runtime
 errors". Worth a separate pin-back.
 
+## The FTS rewrite left a dangling `&&`: every search-plus-condition was a 500 (2026-10-24)
+
+Found in production: `ListMemos` answered **500** for any filter that
+combined a content search with another condition. The deployed commit
+was the FTS tip, so the query path was live.
+
+**The mechanism.** The compiler wraps a conjunction in parentheses:
+
+```
+content.contains("roadmap") && pinned
+  -> (content ~ {:_a1} && pinned = true)
+```
+
+The rewrite removed the LIKE clause to hand the row set to the index,
+and then tried to repair the leftover text with a `trimDanglingJoin`
+helper that stripped a leading or trailing `&&`. But the clause sits
+*inside* the parentheses, so the result was `( && pinned = true)` — a
+dangling `&&` that PocketBase's filter parser rejects with `expected
+left operand (identifier, function, text or number), got "&&" (join)`.
+The helper could only ever fix a connective at the *edge* of the
+fragment, and the compiler never puts one there.
+
+**The fix** is `removeClause`: split the fragment on its *top-level*
+connectives (depth-aware, so a nested group is not split), drop the
+segment holding the clause, and rejoin the rest. The compiler emits one
+connective per level, so the rejoin is unambiguous; a mixed `&&`/`||` at
+one level is refused rather than guessed, and the caller keeps the LIKE
+clause. `trimDanglingJoin` is deleted — it was the wrong shape of fix.
+
+**Why the test suite missed it.** The original tests only ever combined
+a search with *another search* — and two text terms fall back to LIKE
+(`collectTextMatches` reports one term at a time), so the rewrite never
+ran on that path. Every shape the SPA actually sends combines a search
+with a **non-text** condition: `pinned`, `has_link`, `has_code`,
+`has_location`, `has_task_list`, `tag in [...]`, `visibility in [...]`,
+a timestamp range, a space. Those are the ones that broke.
+`TestFTS_SearchCombinedWithOtherFilters` now covers twelve of them and
+asserts the surviving conjunct still *filters*, not merely parses — a
+rewrite that dropped the conjunct too would return the wrong rows
+instead of erroring. It was mutation-checked: restoring the old
+`strings.Replace` behaviour turns it red on the first filter.
+
+**Why this is worth recording beyond the fix.** The failure was
+invisible to every test that existed, and the shape that was missing is
+precisely the shape production uses. A test that only exercises the
+combination the implementation happens to special-case is not testing
+the feature. `useMemoFilters.ts` enumerates the real filter shapes;
+the test should have been written from that list, not from the
+compiler's output.
+
 ## Phase 2 of FTS: the index is wired to ListMemos, behind RIFF_FTS (2026-10-23)
 
 `pb/connect/memo_fts.go` adds the read side. With `RIFF_FTS=1`

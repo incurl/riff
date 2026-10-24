@@ -281,3 +281,77 @@ func TestFTS_EditedMemoIsNotFoundByItsOldText(t *testing.T) {
 	assert.Len(t, listFTSMemoIDsAnon(t, app, `content.contains("original")`), 1,
 		"the surviving memo must still match")
 }
+
+// TestFTS_SearchCombinedWithOtherFilters is the regression guard for
+// the bug that shipped to production.
+//
+// Removing the LIKE clause from a compiled filter has to remove the
+// *connective* that joined it too. The compiler wraps a conjunction in
+// parentheses — `(content ~ {:_a1} && pinned = true)` — so cutting the
+// clause out alone leaves `( && pinned = true)`, and PocketBase's filter
+// parser rejects that with "expected left operand (identifier,
+// function, text or number), got \"&&\" (join)". Every search combined
+// with any other condition was a 500.
+//
+// This test failed on the first release of the FTS path, because the
+// original suite only ever combined a search with *another search* — and
+// two text terms fall back to LIKE, so the rewrite never ran. The
+// shapes the SPA actually sends combine a search with a non-text
+// condition, which is exactly the case that broke.
+//
+// It asserts both that the filter parses and that the remaining
+// conjunct still filters: a rewrite that dropped the conjunct as well
+// as the LIKE clause would return the wrong rows, not an error.
+func TestFTS_SearchCombinedWithOtherFilters(t *testing.T) {
+	app := newTestApp(t)
+	requireFTSIndex(t, app)
+	alice := newUser(t, app, "alice")
+
+	newFilterMemo(t, app, alice.Id, "the quarterly roadmap is drafted", nil)
+	newFilterMemo(t, app, alice.Id, "unrelated shopping list", nil)
+	newFilterMemo(t, app, alice.Id, "another roadmap entry", nil)
+
+	plain := NewMemoServer(app)
+	fts := NewMemoServer(app)
+	fts.SetFTSSearch(true)
+
+	contents := func(srv *MemoServer, filter string) []string {
+		t.Helper()
+		res, err := srv.ListMemos(t.Context(), &v1.ListMemosRequest{Filter: filter})
+		require.NoError(t, err, "filter %q must not error", filter)
+		out := make([]string, 0, len(res.GetMemos()))
+		for _, m := range res.GetMemos() {
+			out = append(out, m.GetContent())
+		}
+		return out
+	}
+
+	// Every shape the SPA can produce: a search plus a non-text
+	// condition, in both orders, and a search plus a second search.
+	for _, filter := range []string{
+		`content.contains("roadmap") && pinned`,
+		`content.contains("roadmap") && has_link`,
+		`content.contains("roadmap") && has_code`,
+		`content.contains("roadmap") && has_location`,
+		`content.contains("roadmap") && has_task_list`,
+		`content.contains("roadmap") && tag in ["work"]`,
+		`content.contains("roadmap") && visibility in ["PUBLIC"]`,
+		`content.contains("roadmap") && visibility in ["PRIVATE"]`,
+		`content.contains("roadmap") && created_ts > now - duration("168h")`,
+		`content.contains("roadmap") && space == "nope"`,
+		`pinned && content.contains("roadmap")`,
+		`content.contains("roadmap") && content.contains("drafted")`,
+	} {
+		like := contents(plain, filter)
+		got := contents(fts, filter)
+		assert.ElementsMatch(t, like, got,
+			"FTS and LIKE must agree for %q — the surviving conjunct must still filter", filter)
+	}
+
+	// Spot-check that the conjunct really did narrow, rather than being
+	// dropped along with the LIKE clause.
+	assert.Len(t, contents(fts, `content.contains("roadmap") && visibility in ["PRIVATE"]`), 0,
+		"the visibility conjunct must still apply")
+	assert.Len(t, contents(fts, `content.contains("roadmap") && content.contains("drafted")`), 1,
+		"the second search conjunct must still apply")
+}

@@ -244,15 +244,172 @@ func memoFTSRewrite(
 		return filterSQL, filterArgs, ""
 	}
 
-	remaining := strings.Replace(filterSQL, clause, "", 1)
-	remaining = strings.TrimSpace(remaining)
-	// The surrounding `&&` / `||` leaves a dangling operator once the
-	// clause is removed. Strip it, and drop a filter that is now empty.
-	trimmed := trimDanglingJoin(remaining)
+	// Remove the clause *and the connective that joined it*, in one
+	// step, rather than cutting the clause out and trying to repair the
+	// leftover text.
+	//
+	// The compiler wraps a conjunction in parentheses:
+	//
+	//	(content ~ {:_a1} && pinned = true)
+	//
+	// so cutting the clause out alone leaves "( && pinned = true)" — a
+	// dangling `&&` that PocketBase's filter parser rejects with
+	// "expected left operand ... got \"&&\"". That is a 500 on every
+	// search combined with any other condition, which is most of them.
+	//
+	// Matching the connective together with the clause handles both
+	// positions: "clause && rest" and "rest && clause". If the clause
+	// is alone, the whole fragment disappears and the caller applies
+	// the MATCH predicate on its own.
+	trimmed, ok := removeClause(filterSQL, clause)
+	if !ok {
+		// The fragment does not have the documented shape. Keep the LIKE
+		// clause rather than guess: unrewritten is merely slow, wrongly
+		// rewritten returns the wrong rows.
+		return filterSQL, filterArgs, ""
+	}
 	if trimmed == "" {
 		return "", nil, query
 	}
 	return trimmed, filterArgs, query
+}
+
+// removeClause deletes `clause` from `fragment` along with the
+// connective that joined it, and reports whether it found the clause at
+// all.
+//
+// The compiler wraps a conjunction in parentheses:
+//
+//	(content ~ {:_a1} && pinned = true)
+//
+// so cutting the clause out alone leaves "( && pinned = true)" — a
+// dangling `&&` that PocketBase's filter parser rejects with
+// "expected left operand ... got \"&&\"". That is a 500 on every
+// search combined with any other condition, which is most of them.
+//
+// The fragment is split on its *top-level* connectives (depth-aware, so
+// a nested parenthesised group is not split), the clause's segment is
+// dropped, and the rest is rejoined. The compiler only ever emits one
+// connective per level, so the rejoin is unambiguous; if it somehow
+// mixed `&&` and `||` at the same level the function refuses rather
+// than guess, and the caller keeps the LIKE clause.
+//
+//	"(content ~ {:_a1} && pinned = true)"  ->  "(pinned = true)"
+//	"(pinned = true && content ~ {:_a1})"  ->  "(pinned = true)"
+//	"content ~ {:_a1}"                    ->  ""
+func removeClause(fragment string, clause string) (string, bool) {
+	trimmed := strings.TrimSpace(fragment)
+	if !strings.Contains(trimmed, clause) {
+		return "", false
+	}
+
+	// The compiler wraps a top-level conjunction in parentheses. Strip
+	// them so the split sees the real top level.
+	wrapped := strings.HasPrefix(trimmed, "(") && strings.HasSuffix(trimmed, ")")
+	inner := trimmed
+	if wrapped {
+		inner = strings.TrimSpace(trimmed[1 : len(trimmed)-1])
+	}
+
+	segments, connectives := splitTopLevel(inner)
+	if len(segments) == 0 {
+		return "", false
+	}
+
+	kept := make([]string, 0, len(segments))
+	keptConnectives := make([]string, 0, len(segments))
+	removed := false
+	for i, seg := range segments {
+		if strings.Contains(seg, clause) {
+			removed = true
+			continue
+		}
+		kept = append(kept, seg)
+		// The connective that led into this segment. For the first
+		// segment there is none, so it borrows the one that followed the
+		// removed one — which is the right operator when the removed
+		// segment was in the middle.
+		conn := ""
+		if i > 0 {
+			conn = connectives[i-1]
+		} else if removed && len(connectives) > 0 {
+			conn = connectives[0]
+		}
+		keptConnectives = append(keptConnectives, conn)
+	}
+	if !removed {
+		return "", false
+	}
+	if len(kept) == 0 {
+		return "", true
+	}
+
+	// Rejoin. Every surviving connective must agree, or the shape is
+	// ambiguous and the rewrite is not safe.
+	conn := ""
+	for _, c := range keptConnectives {
+		if c == "" {
+			continue
+		}
+		if conn == "" {
+			conn = c
+			continue
+		}
+		if conn != c {
+			return "", false
+		}
+	}
+	if conn == "" {
+		return "", false
+	}
+
+	out := kept[0]
+	for _, seg := range kept[1:] {
+		out += " " + conn + " " + seg
+	}
+	if wrapped {
+		out = "(" + out + ")"
+	}
+	return out, true
+}
+
+// splitTopLevel splits a filter fragment on its top-level `&&` / `||`
+// connectives and returns the segments together with the connective that
+// preceded each one (the first segment's connective is "").
+//
+// Depth-aware: a `&&` inside parentheses is part of the segment, not a
+// split point. PocketBase's own filter grammar has the same rule, and
+// the compiler emits nested groups for compound conditions.
+func splitTopLevel(s string) ([]string, []string) {
+	var segments []string
+	var connectives []string
+	depth := 0
+	start := 0
+	conn := ""
+
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+		}
+		if depth != 0 {
+			continue
+		}
+		if (s[i] == '&' && i+1 < len(s) && s[i+1] == '&') ||
+			(s[i] == '|' && i+1 < len(s) && s[i+1] == '|') {
+			op := s[i : i+2]
+			segments = append(segments, strings.TrimSpace(s[start:i]))
+			connectives = append(connectives, conn)
+			conn = op
+			i++
+			start = i + 1
+		}
+	}
+	segments = append(segments, strings.TrimSpace(s[start:]))
+	connectives = append(connectives, conn)
+	return segments, connectives
 }
 
 // memoCELTextMatches re-derives the text-match report for a filter that
@@ -266,21 +423,6 @@ func memoCELTextMatches(filter string) []cel.TextMatch {
 		return nil
 	}
 	return compiled.TextMatches
-}
-
-// trimDanglingJoin removes the connective that a removed clause left
-// behind: "a && " -> "a", " && b" -> "b", "a || " -> "a".
-func trimDanglingJoin(s string) string {
-	s = strings.TrimSpace(s)
-	for _, op := range []string{" && ", " || "} {
-		if rest, cut := strings.CutSuffix(s, op); cut {
-			return strings.TrimSpace(rest)
-		}
-		if rest, cut := strings.CutPrefix(s, op); cut {
-			return strings.TrimSpace(rest)
-		}
-	}
-	return s
 }
 
 // unescapeLikeLiteral reverses the escaping likeWildcards applies for
