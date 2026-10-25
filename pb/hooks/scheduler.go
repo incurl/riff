@@ -31,10 +31,7 @@ var schedulerLog = slog.Default()
 // is the only safe way to stop the loop in a
 // long-running test or a production server.
 func registerScheduler(app core.App) {
-	state := &schedulerState{shutdown: make(chan struct{})}
-	schedulerStatesMu.Lock()
-	schedulerShutdowns[app] = state
-	schedulerStatesMu.Unlock()
+	state := schedulerStateFor(app)
 	app.OnTerminate().BindFunc(func(e *core.TerminateEvent) error {
 		stopSchedulerLoops(app)
 		return e.Next()
@@ -70,13 +67,12 @@ func registerScheduler(app core.App) {
 	}()
 }
 
-// schedulerShutdowns holds the per-app shutdown
-// channels AND the per-app wait group.
+// schedulerState holds the per-app shutdown channel AND the per-app
+// wait group.
 //
-// The map is process-global; multiple
-// registerScheduler calls on different apps
-// (which the test suite does for isolation) each
-// get their own channel and are torn down by
+// The state is per app: the app's own store holds it, so multiple
+// registerScheduler calls on different apps (which the test suite does
+// for isolation) each get their own channel and are torn down by
 // OnTerminate.
 //
 // The wait group must be PER APP, not package-level: a
@@ -89,16 +85,28 @@ type schedulerState struct {
 	workers  sync.WaitGroup
 }
 
-var schedulerShutdowns map[core.App]*schedulerState
+// schedulerStateStoreKey is the app.Store() key the per-app scheduler
+// state lives under.
+const schedulerStateStoreKey = "riff.scheduler_state"
 
-// schedulerStatesMu guards schedulerShutdowns. The map
-// is written from `registerScheduler` (once per app) and
-// read from the teardown hooks; two apps booting
-// concurrently would otherwise race on the map itself.
-var schedulerStatesMu sync.Mutex
-
-func init() {
-	schedulerShutdowns = map[core.App]*schedulerState{}
+// schedulerStateFor returns the per-app scheduler state, creating it
+// on first use.
+//
+// It used to be a package-level `map[core.App]*schedulerState`
+// guarded by its own mutex. The app's own store replaces it: the store
+// is already per app and concurrency-safe, so the map and its mutex
+// were both redundant.
+func schedulerStateFor(app core.App) *schedulerState {
+	raw := app.Store().GetOrSet(schedulerStateStoreKey, func() any {
+		return &schedulerState{shutdown: make(chan struct{})}
+	})
+	state, ok := raw.(*schedulerState)
+	if !ok {
+		// Another component claimed the key. Fall back to a fresh
+		// state rather than panicking on the type assertion.
+		return &schedulerState{shutdown: make(chan struct{})}
+	}
+	return state
 }
 
 // stopSchedulerLoops signals the scheduler loops of
@@ -122,24 +130,25 @@ func init() {
 // (the OnTerminate hook and the OnBootstrapClear
 // hook can both fire) does not panic.
 //
-// Every read and write of `schedulerShutdowns` happens
-// under `schedulerStatesMu`. The reads used to be bare:
-// `registerScheduler` writes the map while the loop
-// goroutine and the teardown hooks read it, and an
-// unsynchronised read concurrent with a write is a
-// `fatal error: concurrent map read and map write` —
-// an unrecoverable crash, not the recoverable data race
-// the race detector reports. The mutex is released
-// BEFORE the wait, so a teardown never holds it across
-// the loop's exit.
+// The state used to live in a package-level
+// `map[core.App]*schedulerState` guarded by its own mutex. The reads
+// used to be bare: `registerScheduler` wrote the map while the loop
+// goroutine and the teardown hooks read it, and an unsynchronised read
+// concurrent with a write is a `fatal error: concurrent map read and
+// map write` — an unrecoverable crash, not the recoverable data race
+// the race detector reports. The app's own store replaces both the map
+// and the mutex: it is per app and concurrency-safe by construction.
 func stopSchedulerLoops(app core.App) {
-	schedulerStatesMu.Lock()
-	state := schedulerShutdowns[app]
-	delete(schedulerShutdowns, app)
-	schedulerStatesMu.Unlock()
-	if state == nil {
+	// Take the state out of the store WITHOUT creating one: a teardown
+	// that runs for an app that never registered a scheduler must not
+	// leave a fresh state behind (or close a channel nobody listens
+	// on). GetOrSet would create one, so the raw store read is used.
+	raw, _ := app.Store().Get(schedulerStateStoreKey).(*schedulerState)
+	app.Store().Remove(schedulerStateStoreKey)
+	if raw == nil {
 		return
 	}
+	state := raw
 	select {
 	case <-state.shutdown:
 		// Already closed: the receive above took

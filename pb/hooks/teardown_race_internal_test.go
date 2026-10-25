@@ -153,9 +153,7 @@ func TestStopSchedulerLoopsIsIdempotentAndRemovesEntry(t *testing.T) {
 
 	registerScheduler(app)
 
-	schedulerStatesMu.Lock()
-	_, ok := schedulerShutdowns[app]
-	schedulerStatesMu.Unlock()
+	ok := app.Store().Has(schedulerStateStoreKey)
 	require.True(t, ok, "registerScheduler must record per-app state")
 
 	// Both teardown hooks route through this helper, so the
@@ -166,14 +164,9 @@ func TestStopSchedulerLoopsIsIdempotentAndRemovesEntry(t *testing.T) {
 		stopSchedulerLoops(app)
 	})
 
-	schedulerStatesMu.Lock()
-	_, stillThere := schedulerShutdowns[app]
-	size := len(schedulerShutdowns)
-	schedulerStatesMu.Unlock()
+	stillThere := app.Store().Has(schedulerStateStoreKey)
 	assert.False(t, stillThere,
 		"teardown must remove the app's map entry so a ClearBootstrap-only teardown does not leak it")
-	assert.Equal(t, 0, size,
-		"the scheduler state map must be empty after teardown")
 }
 
 // TestStopSchedulerLoopsConcurrentWithRegister exercises the
@@ -223,9 +216,8 @@ func TestMotionMediaStateGateRejectsAddsAfterTeardown(t *testing.T) {
 	st := motionMediaStateFor(app)
 	require.True(t, st.begin(), "begin must accept before teardown")
 
-	motionMediaStatesMu.Lock()
-	delete(motionMediaStates, app)
-	motionMediaStatesMu.Unlock()
+	// The teardown hook removes the state from the app's store.
+	app.Store().Remove(motionMediaStateStoreKey)
 
 	st.gate.Lock()
 	st.gateAccepting = false

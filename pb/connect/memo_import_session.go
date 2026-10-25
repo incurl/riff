@@ -133,10 +133,9 @@ func importManagerGet() *importManager {
 
 // installImportManager starts the sweeper goroutine.
 func installImportManager(app core.App) {
-	state := &importSweepState{}
-	importSweepStatesMu.Lock()
-	importSweepStates[app] = state
-	importSweepStatesMu.Unlock()
+	// The state lives on the app's own store, so it is per app by
+	// construction and dies with the app instance.
+	state := importSweepStateFor(app)
 	mgr := importManagerGet()
 	mgr.setDir(filepath.Join(app.DataDir(), "imports"))
 	stopCh := make(chan struct{})
@@ -183,13 +182,30 @@ type importSweepState struct {
 	workers sync.WaitGroup
 }
 
-var importSweepStates = map[core.App]*importSweepState{}
+// importSweepStateStoreKey is the app.Store() key the per-app sweep
+// state lives under.
+const importSweepStateStoreKey = "riff.import_sweep_state"
 
-// importSweepStatesMu guards importSweepStates. The map
-// is written from `installImportManager` (once per app)
-// and read from the teardown hooks; two apps booting
-// concurrently would otherwise race on the map.
-var importSweepStatesMu sync.Mutex
+// importSweepStateFor returns the per-app sweep state, creating it on
+// first use.
+//
+// It used to be a package-level `map[core.App]*importSweepState`
+// guarded by its own mutex. The app's own store replaces it: the store
+// is already per app and concurrency-safe, so both the map and its
+// mutex were redundant — and the map's entry was never deleted, so it
+// outlived the app it belonged to.
+func importSweepStateFor(app core.App) *importSweepState {
+	raw := app.Store().GetOrSet(importSweepStateStoreKey, func() any {
+		return &importSweepState{}
+	})
+	state, ok := raw.(*importSweepState)
+	if !ok {
+		// Another component claimed the key. Fall back to a fresh
+		// state rather than panicking on the type assertion.
+		return &importSweepState{}
+	}
+	return state
+}
 
 // setDir overrides the staging directory.
 func (m *importManager) setDir(dir string) {

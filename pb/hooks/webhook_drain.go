@@ -106,10 +106,7 @@ var webhookDrainLog = slog.Default()
 // reference.
 func registerWebhookDrain(app core.App) {
 	stopCh := make(chan struct{})
-	state := &webhookDrainState{}
-	webhookDrainStatesMu.Lock()
-	webhookDrainStates[app] = state
-	webhookDrainStatesMu.Unlock()
+	state := webhookDrainStateFor(app)
 	app.OnTerminate().BindFunc(func(e *core.TerminateEvent) error {
 		// Non-blocking close: a double-close from
 		// a forced shutdown is benign because
@@ -171,13 +168,30 @@ type webhookDrainState struct {
 	workers sync.WaitGroup
 }
 
-var webhookDrainStates = map[core.App]*webhookDrainState{}
+// webhookDrainStateStoreKey is the app.Store() key the per-app drain
+// state lives under.
+const webhookDrainStateStoreKey = "riff.webhook_drain_state"
 
-// webhookDrainStatesMu guards webhookDrainStates. The
-// map is written from `registerWebhookDrain` (once per
-// app) and read from the teardown hooks; two apps
-// booting concurrently would otherwise race on the map.
-var webhookDrainStatesMu sync.Mutex
+// webhookDrainStateFor returns the per-app drain state, creating it
+// on first use.
+//
+// It used to be a package-level `map[core.App]*webhookDrainState`
+// guarded by its own mutex. The app's own store replaces it: the store
+// is already per app and concurrency-safe, so the map and its mutex
+// were both redundant — and the map's entry was never deleted, so it
+// outlived the app it belonged to.
+func webhookDrainStateFor(app core.App) *webhookDrainState {
+	raw := app.Store().GetOrSet(webhookDrainStateStoreKey, func() any {
+		return &webhookDrainState{}
+	})
+	state, ok := raw.(*webhookDrainState)
+	if !ok {
+		// Another component claimed the key. Fall back to a fresh
+		// state rather than panicking on the type assertion.
+		return &webhookDrainState{}
+	}
+	return state
+}
 
 // webhookDrainLoop is the worker. It sleeps for
 // webhookDrainTick, wakes up, processes up to

@@ -249,10 +249,11 @@ app waits on during teardown. Three details are load-bearing:
   concurrently, so two apps tearing down at the same time panic
   with "sync: WaitGroup is reused before previous Wait has
   returned"; and a package-level channel closed for one app stops
-  every other app's worker. The per-app state lives in a map
-  keyed by the `core.App` value, guarded by a mutex. Note that
-  the race detector cannot see this class of bug — the misuse is
-  a runtime `panic()`, not a data race.
+  every other app's worker. The per-app state lives on the
+  app's own `app.Store()` (PocketBase's per-app key-value
+  store), so it is per app by construction and dies with the
+  app instance. Note that the race detector cannot see this class
+  of bug — the misuse is a runtime `panic()`, not a data race.
 
 The symptom is gone: six consecutive full runs of
 `./pb/ ./pb/migrations/ ./pb/api/` are clean, where the flake

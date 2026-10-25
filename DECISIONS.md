@@ -92,6 +92,71 @@ neither. FTS matches whole tokens rather than substrings, so `カフェ` does
 not match `カフェで` (use `カフェ*`). Negated searches and
 `startsWith`/`endsWith` keep using `LIKE` and are unaffected.
 
+## Per-app state moved to `app.Store()`, and the identity cache that came with it (2026-10-25)
+
+Asked whether riff should adopt bbolt as a key-value store. The answer is
+no, and the reason is that **PocketBase already ships one**:
+`app.Store()` (`core/base.go:639`), a concurrent-safe generic
+key-value store (`tools/store/store.go`). PocketBase uses it for exactly
+this pattern itself — its own rate limiter lives on it
+(`apis/middlewares_rate_limit.go:162`), with teardown as
+`app.Store().Remove(key)` (`:215`).
+
+bbolt was rejected on its own merits: riff is a single process with one
+SQLite file on one volume, every durable write it has is a *relation*
+with a schema (the webhook outbox carries status, attempts and
+`next_attempt_at`, which needs a filtered scan — bbolt has no secondary
+indexes), and a second datastore would be a second source of truth next
+to the first. A KV store is the right answer for high-frequency writes
+with no relational query; riff has neither.
+
+**The identity cache.** `recordToMemo` resolves the author and the space
+of *every* memo it renders, and PocketBase has no record cache — each
+resolution is a real point query. At the SPA's page size of 16 that is
+~32 extra queries per feed page, plus one per reaction. The same two
+lookups are made by twelve call sites of `lookupUsername` and three of
+`lookupSpaceUID`, across the reactions, relations, attachments,
+webhooks, PAT and space paths.
+
+They are now memoised on `app.Store()`. **Expiry is by invalidation,
+not by TTL**: a username is mutable (`UpdateUser` sets it,
+`pb/connect/user.go`) and so is a space uid (`pb/connect/space.go`), so
+a TTL would serve a stale name for up to its window. An
+`OnRecordAfter*Success` hook on `users` and `spaces` drops the entry
+instead, which makes the cache exact — the only window in which a stale
+name can be served is between the write and the after-success hook,
+which is sub-millisecond.
+
+The win is measured, not asserted: `TestIdentityCache_ReducesTheUserLookups`
+counts the user lookups for a page of five memos by one author and
+requires **one**, not five. It was mutation-checked — bypassing the
+cache turns it red with "five memos by one author must cost one user
+lookup, not five".
+
+**The six per-app state maps.** `uploadSweepStates`,
+`importSweepStates`, `motionMediaStates`, `schedulerShutdowns`,
+`webhookDrainStates` and `memoLinksStates` were package-level
+`map[core.App]*state` values, each with its own mutex. They existed
+only because the state had to be global *and* app-keyed; `app.Store()`
+is already per app, so the maps are unnecessary. Each became a single
+string key on the app's own store, holding the same pointer — so the
+`sync.WaitGroup` and `sync.Mutex` inside are never copied.
+
+Three of the six (`uploadSweepStates`, `importSweepStates`,
+`webhookDrainStates`) turned out to be **write-only**: the state was
+reached through a local closure variable, and the map entry was never
+read. They were pure overhead, and two of them never deleted their
+entry, so they outlived the app they belonged to. `app.Store()` removes
+that leak by construction: the entry dies with the app.
+
+**One caveat worth recording.** `app.Store()` is not reset by
+`ClearBootstrap`, so state survives a bootstrap cycle on the *same* app
+instance. That is harmless for the test suite, which builds a new app
+per test, but it means an app that is cleared and re-bootstrapped keeps
+its cached entries. The identity cache's invalidation hooks make that
+harmless (a cleared app's records are unchanged, so the cached names
+are still right).
+
 ## A byte cut in snippetOf made every ListMemos response a 500 (2026-10-24)
 
 The production 500 was `marshal message: string field contains invalid

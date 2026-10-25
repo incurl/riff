@@ -51,23 +51,26 @@ func (s *motionMediaState) begin() bool {
 	return true
 }
 
-var motionMediaStates = map[core.App]*motionMediaState{}
-
-// motionMediaStatesMu guards motionMediaStates. The map
-// is written from the after-create hook and read from
-// the teardown hook; two apps running concurrently would
-// otherwise race on the map itself.
-var motionMediaStatesMu sync.Mutex
+// motionMediaStateStoreKey is the app.Store() key the per-app
+// detection state lives under.
+const motionMediaStateStoreKey = "riff.motion_media_state"
 
 // motionMediaStateFor returns the per-app state, creating
 // it on first use.
+//
+// It used to be a package-level `map[core.App]*motionMediaState`
+// guarded by its own mutex. The app's own store replaces it: the
+// store is already per app and concurrency-safe, so the map and its
+// mutex were both redundant.
 func motionMediaStateFor(app core.App) *motionMediaState {
-	motionMediaStatesMu.Lock()
-	defer motionMediaStatesMu.Unlock()
-	st := motionMediaStates[app]
-	if st == nil {
-		st = &motionMediaState{gateAccepting: true}
-		motionMediaStates[app] = st
+	raw := app.Store().GetOrSet(motionMediaStateStoreKey, func() any {
+		return &motionMediaState{gateAccepting: true}
+	})
+	st, ok := raw.(*motionMediaState)
+	if !ok {
+		// Another component claimed the key. Fall back to a fresh
+		// state rather than panicking on the type assertion.
+		return &motionMediaState{gateAccepting: true}
 	}
 	return st
 }
@@ -175,10 +178,12 @@ func registerMotionMedia(app core.App) {
 	// fires on a real shutdown too, right before the
 	// data directory is removed.
 	app.OnBootstrapClear().BindFunc(func(e *core.BootstrapEvent) error {
-		motionMediaStatesMu.Lock()
-		st := motionMediaStates[app]
-		delete(motionMediaStates, app)
-		motionMediaStatesMu.Unlock()
+		// Take the state out of the store WITHOUT creating one: a
+		// teardown for an app that never ran a detection must not
+		// leave a fresh state behind. GetOrSet would create one, so
+		// the raw store read is used.
+		st, _ := app.Store().Get(motionMediaStateStoreKey).(*motionMediaState)
+		app.Store().Remove(motionMediaStateStoreKey)
 		if st != nil {
 			// Close the gate BEFORE waiting, so an upload
 			// that lands mid-teardown declines to `Add`
@@ -202,9 +207,9 @@ func registerMotionMedia(app core.App) {
 // write under `-race`. Production code does not need to call
 // this — `OnBootstrapClear` waits for the workers anyway.
 func WaitMotionMediaWorkers(app core.App) {
-	motionMediaStatesMu.Lock()
-	st := motionMediaStates[app]
-	motionMediaStatesMu.Unlock()
+	// Read the state WITHOUT creating one: this is a pure wait, and an
+	// app that never ran a detection has no workers to wait for.
+	st, _ := app.Store().Get(motionMediaStateStoreKey).(*motionMediaState)
 	if st != nil {
 		st.workers.Wait()
 	}

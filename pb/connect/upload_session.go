@@ -151,10 +151,9 @@ func uploadManagerGet() *uploadManager {
 // and a production server lands its stages under the
 // existing data dir.
 func installUploadManager(app core.App) {
-	state := &uploadSweepState{}
-	uploadSweepStatesMu.Lock()
-	uploadSweepStates[app] = state
-	uploadSweepStatesMu.Unlock()
+	// The state lives on the app's own store, so it is per app by
+	// construction and dies with the app instance.
+	state := uploadSweepStateFor(app)
 	mgr := uploadManagerGet()
 	mgr.setDir(filepath.Join(app.DataDir(), "uploads"))
 	// OnTerminate stops the sweeper so a unit test's app
@@ -193,7 +192,7 @@ func installUploadManager(app core.App) {
 	}()
 }
 
-// uploadSweepStates holds the per-app sweep state.
+// uploadSweepState holds the per-app sweep state.
 //
 // The wait group must be PER APP, not package-level: a
 // package-level `sync.WaitGroup` cannot be waited on
@@ -204,13 +203,30 @@ type uploadSweepState struct {
 	workers sync.WaitGroup
 }
 
-var uploadSweepStates = map[core.App]*uploadSweepState{}
+// uploadSweepStateStoreKey is the app.Store() key the per-app sweep
+// state lives under.
+const uploadSweepStateStoreKey = "riff.upload_sweep_state"
 
-// uploadSweepStatesMu guards uploadSweepStates. The map
-// is written from `installUploadManager` (once per app)
-// and read from the teardown hooks; two apps booting
-// concurrently would otherwise race on the map.
-var uploadSweepStatesMu sync.Mutex
+// uploadSweepStateFor returns the per-app sweep state, creating it on
+// first use.
+//
+// It used to be a package-level `map[core.App]*uploadSweepState`
+// guarded by its own mutex. The app's own store replaces it: the store
+// is already per app and concurrency-safe, so both the map and its
+// mutex were redundant — and the map's entry was never deleted, so it
+// outlived the app it belonged to.
+func uploadSweepStateFor(app core.App) *uploadSweepState {
+	raw := app.Store().GetOrSet(uploadSweepStateStoreKey, func() any {
+		return &uploadSweepState{}
+	})
+	state, ok := raw.(*uploadSweepState)
+	if !ok {
+		// Another component claimed the key. Fall back to a fresh
+		// state rather than panicking on the type assertion.
+		return &uploadSweepState{}
+	}
+	return state
+}
 
 // uploadManagerSetDir overrides the staging directory.
 // Intended for tests; the manager must have no live

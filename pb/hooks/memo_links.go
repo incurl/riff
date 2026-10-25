@@ -51,27 +51,20 @@ var memoLinkLog = slog.Default()
 var (
 	memoLinksActiveMemoIDsMu sync.Mutex
 	memoLinksActiveMemoIDs   = map[string]time.Time{}
-
-	// memoLinksStates holds the PER-APP fan-out state: the
-	// cancellation signal the fan-out goroutines honour,
-	// and the wait group the teardown hook blocks on.
-	//
-	// Both are per app on purpose. The channel used to be
-	// package-level, which was wrong twice over: closing
-	// the shared channel for one app stopped every other
-	// app's fan-out, and two apps registering concurrently
-	// raced on the globals.
-	//
-	// See the AGENTS.md "Known Issues" section, entry 1,
-	// for the original report.
-	memoLinksStates map[core.App]*memoLinksState
-
-	// memoLinksStatesMu guards the per-app state maps. The
-	// maps are written from `registerMemoLinks` (once per app)
-	// and read from the teardown hooks; two apps booting
-	// concurrently would otherwise race on the map itself.
-	memoLinksStatesMu sync.Mutex
 )
+
+// The PER-APP fan-out state — the cancellation signal the fan-out
+// goroutines honour, and the wait group the teardown hook blocks on —
+// lives on the app's own store (see memoLinksStateFor), not in a
+// package-level map.
+//
+// Both parts are per app on purpose. The channel used to be
+// package-level, which was wrong twice over: closing the shared channel
+// for one app stopped every other app's fan-out, and two apps
+// registering concurrently raced on the globals.
+//
+// See the AGENTS.md "Known Issues" section, entry 1, for the original
+// report.
 
 // memoLinksState is the per-app fan-out state.
 type memoLinksState struct {
@@ -136,8 +129,37 @@ func (s *memoLinksState) stopAndWait() {
 	s.workers.Wait()
 }
 
-func init() {
-	memoLinksStates = map[core.App]*memoLinksState{}
+// memoLinksStateStoreKey is the app.Store() key the per-app fan-out
+// state lives under.
+const memoLinksStateStoreKey = "riff.memo_links_state"
+
+// memoLinksStateFor returns the per-app fan-out state, creating it on
+// first use.
+//
+// It used to be a package-level `map[core.App]*memoLinksState` guarded
+// by its own mutex. The app's own store replaces it: the store is
+// already per app and concurrency-safe, so the map and its mutex were
+// both redundant — and the map's entry was never deleted, so it
+// outlived the app it belonged to.
+func memoLinksStateFor(app core.App) *memoLinksState {
+	raw := app.Store().GetOrSet(memoLinksStateStoreKey, func() any {
+		return &memoLinksState{
+			shutdown:      make(chan struct{}),
+			shutdownOnce:  &sync.Once{},
+			gateAccepting: true,
+		}
+	})
+	state, ok := raw.(*memoLinksState)
+	if !ok {
+		// Another component claimed the key. Fall back to a fresh
+		// state rather than panicking on the type assertion.
+		return &memoLinksState{
+			shutdown:      make(chan struct{}),
+			shutdownOnce:  &sync.Once{},
+			gateAccepting: true,
+		}
+	}
+	return state
 }
 
 // registerMemoLinks subscribes the memo_links auto-fetch to the
@@ -169,14 +191,7 @@ func registerMemoLinks(app core.App) {
 	// apps tearing down at the same time would panic
 	// with "sync: WaitGroup is reused before previous
 	// Wait has returned".
-	state := &memoLinksState{
-		shutdown:      make(chan struct{}),
-		shutdownOnce:  &sync.Once{},
-		gateAccepting: true,
-	}
-	memoLinksStatesMu.Lock()
-	memoLinksStates[app] = state
-	memoLinksStatesMu.Unlock()
+	state := memoLinksStateFor(app)
 	app.OnTerminate().BindFunc(func(e *core.TerminateEvent) error {
 		state.stopAndWait()
 		return e.Next()
@@ -565,9 +580,10 @@ func truncateErr(err error) string {
 // process boot) returns false, so this is safe to
 // call from any goroutine.
 func isMemoLinksShutdown(app core.App) bool {
-	memoLinksStatesMu.Lock()
-	state := memoLinksStates[app]
-	memoLinksStatesMu.Unlock()
+	// Read the state WITHOUT creating one: this is a pure check, and
+	// an app that never registered a fan-out has no state to shut
+	// down. GetOrSet would create one, so the raw store read is used.
+	state, _ := app.Store().Get(memoLinksStateStoreKey).(*memoLinksState)
 	if state == nil {
 		return false
 	}
