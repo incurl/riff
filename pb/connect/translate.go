@@ -88,27 +88,20 @@ func nextPageToken(offset, limit, fetched int) string {
 
 // lookupUsername resolves a user id to a username. Returns ""
 // on miss.
+//
+// The result is memoised in the app's identity cache — see
+// identity_cache.go. Every list path that renders a name goes through
+// here, and PocketBase has no record cache, so without this each row
+// costs an extra point query.
 func lookupUsername(app core.App, userID string) string {
-	if userID == "" {
-		return ""
-	}
-	rec, err := app.FindRecordById("users", userID)
-	if err != nil {
-		return ""
-	}
-	return rec.GetString("username")
+	return identityCacheFor(app).username(app, userID)
 }
 
 // lookupSpaceUID resolves a space id to its uid slug.
+//
+// Memoised in the app's identity cache, like lookupUsername.
 func lookupSpaceUID(app core.App, spaceID string) string {
-	if spaceID == "" {
-		return ""
-	}
-	rec, err := app.FindRecordById("spaces", spaceID)
-	if err != nil {
-		return ""
-	}
-	return rec.GetString("uid")
+	return identityCacheFor(app).spaceUID(app, spaceID)
 }
 
 // fieldMaskPaths splits a FieldMask into the set of paths it names.
