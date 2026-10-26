@@ -5,6 +5,90 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## The Bark extension: bbolt → PocketBase, and the mux conflict it forced (2026-10-26)
+
+`pb/bark/` is a port of [finb/bark-server](https://github.com/Finb/bark-server)
+(MIT, Copyright (c) 2018 Feng) into a self-contained PocketBase package.
+Two decisions in it are not obvious from the code.
+
+**The device store is a collection, not a bbolt bucket.** Upstream keeps
+`device_key → device_token` in a bbolt file. The port keeps the exact
+upstream semantics — including the surprising one — but stores them in the
+`bark_devices` collection, so a registration survives a restart and lives
+with the rest of the instance. The surprising part is upstream's key rule:
+
+```go
+if key == "" || bucket.Get([]byte(key)) == nil {
+    key = shortuuid.New()
+}
+```
+
+**A client cannot choose its own device key.** Any key the server did not
+previously issue is *replaced* by a freshly generated one; only a key the
+server itself issued is kept (the update path). A first port that
+generated a key only when the supplied one was empty looked right and was
+wrong — it let a caller pin a key, which upstream does not. The generated
+key is a 22-character URL-safe base64 string, the same shape upstream's
+`shortuuid` produces, because a Bark client validates the key's format.
+
+Note that upstream's *test double* (`database.MemBase`) behaves differently
+from its *production store* (`database.BboltDB`): MemBase keeps an unknown
+key and returns an error, while BboltDB replaces it. `push_test.go` runs
+against MemBase, so upstream's own test suite pins the behaviour a real
+server does not have. The port matches BboltDB, because that is what a
+deployed server runs.
+
+**The MCP route cannot be method-less, or the server panics at startup.**
+Upstream registers `/mcp` with Fiber's `router.All` (method-less). Go's
+`http.ServeMux` — which PocketBase's router is built on — refuses to
+register a method-less pattern that overlaps a method-specific one, and
+`/bark/mcp` overlaps `GET /bark/{device_key}`:
+
+```
+pattern "/bark/mcp" conflicts with pattern "GET /bark/{device_key}":
+/bark/mcp matches more methods than GET /bark/{device_key}, but has a
+more specific path pattern
+```
+
+That is a `panic`, not an error, so it takes the whole instance down at
+boot. The port registers the MCP routes as explicit `GET`+`POST`+`DELETE`
+lists, and `pb/bark/muxconflict_test.go` pins both halves: that the
+method-less form panics, and that the port's form does not. The same trap
+is documented for riff's SPA catch-all in `AGENTS.md`; it is the same
+class of bug, and the same fix.
+
+Two smaller consequences of the port:
+
+- **`/bark/` uses `{$}`, not a trailing slash.** A trailing slash is a
+  Go *subtree* pattern that would shadow the four-segment V1 route
+  (`/{device_key}/{title}/{subtitle}/{body}`); `{$}` matches the
+  directory itself and nothing below it. Upstream's Fiber `/` is exact.
+- **Path parameters are not percent-decoded twice.** Go's mux already
+  unescapes each path segment, so a second `url.QueryUnescape` (which
+  upstream's Fiber needs) would turn a literal `%20` in a notification
+  body into a space.
+
+**The APNs key is upstream's, embedded.** `pb/bark/apns_certs.go` is
+copied verbatim from upstream and carries the `.p8` signing key for key ID
+`LH4T9V5U4R` / team `5U8LBRXG3A`, whose entitlement is the `me.fin.bark`
+topic — the same key upstream ships in its own `deploy/` directory, so a
+self-hosted server can push to the official Bark iOS app. It is not a
+general-purpose key: APNs rejects a push whose topic does not match the
+key, so a third-party Bark client needs its own `.p8`, key ID, team ID
+and topic, which `Options` accepts (`RIFF_BARK_APNS_TOPIC`,
+`RIFF_BARK_APNS_KEY_ID`, `RIFF_BARK_APNS_TEAM_ID`). The client is built
+lazily on the first push, so a missing or wrong key is a push error and
+not a server that refuses to boot.
+
+**The APNs transport uses the standard library, not `x/net/http2`.**
+Upstream builds a `http2.Transport` with a `DialTLS` hook. `x/net`'s
+`http2.Transport` is deprecated in favour of `http.Transport` (whose
+`Protocols` field pins HTTP/2), and `golangci-lint`'s `staticcheck`
+flags the old form. The port uses `http.Transport` with
+`Protocols.SetHTTP2(true)` and a `DialTLSContext` hook that mirrors
+`apns2.DialTLS`, which drops the `golang.org/x/net` dependency from the
+Bark package entirely.
+
 ## `RIFF_FTS` is a runtime flag; FTS5-in-modernc is a build property (2026-10-23)
 
 Two things that sound identical and are not, recorded because conflating

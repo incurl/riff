@@ -16,7 +16,9 @@ import (
 	"github.com/pocketbase/pocketbase/plugins/migratecmd"
 
 	"github.com/incurl/riff/internal/profile"
+	"github.com/incurl/riff/internal/version"
 	"github.com/incurl/riff/pb/api"
+	"github.com/incurl/riff/pb/bark"
 	"github.com/incurl/riff/pb/connect"
 	"github.com/incurl/riff/pb/hooks"
 
@@ -133,6 +135,29 @@ func main() {
 	api.SetAdvertisedVersion(os.Getenv("RIFF_MEMOS_VERSION"))
 	connect.SetAdvertisedVersion(os.Getenv("RIFF_MEMOS_VERSION"))
 	api.Register(app, rateLimiter)
+
+	// --- Bark push notifications ----------------------------------------
+	// /bark/* endpoints: the Bark iOS push API, ported from
+	// finb/bark-server with the bbolt store replaced by the
+	// `bark_devices` collection (see pb/bark/README.md).
+	//
+	// The device registrations live in the instance database, so they
+	// survive a restart. The APNs client is created lazily on the
+	// first push, so a missing APNs key does not stop the server from
+	// starting.
+	//
+	// RIFF_BARK_* env vars override the APNs identifiers; the defaults
+	// are the official Bark app's, which is what the embedded signing
+	// key in pb/bark/apns_certs.go is bound to.
+	if err := bark.RegisterWithOptions(app, bark.Options{
+		APNsTopic:  os.Getenv("RIFF_BARK_APNS_TOPIC"),
+		APNsKeyID:  os.Getenv("RIFF_BARK_APNS_KEY_ID"),
+		APNsTeamID: os.Getenv("RIFF_BARK_APNS_TEAM_ID"),
+		Version:    version.GetCurrentVersion(),
+		Commit:     version.Commit,
+	}); err != nil {
+		log.Fatal(err)
+	}
 
 	// --- Connect/gRPC services ------------------------------------------
 	// /memos.api.v1.*/* endpoints. The Memos React frontend

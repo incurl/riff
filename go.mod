@@ -11,6 +11,7 @@ require (
 	github.com/pkg/errors v0.9.1
 	github.com/pocketbase/dbx v1.12.0
 	github.com/pocketbase/pocketbase v0.40.5
+	github.com/sideshow/apns2 v0.25.0
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/stretchr/testify v1.12.1
 	github.com/yuin/goldmark v1.8.6
@@ -33,6 +34,7 @@ require (
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.16 // indirect
 	github.com/ganigeorgiev/fexpr v0.6.0 // indirect
+	github.com/golang-jwt/jwt/v4 v4.4.1 // indirect
 	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
