@@ -27,6 +27,17 @@ func upstreamMemosHandlerFactory(app core.App, entry upstreamRouteEntry) func(*c
 	switch entry.Flavor {
 	case "connect_proxy":
 		return connectProxyHandler(app, entry.Target)
+	case "connect_proxy_wrap":
+		// The wrap flavour injects the route's path variables
+		// into the request body before dispatching, so a Connect
+		// handler that reads `name`/`parent` from the body sees
+		// the resource the Memos path addressed. See
+		// upstream_memos_rest_wrap.go for the mapping.
+		spec, ok := pathWrapSpecFor(entry.Method, entry.Path)
+		if !ok {
+			return unknownFlavorHandler("connect_proxy_wrap:" + entry.Path)
+		}
+		return connectProxyWrapHandler(app, entry.Target, wrapMemosPathBody(spec))
 	case "pb_records_crud":
 		return pbRecordsCRUDHandler(app, entry.Target)
 	case "custom":

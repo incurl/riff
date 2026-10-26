@@ -267,9 +267,14 @@ func TestV1UpdateMemoWrap_UnwrapsAndInjects(t *testing.T) {
 
 // TestV1UpdateMemoWrap_MissingMaskDefaults is the
 // safety net: when the client omits updateMask, the
-// wrap helper defaults to `*` (all populated
-// fields). The connect handler interprets `*` as
-// "every field the body populated".
+// wrap helper emits an EMPTY mask, which the connect
+// handler reads as "every field the body populated"
+// (pb/connect/translate.go::fieldMaskPaths).
+//
+// It must not be the literal `*`: protojson rejects
+// that as a FieldMask path ("contains invalid path:
+// \"*\""), so a request that carried one failed to
+// unmarshal before the handler ever ran.
 func TestV1UpdateMemoWrap_MissingMaskDefaults(t *testing.T) {
 	out, err := wrapV1UpdateMemoBody(
 		[]byte(`{"content":"x"}`),
@@ -279,7 +284,7 @@ func TestV1UpdateMemoWrap_MissingMaskDefaults(t *testing.T) {
 	require.NoError(t, err)
 	var got map[string]any
 	require.NoError(t, json.Unmarshal(out, &got))
-	assert.Equal(t, "*", got["update_mask"])
+	assert.Equal(t, "", got["update_mask"], "an absent mask means every field in the body")
 }
 
 // TestV1PathInjectBody_FactoryExpansion is a unit

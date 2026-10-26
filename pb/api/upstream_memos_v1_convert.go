@@ -138,16 +138,9 @@ func wrapV1UpdateMemoBody(body []byte, path map[string]string, query url.Values)
 		return nil, newWrapErr(400, "missing path variable {memo}")
 	}
 	inner["name"] = "memos/" + id
-	mask := query.Get("updateMask")
-	if mask == "" {
-		// The V1 client always sets updateMask; if
-		// it's missing we fall back to "all fields
-		// in the body".
-		mask = "*"
-	}
 	return jsonMarshal(map[string]any{
 		"memo":        inner,
-		"update_mask": mask,
+		"update_mask": fieldMaskJSON(query.Get("updateMask")),
 	})
 }
 
@@ -347,13 +340,9 @@ func wrapV1UpdateAttachmentBody(body []byte, path map[string]string, query url.V
 		return nil, newWrapErr(400, "missing path variable {attachment}")
 	}
 	inner["name"] = "attachments/" + id
-	mask := query.Get("updateMask")
-	if mask == "" {
-		mask = "*"
-	}
 	return jsonMarshal(map[string]any{
 		"attachment":  inner,
-		"update_mask": mask,
+		"update_mask": fieldMaskJSON(query.Get("updateMask")),
 	})
 }
 
@@ -423,7 +412,7 @@ func wrapV1UpdateUserSettingBody(body []byte, path map[string]string, query url.
 	}
 	return jsonMarshal(map[string]any{
 		"setting":     inner,
-		"update_mask": mask,
+		"update_mask": fieldMaskJSON(mask),
 	})
 }
 
@@ -563,4 +552,21 @@ func unixSecondsToRFC3339(secs, nanos int64) string {
 	// that the time import is justified by the
 	// complexity of the date math.
 	return timeUnix(secs, nanos).UTC().Format(time.RFC3339Nano)
+}
+
+// fieldMaskJSON renders a FieldMask for a connect request body.
+//
+// protojson represents a FieldMask as a JSON STRING — the
+// comma-separated path list (encoding/protojson/well_known_types.go:
+// unmarshalFieldMask reads a json.String and splits it on ","). An
+// empty string yields an EMPTY path list, which the Connect handlers
+// read as "every field in the body" (see
+// pb/connect/translate.go::fieldMaskPaths: an empty path list yields
+// all=true).
+//
+// It must NOT be the literal "*": protojson rejects "*" as a path
+// ("contains invalid path: \"*\""), so a request that carried one
+// would fail to unmarshal before the handler ever ran.
+func fieldMaskJSON(mask string) string {
+	return mask
 }

@@ -206,11 +206,16 @@ func TestUpstreamMemosPathParametersAreConsistent(t *testing.T) {
 func TestUpstreamMemosFlavorsAreKnown(t *testing.T) {
 	t.Parallel()
 	known := map[string]bool{
-		"connect_proxy":   true,
-		"pb_records_crud": true,
-		"custom":          true,
-		"file_server":     true,
-		"sse":             true,
+		"connect_proxy": true,
+		// connect_proxy_wrap injects the route's path variables
+		// into the request body before dispatching, so a Connect
+		// handler that reads `name`/`parent` from the body sees
+		// the resource the Memos path addressed.
+		"connect_proxy_wrap": true,
+		"pb_records_crud":    true,
+		"custom":             true,
+		"file_server":        true,
+		"sse":                true,
 	}
 	for _, r := range upstreamMemosRoutes() {
 		assert.True(t, known[r.Flavor], "unknown flavor %q on %s %s", r.Flavor, r.Method, r.Path)

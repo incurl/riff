@@ -37,6 +37,22 @@ import (
 	"github.com/pocketbase/pocketbase/core"
 )
 
+// routePathVarNames is every path-variable name the two
+// connect_proxy_wrap route tables (V0/Memos and V1) use.
+//
+// Go's PathValue returns "" for a name the route does not
+// carry, so the list is a superset of what any single route
+// needs — a name that is absent on the current route is simply
+// skipped.
+var routePathVarNames = []string{
+	// V1 tokens.
+	"memo", "user", "attachment", "reaction",
+	"id", "relatedId", "type", "setting",
+	// V0 (Memos) tokens.
+	"parent", "name", "code", "reaction_name",
+	"share_name", "member_name", "invitation_name",
+}
+
 // connectProxyWrapHandler is the wrap-flavoured cousin
 // of `connectProxyHandler`. It performs the same
 // request-rebuild + dispatch + response-copy dance, but
@@ -72,10 +88,7 @@ func connectProxyWrapHandler(app core.App, procedure string, wrap bodyWrapper) f
 		// on the route just return "" and are
 		// ignored by the wrap helper.
 		pathVars := map[string]string{}
-		for _, name := range []string{
-			"memo", "user", "attachment", "reaction",
-			"id", "relatedId", "type", "setting",
-		} {
+		for _, name := range routePathVarNames {
 			if v := e.Request.PathValue(name); v != "" {
 				pathVars[name] = v
 			}
