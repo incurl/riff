@@ -5,6 +5,111 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## The PocketBase leverage audit: four defects, and what each one was (2026-10-26)
+
+An audit of how well riff reuses PocketBase rather than re-implementing
+it found that the *architecture* was sound — data, rules, hooks,
+migrations, tokens and OAuth are genuinely PB-native — but that four
+places bypassed the framework. All four are fixed.
+
+**1. The Memos REST surface exported secrets.** The `pb_records_crud`
+flavour projected every collection field through `rec.Get()` and
+returned the raw values, so an anonymous `GET /memos/api/users`
+returned every user's `email`, `tokenKey` (half of the JWT signing
+key, `core/record_tokens.go`) and `password_hash`. PB deletes all
+three from every export; riff's hand-rolled projector skipped that.
+The fix is to use PB's own `rec.PublicExport()`.
+
+**2. The Memos REST surface never evaluated the collection rules.**
+`FindRecordsByFilter` does not apply them — the rule engine only
+runs inside PB's own record API — so an anonymous caller could list
+another user's notifications. The rule is now evaluated per row with
+PB's `CanAccessRecord`; a denied record answers 404, not 403.
+
+**3. A rate-limit scope was treated as an auth gate.**
+`Scope: ratelimit.ScopeAuthenticated` is a BUDGET: `restRateLimit`
+only decides whether the caller has spent their allowance, and an
+anonymous caller has an allowance too. The routes are now behind a
+real gate — one that accepts a PocketBase auth token OR a
+`memos_pat_*` personal access token, because the MoeMemos client
+authenticates with a PAT and PB's own `RequireAuth` only understands
+auth-collection JWTs.
+
+**4. The realtime broadcaster had no permission check.** It sent
+every create to every subscriber, so a PRIVATE memo's id reached
+anonymous clients. The check now mirrors PB's own realtime
+implementation: the collection's ListRule, evaluated per client with
+that client's own auth record.
+
+## Two facts that were documented wrong (2026-10-26)
+
+Both are worth recording because a future reader would otherwise
+believe the code.
+
+**PocketBase hashes the `password` field with bcrypt, not PBKDF2.**
+Migration 1710000001 claimed otherwise and added a parallel
+`password_hash` column to compare against from Go. PB exposes
+`Record.ValidatePassword` for exactly that, so the column was
+redundant; it is dropped by migration 1930000002. No backfill is
+needed: PB FORCES an auth collection's `password` field to be
+Required (`core/collection_model.go`), so every auth row always
+carried a hash.
+
+**protojson represents a FieldMask as a JSON STRING.** The Memos
+route wrappers emitted the literal `"*"` when the client omitted
+`updateMask`, and protojson rejects that as a path
+("contains invalid path: \"*\"") — so a PATCH without an explicit
+mask failed to unmarshal before the handler ran, on BOTH the V0 and
+the V1 surface. An absent mask is now an empty mask, which the
+handlers already read as "every field in the body".
+
+## The SPA's live refresh was dead since the PocketBase refactor (2026-10-26)
+
+The upstream Memos commit that added SSE (`ea0892a8`) shipped both
+halves — `server/router/api/v1/sse_handler.go` AND
+`web/src/hooks/useLiveMemoRefresh.ts` — but only the web half was
+ported; `server/router/` was dropped in the refactor.
+
+So the SPA's `GET /api/v1/sse` fell through to the SPA catch-all,
+which answered 200 with `index.html`. The client checks only
+`response.ok`, so it accepted that, published "connected", parsed the
+HTML for `data: ` lines, found none, and silently never invalidated a
+single query cache. The user saw a "connected" indicator and no
+updates.
+
+Two details of the wire format are load-bearing:
+
+* The client matches on `line.startsWith("data: ")` — WITH a space.
+  PB's own `subscriptions.Message.WriteSSE` writes `data:` without
+  one, so PB's native `/api/realtime` would ALSO be ignored. The
+  riff writer emits the shape the client reads.
+* The client never reads the SSE `event:` field — it expects the
+  event TYPE inside the JSON body. The event names
+  (`memo.changed` / `space.changed`) come from riff's spaces work
+  (`6da8461e`), which changed the client without a matching server.
+
+The client now also checks the response content type before
+trusting the stream, so a misrouted HTML page fails loudly instead
+of pretending to be connected.
+
+## Private spaces, and why a memo's visibility is independent of them (2026-10-26)
+
+The `spaces` collection is visible to its ACTIVE members. The rule
+uses the same back-relation traversal the `memos` collection already
+uses for its SPACE visibility branch, applied from the space record
+instead of through it.
+
+A memo's own visibility stays INDEPENDENT of its space's privacy: a
+PUBLIC memo in a private space is still public. What is NOT
+disclosed is the memo's SPACE RELATION — the space uid is a URL
+slug, and emitting it would let anyone confirm that a private space
+exists and guess at its topic. So the converter strips `memo.space`
+for a non-member.
+
+The membership set is computed ONCE per request and carried on the
+context: a per-memo check would be an N+1 on a page that can carry
+up to `maxPageSize` (1000) rows.
+
 ## `/youtube` is a separate download tree, not a second static site (2026-10-26)
 
 The deploy image serves two file trees from caddy: the baked-in ravine
