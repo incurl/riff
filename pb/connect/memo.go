@@ -134,6 +134,13 @@ func (s *MemoServer) ListMemos(ctx context.Context, req *v1.ListMemosRequest) (*
 
 	requestInfo := requestInfoFor(ctx)
 
+	// Install the viewer's ACTIVE space ids ONCE for the whole
+	// page. The converter strips the space relation from a memo
+	// whose space the viewer is not a member of, and a per-memo
+	// membership query would be an N+1 on a page that can carry
+	// up to maxPageSize (1000) rows.
+	ctx = withActiveSpaceIDs(ctx, s.app, currentUserID(ctx))
+
 	out := make([]*v1.Memo, 0, len(rows))
 	for _, r := range rows {
 		ok, err := s.app.CanAccessRecord(r, requestInfo, memos.ViewRule)

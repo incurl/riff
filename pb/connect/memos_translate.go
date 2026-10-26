@@ -61,10 +61,17 @@ func recordToMemo(ctx context.Context, app core.App, rec *core.Record) *v1.Memo 
 		Attachments: memoAttachments(ctx, app, rec.Id),
 	}
 
+	// The space is PRIVATE (see migration 1930000003), so the
+	// relation is emitted only for a viewer who is an ACTIVE member
+	// of it. The memo's own visibility is unaffected: a PUBLIC memo
+	// in a private space stays public, it just does not advertise
+	// which space it lives in.
 	if spaceID := rec.GetString("space"); spaceID != "" {
-		if uid := lookupSpaceUID(app, spaceID); uid != "" {
-			space := "spaces/" + uid
-			memo.Space = &space
+		if spaceVisibleToViewer(ctx, app, spaceID) {
+			if uid := lookupSpaceUID(app, spaceID); uid != "" {
+				space := "spaces/" + uid
+				memo.Space = &space
+			}
 		}
 	}
 	if parentID := memoParentID(app, rec.Id); parentID != "" {
