@@ -149,6 +149,17 @@ export function useLiveMemoRefresh() {
             throw new Error(`SSE connection failed: ${response.status}`);
           }
 
+          // The response must actually BE an event stream. A route
+          // that does not exist falls through to the SPA catch-all,
+          // which answers 200 with index.html; the client would then
+          // accept it as "connected", parse the HTML for "data: "
+          // lines, find none, and silently never refresh anything.
+          const contentType = response.headers.get("content-type") ?? "";
+          if (!contentType.includes("text/event-stream")) {
+            await cancelResponseBody(response);
+            throw new Error(`SSE connection failed: unexpected content type ${contentType}`);
+          }
+
           connectedAt = Date.now();
           publishStatus("connected");
           if (hasConnectedOnceRef.current) {

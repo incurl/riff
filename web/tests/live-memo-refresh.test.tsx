@@ -42,7 +42,7 @@ vi.mock("@/hooks/useUserQueries", () => ({
   },
 }));
 
-import { useLiveMemoRefresh } from "@/hooks/useLiveMemoRefresh";
+import { useLiveMemoRefresh, useSSEConnectionStatus } from "@/hooks/useLiveMemoRefresh";
 
 type MessageListener = (event: MessageEvent) => void;
 
@@ -219,7 +219,7 @@ describe("useLiveMemoRefresh", () => {
               streamControllers.push(controller);
             },
           }),
-          { status: 200 },
+          { status: 200, headers: { "content-type": "text/event-stream" } },
         ),
     );
     vi.stubGlobal("fetch", fetchMock);
@@ -278,7 +278,7 @@ describe("useLiveMemoRefresh", () => {
           new ReadableStream<Uint8Array>({
             start() {},
           }),
-          { status: 200 },
+          { status: 200, headers: { "content-type": "text/event-stream" } },
         ),
     );
     vi.stubGlobal("fetch", fetchMock);
@@ -305,12 +305,38 @@ describe("useLiveMemoRefresh", () => {
     hook.unmount();
   });
 
+  it("rejects a response that is not an event stream", async () => {
+    vi.useFakeTimers();
+    installBrowserState(new TestLockManager());
+
+    // A route that does not exist falls through to the SPA
+    // catch-all, which answers 200 with index.html. The hook must
+    // NOT accept that as a live stream: it would report "connected"
+    // and then never receive an event.
+    const fetchMock = vi.fn().mockImplementation(() => new Response("<!doctype html><html></html>", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const status = renderHook(() => useSSEConnectionStatus());
+    const hook = renderHook(() => useLiveMemoRefresh(), { wrapper: createWrapper(createQueryClient()) });
+    await flushAsyncWork();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // The hook must NOT report "connected" for a response that is
+    // not an event stream.
+    expect(status.result.current).toBe("disconnected");
+
+    hook.unmount();
+    status.unmount();
+  });
+
   it("keeps backing off when a successful response closes before becoming stable", async () => {
     vi.useFakeTimers();
     installBrowserState();
     vi.spyOn(Math, "random").mockReturnValue(1);
 
-    const fetchMock = vi.fn().mockImplementation(() => new Response(new Uint8Array(), { status: 200 }));
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(() => new Response(new Uint8Array(), { status: 200, headers: { "content-type": "text/event-stream" } }));
     vi.stubGlobal("fetch", fetchMock);
 
     const queryClient = createQueryClient();

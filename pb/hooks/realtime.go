@@ -19,6 +19,20 @@ var realtimeBroadcastCollections = map[string]struct{}{
 	"memos":          {},
 	"memo_relations": {},
 	"reactions":      {},
+	"spaces":         {},
+}
+
+// RealtimeBroadcastCollections returns the collections whose events
+// are broadcast. It is exported so the SSE handlers can subscribe a
+// client to exactly the set the broadcaster publishes — the two
+// lists used to be duplicated, with the API side hardcoding its own
+// copy.
+func RealtimeBroadcastCollections() []string {
+	out := make([]string, 0, len(realtimeBroadcastCollections))
+	for name := range realtimeBroadcastCollections {
+		out = append(out, name)
+	}
+	return out
 }
 
 // registerRealtime binds a model-level AfterCreateSuccess hook per

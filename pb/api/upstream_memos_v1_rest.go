@@ -84,6 +84,11 @@ func upstreamMemosV1Routes() []upstreamMemosV1RouteEntry {
 		// ============================================================
 		{Method: http.MethodGet, Path: "/api/v1/status", Flavor: "custom", Builder: "v1_status", Scope: ratelimit.ScopeAnonymous},
 		{Method: http.MethodGet, Path: "/api/v1/ping", Flavor: "custom", Builder: "v1_ping", Scope: ratelimit.ScopeAnonymous},
+		// The SPA's live-refresh stream. The route did not exist
+		// before, so the client's request fell through to the SPA
+		// catch-all and answered 200 with index.html — the client
+		// accepted it and silently never refreshed anything.
+		{Method: http.MethodGet, Path: "/api/v1/sse", Flavor: "spa_sse", Scope: ratelimit.ScopeAuthenticated},
 
 		// ============================================================
 		// V1 instance / auth
@@ -184,6 +189,12 @@ func upstreamMemosV1HandlerFactory(app core.App, entry upstreamMemosV1RouteEntry
 		return pbRecordsCRUDHandler(app, entry.Target)
 	case "custom":
 		return customBuilder(app, entry.Builder)
+	case "spa_sse":
+		// The SPA's live-refresh stream. It is NOT a Memos
+		// client route: the React client (web/src/hooks/
+		// useLiveMemoRefresh.ts) fetches /api/v1/sse and
+		// expects the `*.changed` event shape.
+		return spaSSEHandler(app)
 	default:
 		return unknownFlavorHandler(entry.Flavor)
 	}
@@ -201,6 +212,20 @@ func mountUpstreamMemosV1Routes(r *router.Router[*core.RequestEvent], app core.A
 		route := matchMethod(r, entry.Method)(entry.Path, handler)
 		if limiter != nil && entry.Scope != "" {
 			route.BindFunc(restRateLimit(limiter, entry.Scope))
+		}
+		if entry.Scope == ratelimit.ScopeAuthenticated {
+			// A real auth gate.
+			//
+			// The rate-limit scope is a BUDGET, not a gate:
+			// `restRateLimit` only decides whether the caller has
+			// spent their allowance, and an anonymous caller has an
+			// allowance too.
+			//
+			// `apis.RequireAuth` is PocketBase's own middleware;
+			// `e.Auth` is already populated because PB binds its
+			// `loadAuthToken` middleware globally on the router
+			// (apis/base.go).
+			route.Bind(requireAuthOrPAT(app))
 		}
 	}
 }

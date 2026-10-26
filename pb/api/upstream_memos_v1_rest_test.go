@@ -57,9 +57,9 @@ func TestUpstreamMemosV1Routes_TableShape(t *testing.T) {
 		assert.NotEmpty(t, r.Path, "row %d has empty path", i)
 		assert.NotEmpty(t, r.Flavor, "row %d has empty flavor", i)
 
-		// Flavor is one of the four supported.
+		// Flavor is one of the supported ones.
 		switch r.Flavor {
-		case "connect_proxy", "connect_proxy_wrap", "pb_records_crud", "custom":
+		case "connect_proxy", "connect_proxy_wrap", "pb_records_crud", "custom", "spa_sse":
 			// ok
 		default:
 			t.Errorf("row %d has unknown flavor %q", i, r.Flavor)

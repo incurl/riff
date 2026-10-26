@@ -3,7 +3,6 @@ package api
 import (
 	"net/http"
 
-	"github.com/pocketbase/pocketbase/apis"
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/pocketbase/pocketbase/tools/router"
 
@@ -271,7 +270,7 @@ func mountUpstreamMemosRoutes(r *router.Router[*core.RequestEvent], app core.App
 			// `e.Auth` is already populated because PB binds its
 			// `loadAuthToken` middleware globally on the router
 			// (apis/base.go).
-			route.Bind(apis.RequireAuth())
+			route.Bind(requireAuthOrPAT(app))
 		}
 	}
 }
