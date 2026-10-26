@@ -1,205 +1,46 @@
 package hooks
 
 import (
-	"fmt"
 	"log/slog"
-	"sync"
 	"time"
 
 	"github.com/pocketbase/pocketbase/core"
 )
 
-// schedulerLog is the slog logger for the scheduler.
-// Pulled out so tests can substitute a discard
-// handler. The default is the package-level slog
-// default; pre-refactor this log path was inline.
-var schedulerLog = slog.Default()
+// schedulerJobID is the id of the periodic sweep job in
+// PocketBase's cron. PocketBase keys its jobs by id, so a
+// re-registration replaces the previous one.
+const schedulerJobID = "riffDeviceAuthorizationSweep"
 
-// registerScheduler starts a 1-minute ticker that
-// purges expired in-flight device authorizations.
-// The purge is best-effort: rows that fail to
-// delete are logged but not retried, because the
-// /pair/finish handler also marks an expired row
-// EXPIRED the first time it sees one.
+// registerScheduler schedules the periodic sweep that expires stale
+// device authorizations.
 //
-// The ticker honours app.OnTerminate via a per-app
-// shutdown channel, matching the pattern in
-// memo_links.go. Tests that bootstrap the app and
-// exit without OnTerminate see the goroutine
-// leak at the OS level (the process exits before
-// the leak matters), but the shutdown channel
-// is the only safe way to stop the loop in a
-// long-running test or a production server.
+// The job runs on POCKETBASE'S OWN CRON (`app.Cron()`), which is
+// started on OnServe and stopped on OnBootstrapClear
+// (core/base.go). That replaces a hand-rolled ticker goroutine with
+// its own per-app shutdown channel, per-app wait group and
+// `OnTerminate`/`OnBootstrapClear` teardown hooks — all of which
+// PocketBase already provides, and all of which were the source of
+// the teardown races documented in AGENTS.md.
+//
+// The expression is every minute, matching the previous ticker's
+// cadence.
 func registerScheduler(app core.App) {
-	state := schedulerStateFor(app)
-	app.OnTerminate().BindFunc(func(e *core.TerminateEvent) error {
-		stopSchedulerLoops(app)
-		return e.Next()
+	app.Cron().MustAdd(schedulerJobID, "* * * * *", func() {
+		defer func() {
+			if r := recover(); r != nil {
+				// The app may have shut down between the
+				// tick firing and the sweep running (a long
+				// test run that tears the app down while
+				// the job is mid-tick). A closed-DB panic
+				// here would otherwise crash the host
+				// process.
+				slog.Warn("scheduler sweep panicked; app likely shutting down",
+					"err", r)
+			}
+		}()
+		purgeExpiredAuthorizations(app)
 	})
-	// The same teardown on `OnBootstrapClear`, which is
-	// the hook a test's `ClearBootstrap` cleanup triggers
-	// (`OnTerminate` does NOT fire there).
-	//
-	// The shutdown signal is sent FIRST: the wait blocks
-	// until the loop returns, and the loop only returns
-	// at its next select — which it reaches only after the
-	// shutdown channel is signalled. Waiting without
-	// signalling would deadlock the teardown.
-	//
-	// Both hooks route through `stopSchedulerLoops`,
-	// which removes the map entry as well as signalling
-	// and waiting. The OnTerminate path used to delete
-	// the entry inline and this one did not, so a
-	// ClearBootstrap-only teardown — which is what every
-	// test cleanup does — leaked one entry per app into a
-	// package-level map keyed by the app value. Keyed on
-	// an app that never terminates, the leak is small, but
-	// it is a map that only ever grows.
-	app.OnBootstrapClear().BindFunc(func(e *core.BootstrapEvent) error {
-		stopSchedulerLoops(app)
-		return e.Next()
-	})
-
-	state.workers.Add(1)
-	go func() {
-		defer state.workers.Done()
-		runSchedulerLoop(app, state.shutdown)
-	}()
-}
-
-// schedulerState holds the per-app shutdown channel AND the per-app
-// wait group.
-//
-// The state is per app: the app's own store holds it, so multiple
-// registerScheduler calls on different apps (which the test suite does
-// for isolation) each get their own channel and are torn down by
-// OnTerminate.
-//
-// The wait group must be PER APP, not package-level: a
-// package-level `sync.WaitGroup` cannot be waited on
-// twice concurrently, and two apps tearing down at the
-// same time would panic with "sync: WaitGroup is
-// reused before previous Wait has returned".
-type schedulerState struct {
-	shutdown chan struct{}
-	workers  sync.WaitGroup
-}
-
-// schedulerStateStoreKey is the app.Store() key the per-app scheduler
-// state lives under.
-const schedulerStateStoreKey = "riff.scheduler_state"
-
-// schedulerStateFor returns the per-app scheduler state, creating it
-// on first use.
-//
-// It used to be a package-level `map[core.App]*schedulerState`
-// guarded by its own mutex. The app's own store replaces it: the store
-// is already per app and concurrency-safe, so the map and its mutex
-// were both redundant.
-func schedulerStateFor(app core.App) *schedulerState {
-	raw := app.Store().GetOrSet(schedulerStateStoreKey, func() any {
-		return &schedulerState{shutdown: make(chan struct{})}
-	})
-	state, ok := raw.(*schedulerState)
-	if !ok {
-		// Another component claimed the key. Fall back to a fresh
-		// state rather than panicking on the type assertion.
-		return &schedulerState{shutdown: make(chan struct{})}
-	}
-	return state
-}
-
-// stopSchedulerLoops signals the scheduler loops of
-// one app to return, waits for them to unwind, and drops
-// the app's map entry.
-//
-// It is the single teardown path for both
-// `OnTerminate` and `OnBootstrapClear`; whichever fires
-// first does the work and the second finds nothing to do.
-//
-// The channels are CLOSED, not sent on. The loop
-// parks in a `select` on the shutdown channel and
-// the ticker; an unbuffered send is only received
-// if the loop happens to be parked at that exact
-// moment, and the `default:` branch of a
-// non-blocking send silently drops it otherwise. A
-// closed channel is seen by every future select, so
-// the loop always returns.
-//
-// The close is guarded per app so a double stop
-// (the OnTerminate hook and the OnBootstrapClear
-// hook can both fire) does not panic.
-//
-// The state used to live in a package-level
-// `map[core.App]*schedulerState` guarded by its own mutex. The reads
-// used to be bare: `registerScheduler` wrote the map while the loop
-// goroutine and the teardown hooks read it, and an unsynchronised read
-// concurrent with a write is a `fatal error: concurrent map read and
-// map write` — an unrecoverable crash, not the recoverable data race
-// the race detector reports. The app's own store replaces both the map
-// and the mutex: it is per app and concurrency-safe by construction.
-func stopSchedulerLoops(app core.App) {
-	// Take the state out of the store WITHOUT creating one: a teardown
-	// that runs for an app that never registered a scheduler must not
-	// leave a fresh state behind (or close a channel nobody listens
-	// on). GetOrSet would create one, so the raw store read is used.
-	raw, _ := app.Store().Get(schedulerStateStoreKey).(*schedulerState)
-	app.Store().Remove(schedulerStateStoreKey)
-	if raw == nil {
-		return
-	}
-	state := raw
-	select {
-	case <-state.shutdown:
-		// Already closed: the receive above took
-		// the zero value, so a close would panic.
-		// Nothing to do.
-	default:
-		close(state.shutdown)
-	}
-	// Wait for the loop to unwind. The shutdown signal
-	// makes it return at its next select, but without
-	// the wait the app can close its database while a
-	// sweep is still running — and a test's data
-	// directory can be torn down while the sweep is
-	// still writing into it.
-	state.workers.Wait()
-}
-
-// runSchedulerLoop is the worker body. It ticks
-// every minute and runs all registered sweep
-// functions in order. The loop returns when
-// shutdown is closed.
-func runSchedulerLoop(app core.App, shutdown <-chan struct{}) {
-	ticker := time.NewTicker(time.Minute)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-shutdown:
-			return
-		case <-ticker.C:
-			func() {
-				defer func() {
-					if r := recover(); r != nil {
-						// The app may have shut down
-						// between the ticker firing
-						// and the next sweep call
-						// (a long test run that
-						// GC's the app while the
-						// goroutine is mid-tick).
-						// The shutdown channel is
-						// the only safe teardown;
-						// a closed-DB panic here
-						// would otherwise crash
-						// the host process.
-						schedulerLog.Warn("scheduler sweep panicked; app likely shutting down",
-							"err", fmt.Sprintf("%v", r))
-					}
-				}()
-				purgeExpiredAuthorizations(app)
-			}()
-		}
-	}
 }
 
 // purgeExpiredAuthorizations deletes (or marks

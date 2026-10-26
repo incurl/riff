@@ -138,69 +138,6 @@ func TestMemoLinksStateConcurrentBeginDuringTeardown(t *testing.T) {
 	}
 }
 
-// TestStopSchedulerLoopsIsIdempotentAndRemovesEntry pins
-// defects 2 and 3: the single teardown helper must drop the
-// map entry and survive being called twice (the two hooks can
-// both fire).
-func TestStopSchedulerLoopsIsIdempotentAndRemovesEntry(t *testing.T) {
-	app := core.NewBaseApp(core.BaseAppConfig{
-		DataDir:       t.TempDir(),
-		EncryptionEnv: "pb_test_env_riff_teardown",
-	})
-	require.NoError(t, app.Bootstrap())
-	testutil.DisableLogPersistence(app)
-	t.Cleanup(func() { _ = app.ClearBootstrap() })
-
-	registerScheduler(app)
-
-	ok := app.Store().Has(schedulerStateStoreKey)
-	require.True(t, ok, "registerScheduler must record per-app state")
-
-	// Both teardown hooks route through this helper, so the
-	// second call must not panic on a double close and must
-	// leave the map clean.
-	require.NotPanics(t, func() {
-		stopSchedulerLoops(app)
-		stopSchedulerLoops(app)
-	})
-
-	stillThere := app.Store().Has(schedulerStateStoreKey)
-	assert.False(t, stillThere,
-		"teardown must remove the app's map entry so a ClearBootstrap-only teardown does not leak it")
-}
-
-// TestStopSchedulerLoopsConcurrentWithRegister exercises the
-// unsynchronised map access (defect 3). A bare map read racing
-// the register write is a `fatal error: concurrent map read and
-// map write`, which kills the process — so this test passing
-// at all is the signal; `-race` catches the weaker form.
-func TestStopSchedulerLoopsConcurrentWithRegister(t *testing.T) {
-	base := core.NewBaseApp(core.BaseAppConfig{
-		DataDir:       t.TempDir(),
-		EncryptionEnv: "pb_test_env_riff_teardown2",
-	})
-	require.NoError(t, base.Bootstrap())
-	testutil.DisableLogPersistence(base)
-	t.Cleanup(func() { _ = base.ClearBootstrap() })
-
-	var wg sync.WaitGroup
-	start := make(chan struct{})
-
-	for i := 0; i < 16; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			<-start
-			// Distinct app values per goroutine would each
-			// need their own bootstrap; the shared value is
-			// enough to exercise read-vs-write on the map.
-			stopSchedulerLoops(base)
-		}()
-	}
-	close(start)
-	wg.Wait()
-}
-
 // TestMotionMediaStateGateRejectsAddsAfterTeardown pins
 // defect 1 for motion_media, whose `bind` had the same
 // `Add`-inside-the-per-event-hook shape as memo_links.

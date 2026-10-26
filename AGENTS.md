@@ -218,10 +218,18 @@ hitting the nil-deref that an earlier version tripped over. The two new
 `TestUpsertMemoLinkRow_MissingCollection` and
 `TestUpsertOneMemoLink_MissingCollection` tests pin the regression.
 
+The device-authorization sweep in `pb/hooks/scheduler.go` is NOT one
+of them: it runs on **PocketBase's own cron** (`app.Cron().MustAdd`),
+which PocketBase starts on `OnServe` and stops on
+`OnBootstrapClear` (core/base.go). It used to be a hand-rolled ticker
+goroutine with its own per-app shutdown channel, per-app wait group
+and two teardown hooks — all of which the cron already provided, and
+all of which were a source of the teardown races documented below.
+
 A second, related class of teardown race was fixed alongside the
 attachment work (2026-10-20): the detached goroutines in
 `pb/hooks/motion_media.go`, `pb/hooks/memo_links.go`,
-`pb/hooks/scheduler.go`, `pb/hooks/webhook_drain.go`,
+`pb/hooks/webhook_drain.go`,
 `pb/connect/upload_session.go` and
 `pb/connect/memo_import_session.go` were not tracked, so the app
 could tear its data directory down while one of them was still
@@ -230,7 +238,7 @@ writing into it. In a test that surfaced as
 goroutine belonged to a *different* test, the failure landed on an
 unrelated test, which made it very hard to attribute.
 
-All six now track their goroutines in a `sync.WaitGroup` that the
+All five now track their goroutines in a `sync.WaitGroup` that the
 app waits on during teardown. Three details are load-bearing:
 
 * The wait is bound to **`OnBootstrapClear`**, not
@@ -241,11 +249,10 @@ app waits on during teardown. Three details are load-bearing:
 * The stop signal is sent **before** the wait. The wait blocks
   until the worker returns, and the worker only returns after it
   observes the signal; waiting first deadlocks the teardown.
-* The scheduler's shutdown channel is **closed**, not sent on. An
-  unbuffered send with a `default:` branch is silently dropped
-  unless the worker happens to be parked in its `select` at that
-  exact moment — which left the loop waiting for its 1-minute
-  tick. A closed channel is seen by every future select.
+* A shutdown channel is **closed**, not sent on. An unbuffered send
+  with a `default:` branch is silently dropped unless the worker
+  happens to be parked in its `select` at that exact moment. A
+  closed channel is seen by every future select.
 * The wait group and the shutdown channel are **per app**, not
   package-level. A `sync.WaitGroup` cannot be waited on twice
   concurrently, so two apps tearing down at the same time panic
