@@ -12,7 +12,6 @@ import (
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/crypto/bcrypt"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	v1 "github.com/incurl/riff/proto/gen/api/v1"
@@ -123,7 +122,7 @@ func TestGetUser_AnonymousCannotProbeSuperuser(t *testing.T) {
 
 // TestCreateUser_AdminOnlyAndSignIn asserts only an admin may provision an
 // account, and that the created password works through the Connect SignIn path
-// (which verifies the password_hash column, not PocketBase's own hash).
+// (which verifies PocketBase's own `password` field).
 func TestCreateUser_AdminOnlyAndSignIn(t *testing.T) {
 	app := newHookedApp(t)
 	admin := newSuperuser(t, app, "admin@example.com")
@@ -154,7 +153,8 @@ func TestCreateUser_AdminOnlyAndSignIn(t *testing.T) {
 	// The password must satisfy the Connect sign-in path.
 	rec, err := lookupUserByName(app, "dave")
 	require.NoError(t, err)
-	assert.NoError(t, bcrypt.CompareHashAndPassword([]byte(rec.GetString("password_hash")), []byte("passw0rd!")))
+	assert.True(t, rec.ValidatePassword("passw0rd!"),
+		"the created password must verify against PocketBase's own hash")
 
 	auth := NewAuthServer(app, nil)
 	signIn, err := auth.SignIn(context.Background(), &v1.SignInRequest{
@@ -204,9 +204,10 @@ func TestCreateUser_Bootstrap(t *testing.T) {
 		"email={:e}", "", 1, 0, map[string]any{"e": "admin@example.com"})
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
-	hash := rows[0].GetString("password_hash")
-	require.NotEmpty(t, hash, "createSuperuserRecord must populate password_hash")
-	assert.NoError(t, bcrypt.CompareHashAndPassword([]byte(hash), []byte("passw0rd!")))
+	require.NotEmpty(t, rows[0].GetString("password:hash"),
+		"createSuperuserRecord must populate the password field")
+	assert.True(t, rows[0].ValidatePassword("passw0rd!"),
+		"the superuser password must verify against PocketBase's own hash")
 
 	// Bootstrap is now complete.
 	assert.False(t, needsSetup(app))
@@ -250,7 +251,8 @@ func TestCreateUser_SelfService(t *testing.T) {
 
 	rec, err := lookupUserByName(app, "dave")
 	require.NoError(t, err)
-	assert.NoError(t, bcrypt.CompareHashAndPassword([]byte(rec.GetString("password_hash")), []byte("passw0rd!")))
+	assert.True(t, rec.ValidatePassword("passw0rd!"),
+		"the created password must verify against PocketBase's own hash")
 }
 
 // TestCreateUser_RejectsSelfServiceWhenClosed asserts the
@@ -382,7 +384,8 @@ func TestUpdateUser_PasswordKeepsBothStoresInSync(t *testing.T) {
 
 	rec, err := lookupUserByName(app, "alice")
 	require.NoError(t, err)
-	assert.NoError(t, bcrypt.CompareHashAndPassword([]byte(rec.GetString("password_hash")), []byte("newpassw0rd!")))
+	assert.True(t, rec.ValidatePassword("newpassw0rd!"),
+		"the updated password must verify against PocketBase's own hash")
 
 	auth := NewAuthServer(app, nil)
 	_, err = auth.SignIn(context.Background(), &v1.SignInRequest{

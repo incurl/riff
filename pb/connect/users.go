@@ -5,7 +5,6 @@ import (
 
 	"connectrpc.com/connect/v2"
 	"github.com/pocketbase/pocketbase/core"
-	"golang.org/x/crypto/bcrypt"
 
 	v1 "github.com/incurl/riff/proto/gen/api/v1"
 )
@@ -96,9 +95,9 @@ func recordToUser(rec *core.Record) *v1.User {
 // userToRecord applies the profile fields of a v1.User to a *core.Record. Only
 // the fields that exist in our schema are set; unknown fields are ignored.
 //
-// `password` is deliberately not handled here: PocketBase's own password field
-// and the parallel `password_hash` column the Connect sign-in path reads have
-// to move together, so passwords go through setPassword.
+// `password` is deliberately not handled here: it goes through
+// setPassword, which uses PocketBase's own password field so the
+// Connect sign-in path and the native auth endpoints agree.
 func userToRecord(rec *core.Record, u *v1.User) {
 	if u.Username != "" {
 		rec.Set("username", u.Username)
@@ -141,18 +140,16 @@ func applyUserFields(rec *core.Record, u *v1.User) error {
 	return nil
 }
 
-// setPassword writes both password fields. PocketBase hashes `password` itself
-// and uses it for the collection auth endpoints and record validation;
-// `password_hash` is the bcrypt digest the Connect SignIn path verifies (see
-// AuthServer.verifyPassword). Keeping them in lockstep is what lets an account
-// created or changed over Connect still work against PocketBase's own auth API.
+// setPassword writes the record's password field.
+//
+// PocketBase hashes the value itself on save (bcrypt, see
+// core/field_password.go) and uses it for the collection auth
+// endpoints and the record validation. The Connect SignIn path
+// verifies against the same field through
+// [core.Record.ValidatePassword], so the two agree by construction —
+// there is no second column to keep in lockstep.
 func setPassword(rec *core.Record, password string) error {
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-	if err != nil {
-		return connect.NewError(connect.CodeInternal, "password hashing failed")
-	}
-	rec.Set("password", password)
-	rec.Set("password_hash", string(hash))
+	rec.SetPassword(password)
 	return nil
 }
 
@@ -165,10 +162,10 @@ func setPassword(rec *core.Record, password string) error {
 // how the Memos SPA's sign-up form treats the "username" field as the
 // admin's identity on the bootstrap path (PocketBase's superuser
 // collection has no `username` column, only `email`). A
-// `password_hash` column is written alongside the built-in
-// `password` field for the same reason it is written on `users` rows
-// (see migration 1790000000): the Connect SignIn path bcrypt-verifies
-// directly, and PB's PBKDF2 hash is not directly comparable from Go.
+// The built-in `password` field is the only password store:
+// PocketBase hashes it with bcrypt and the Connect SignIn path
+// verifies it through `Record.ValidatePassword`, so the Connect
+// surface and the native auth endpoints read the same hash.
 //
 // `displayName` is optional; an empty string leaves the field unset
 // and PocketBase will store the empty string.

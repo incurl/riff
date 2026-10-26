@@ -7,7 +7,6 @@ import (
 
 	"connectrpc.com/connect/v2"
 	"github.com/pocketbase/pocketbase/core"
-	"golang.org/x/crypto/bcrypt"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -141,8 +140,8 @@ func (s *AuthServer) GetCurrentUser(ctx context.Context, _ *v1.GetCurrentUserReq
 // installer creates via CreateUser on a fresh instance) can also
 // sign in through the same form.
 //
-// Both lookups return the bcrypt `password_hash` column the
-// Connect create paths populate, so verifyPassword works against
+// Both lookups return a record whose `password` field carries
+// PocketBase's own bcrypt hash, so verifyPassword works against
 // either collection without further branching.
 func (s *AuthServer) findByIdentity(identity string) (*core.Record, error) {
 	if identity == "" {
@@ -184,25 +183,29 @@ func (s *AuthServer) findByIdentity(identity string) (*core.Record, error) {
 	return rows[0], nil
 }
 
-// verifyPassword checks a password against a user's stored
-// bcrypt hash. The hash lives in the `password_hash` field
-// (added in migration 1710000001) so we can verify without
-// calling PocketBase's internal auth endpoint in a loop.
+// verifyPassword checks a password against a user's stored hash.
 //
-// Migration strategy for existing users: PocketBase's
-// built-in `password` field still works for the standard
-// /api/collections/users/auth-with-password endpoint; new
-// users created via the Connect CreateUser path get a
-// `password_hash` set. Users created via the admin UI need
-// to re-set their password through the user-update RPC to
-// populate the hash. (Documented in DECISIONS.md.)
+// The check is PocketBase's own: [core.Record.ValidatePassword]
+// compares the plain password against the record's `password`
+// field, which PocketBase hashes with bcrypt
+// (core/field_password.go).
+//
+// The `password_hash` column this used to read is gone. It was a
+// parallel bcrypt digest kept because the migration that added it
+// believed PocketBase's hash was not comparable from Go. It is:
+// PBKDF2 was never involved, and `ValidatePassword` is a
+// first-class API for exactly this comparison.
+//
+// The record must be the one loaded from the database — the
+// `PasswordField.Intercept` hook clears the plain value after a
+// save, but it leaves the HASH in place, so a fetched record can be
+// verified.
 func (s *AuthServer) verifyPassword(rec *core.Record, password string) error {
 	if password == "" {
 		return errors.New("empty password")
 	}
-	hash := rec.GetString("password_hash")
-	if hash == "" {
-		return errors.New("no password set on this account")
+	if !rec.ValidatePassword(password) {
+		return errors.New("invalid password")
 	}
-	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
+	return nil
 }

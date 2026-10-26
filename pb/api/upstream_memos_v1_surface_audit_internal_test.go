@@ -46,16 +46,11 @@ func newV1AuditApp(t *testing.T, username string) (http.Handler, string, string)
 	rec := core.NewRecord(users)
 	rec.Set("username", username)
 	rec.Set("email", username+"@example.invalid")
+	// PocketBase hashes the `password` field itself on save, and
+	// `AuthServer.verifyPassword` verifies against that same field
+	// through `Record.ValidatePassword`, so setting the plain value
+	// is all the harness has to do.
 	rec.Set("password", "passw0rd!")
-	require.NoError(t, app.Save(rec))
-	// `AuthServer.verifyPassword` reads riff's own bcrypt `password_hash`
-	// column, not PocketBase's auth `password` field, so a record
-	// created by `app.Save` alone has nothing for SignIn to verify.
-	// The production path writes it in `pb/connect/users.go`; the
-	// harness does the same here.
-	pwHash, herr := bcrypt.GenerateFromPassword([]byte("passw0rd!"), bcrypt.MinCost)
-	require.NoError(t, herr)
-	rec.Set("password_hash", string(pwHash))
 	require.NoError(t, app.Save(rec))
 
 	patRaw, perr := random.String(24)

@@ -16,7 +16,6 @@ import (
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/crypto/bcrypt"
 
 	"github.com/incurl/riff/internal/ratelimit"
 	v1 "github.com/incurl/riff/proto/gen/api/v1"
@@ -311,15 +310,11 @@ func TestConnectRegister_NilLimiterKeepsProceduresReachable(t *testing.T) {
 // success" pattern in auth.go.
 func TestSignIn_FailedAttemptsCountSigninAccount(t *testing.T) {
 	app := newTestApp(t)
-	alice := newUser(t, app, "alice")
-	// newUser only fills PocketBase's own password column. The
-	// Connect SignIn path reads the parallel password_hash field,
-	// so populate it here.
+	// newUser fills PocketBase's own `password` field, which is
+	// what the Connect SignIn path verifies (through
+	// `Record.ValidatePassword`).
+	newUser(t, app, "alice")
 	const pw = "passw0rd!"
-	hash, err := bcrypt.GenerateFromPassword([]byte(pw), bcrypt.MinCost)
-	require.NoError(t, err)
-	alice.Set("password_hash", string(hash))
-	require.NoError(t, app.Save(alice))
 
 	const limit = 2
 	limiter := ratelimit.NewMemoryLimiter(ratelimit.Policy{
@@ -347,7 +342,7 @@ func TestSignIn_FailedAttemptsCountSigninAccount(t *testing.T) {
 		require.Errorf(t, err, "wrong password must fail; iteration %d", i+1)
 		assert.Equal(t, connect.CodeUnauthenticated, connect.CodeOf(err))
 	}
-	err = signIn(t, "alice", "wrong")
+	err := signIn(t, "alice", "wrong")
 	require.Error(t, err, "the attempt past the limit must be refused by the limiter")
 	assert.Equal(t, connect.CodeResourceExhausted, connect.CodeOf(err),
 		"per-account over-limit must surface as ResourceExhausted (HTTP 429 shape)")
