@@ -92,6 +92,15 @@ var pathFieldSpecs = map[string]pathWrapSpec{
 		fields: []pathFieldSpec{{from: "parent", to: "name", prefix: "users"}},
 		append: "name",
 	},
+	// The webhook CRUD routes take the parent user; the delete
+	// takes the composed resource name.
+	"memos/api/users/{parent}/webhooks": {
+		fields: []pathFieldSpec{{from: "parent", to: "parent", prefix: "users"}},
+	},
+	"memos/api/users/{parent}/webhooks/{name}": {
+		fields: []pathFieldSpec{{from: "parent", to: "name", prefix: "users"}},
+		append: "name",
+	},
 
 	// ---- memos ----------------------------------------------------
 	"memos/api/memos/{name}": {
@@ -177,6 +186,10 @@ var pathFieldSpecs = map[string]pathWrapSpec{
 	"memos/api/users/{parent}/linkedIdentities": {
 		fields: []pathFieldSpec{{from: "parent", to: "parent", prefix: "users"}},
 	},
+	"memos/api/users/{parent}/linkedIdentities/{name}": {
+		fields: []pathFieldSpec{{from: "parent", to: "name", prefix: "users"}},
+		append: "name",
+	},
 
 	// ---- instance settings -----------------------------------------
 	// The setting name is the setting key itself, not a resource
@@ -229,6 +242,11 @@ var pathNestedSpecs = map[string]pathWrapSpec{
 	"PATCH memos/api/instance/settings/{name}": {
 		fields: []pathFieldSpec{{from: "name", to: "name"}},
 		nested: "setting",
+	},
+	"PATCH memos/api/users/{parent}/webhooks/{name}": {
+		fields: []pathFieldSpec{{from: "parent", to: "name", prefix: "users"}},
+		append: "name",
+		nested: "webhook",
 	},
 	"PATCH memos/api/identity-providers/{name}": {
 		fields: []pathFieldSpec{{from: "name", to: "name", prefix: "identity-providers"}},

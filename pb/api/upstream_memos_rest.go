@@ -140,20 +140,20 @@ func upstreamMemosRoutes() []upstreamRouteEntry {
 		{Method: http.MethodDelete, Path: "/memos/api/users/{parent}/notifications/{name}", Flavor: "pb_records_crud", Target: "notifications", Scope: ratelimit.ScopeWriteUser},
 
 		// ---- User webhooks ----
-		{Method: http.MethodGet, Path: "/memos/api/users/{parent}/webhooks", Flavor: "pb_records_crud", Target: "user_webhooks", Scope: ratelimit.ScopeAuthenticated},
-		{Method: http.MethodPost, Path: "/memos/api/users/{parent}/webhooks", Flavor: "pb_records_crud", Target: "user_webhooks", Scope: ratelimit.ScopeWriteUser},
-		{Method: http.MethodPatch, Path: "/memos/api/users/{parent}/webhooks/{name}", Flavor: "pb_records_crud", Target: "user_webhooks", Scope: ratelimit.ScopeWriteUser},
-		{Method: http.MethodDelete, Path: "/memos/api/users/{parent}/webhooks/{name}", Flavor: "pb_records_crud", Target: "user_webhooks", Scope: ratelimit.ScopeWriteUser},
+		{Method: http.MethodGet, Path: "/memos/api/users/{parent}/webhooks", Flavor: "connect_proxy_wrap", Target: memosConnectUserListUserWebhooksProcedure, Scope: ratelimit.ScopeAuthenticated},
+		{Method: http.MethodPost, Path: "/memos/api/users/{parent}/webhooks", Flavor: "connect_proxy_wrap", Target: memosConnectUserCreateUserWebhookProcedure, Scope: ratelimit.ScopeWriteUser},
+		{Method: http.MethodPatch, Path: "/memos/api/users/{parent}/webhooks/{name}", Flavor: "connect_proxy_wrap", Target: memosConnectUserUpdateUserWebhookProcedure, Scope: ratelimit.ScopeWriteUser},
+		{Method: http.MethodDelete, Path: "/memos/api/users/{parent}/webhooks/{name}", Flavor: "connect_proxy_wrap", Target: memosConnectUserDeleteUserWebhookProcedure, Scope: ratelimit.ScopeWriteUser},
 		{Method: http.MethodGet, Path: "/memos/api/users/{parent}/webhooks/{name}/getSigningSecret", Flavor: "connect_proxy_wrap", Target: memosConnectUserGetUserWebhookSigningSecretProcedure, Scope: ratelimit.ScopeAuthenticated},
 
 		// ---- User linked identities ----
-		{Method: http.MethodGet, Path: "/memos/api/users/{parent}/linkedIdentities", Flavor: "pb_records_crud", Target: "linked_identities", Scope: ratelimit.ScopeAuthenticated},
-		{Method: http.MethodGet, Path: "/memos/api/users/{parent}/linkedIdentities/{name}", Flavor: "pb_records_crud", Target: "linked_identities", Scope: ratelimit.ScopeAuthenticated},
+		{Method: http.MethodGet, Path: "/memos/api/users/{parent}/linkedIdentities", Flavor: "connect_proxy_wrap", Target: memosConnectUserListLinkedIdentitiesProcedure, Scope: ratelimit.ScopeAuthenticated},
+		{Method: http.MethodGet, Path: "/memos/api/users/{parent}/linkedIdentities/{name}", Flavor: "connect_proxy_wrap", Target: memosConnectUserGetLinkedIdentityProcedure, Scope: ratelimit.ScopeAuthenticated},
 		{Method: http.MethodPost, Path: "/memos/api/users/{parent}/linkedIdentities", Flavor: "connect_proxy_wrap", Target: memosConnectUserCreateLinkedIdentityProcedure, Scope: ratelimit.ScopeWriteUser},
-		{Method: http.MethodDelete, Path: "/memos/api/users/{parent}/linkedIdentities/{name}", Flavor: "pb_records_crud", Target: "linked_identities", Scope: ratelimit.ScopeWriteUser},
+		{Method: http.MethodDelete, Path: "/memos/api/users/{parent}/linkedIdentities/{name}", Flavor: "connect_proxy_wrap", Target: memosConnectUserDeleteLinkedIdentityProcedure, Scope: ratelimit.ScopeWriteUser},
 
 		// ---- User personal access tokens ----
-		{Method: http.MethodGet, Path: "/memos/api/users/{parent}/personalAccessTokens", Flavor: "pb_records_crud", Target: "personal_access_tokens", Scope: ratelimit.ScopeAuthenticated},
+		{Method: http.MethodGet, Path: "/memos/api/users/{parent}/personalAccessTokens", Flavor: "connect_proxy_wrap", Target: memosConnectUserListPersonalAccessTokensProcedure, Scope: ratelimit.ScopeAuthenticated},
 		{Method: http.MethodPost, Path: "/memos/api/users/{parent}/personalAccessTokens", Flavor: "connect_proxy_wrap", Target: memosConnectUserCreatePersonalAccessTokenProcedure, Scope: ratelimit.ScopeWriteUser},
 		{Method: http.MethodDelete, Path: "/memos/api/users/{parent}/personalAccessTokens/{name}", Flavor: "connect_proxy_wrap", Target: memosConnectUserDeletePersonalAccessTokenProcedure, Scope: ratelimit.ScopeWriteUser},
 

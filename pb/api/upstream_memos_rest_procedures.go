@@ -36,6 +36,13 @@ const (
 	memosConnectUserCreatePersonalAccessTokenProcedure   = apiv1connect.UserServiceCreatePersonalAccessTokenProcedure
 	memosConnectUserDeletePersonalAccessTokenProcedure   = apiv1connect.UserServiceDeletePersonalAccessTokenProcedure
 	memosConnectUserGetUserWebhookSigningSecretProcedure = apiv1connect.UserServiceGetUserWebhookSigningSecretProcedure
+	memosConnectUserListUserWebhooksProcedure            = apiv1connect.UserServiceListUserWebhooksProcedure
+	memosConnectUserCreateUserWebhookProcedure           = apiv1connect.UserServiceCreateUserWebhookProcedure
+	memosConnectUserUpdateUserWebhookProcedure           = apiv1connect.UserServiceUpdateUserWebhookProcedure
+	memosConnectUserDeleteUserWebhookProcedure           = apiv1connect.UserServiceDeleteUserWebhookProcedure
+	memosConnectUserListLinkedIdentitiesProcedure        = apiv1connect.UserServiceListLinkedIdentitiesProcedure
+	memosConnectUserGetLinkedIdentityProcedure           = apiv1connect.UserServiceGetLinkedIdentityProcedure
+	memosConnectUserListPersonalAccessTokensProcedure    = apiv1connect.UserServiceListPersonalAccessTokensProcedure
 )
 
 // memo_service
