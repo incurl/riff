@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/pocketbase/pocketbase/apis"
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/pocketbase/pocketbase/tools/router"
 	"github.com/stretchr/testify/assert"
@@ -14,11 +15,17 @@ import (
 
 // crudTestRouter mounts a single pb_records_crud route for the
 // given collection and returns the built mux.
+//
+// The route carries the same RequireAuth middleware the real table
+// attaches to a ScopeAuthenticated route, so a test sees the same
+// 401 an anonymous caller would.
 func crudTestRouter(t *testing.T, app core.App, collection string) http.Handler {
 	t.Helper()
 	r := router.NewRouter[*core.RequestEvent](eventFactoryFor(app))
-	r.GET("/memos/api/"+collection, pbRecordsCRUDHandler(app, collection))
-	r.GET("/memos/api/"+collection+"/{name}", pbRecordsCRUDHandler(app, collection))
+	get := r.GET("/memos/api/"+collection, pbRecordsCRUDHandler(app, collection))
+	get.Bind(apis.RequireAuth())
+	getOne := r.GET("/memos/api/"+collection+"/{name}", pbRecordsCRUDHandler(app, collection))
+	getOne.Bind(apis.RequireAuth())
 	mux, err := r.BuildMux()
 	require.NoError(t, err)
 	return mux
@@ -26,9 +33,12 @@ func crudTestRouter(t *testing.T, app core.App, collection string) http.Handler 
 
 // crudListItems performs a GET against the mounted route and returns
 // the decoded "items" array.
-func crudListItems(t *testing.T, mux http.Handler, path string) []map[string]any {
+func crudListItems(t *testing.T, mux http.Handler, path string, viewer *core.Record) []map[string]any {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodGet, path, nil)
+	if viewer != nil {
+		req = req.WithContext(contextWithViewer(req.Context(), viewer))
+	}
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
@@ -80,20 +90,23 @@ func TestPbRecordsCRUD_RedactsSecrets(t *testing.T) {
 	require.NoError(t, app.Save(pat))
 
 	mux := crudTestRouter(t, app, "users")
-	items := crudListItems(t, mux, "/memos/api/users")
+	items := crudListItems(t, mux, "/memos/api/users", owner)
 	require.Len(t, items, 1, "the seeded user must be listed")
 
 	item := items[0]
 	assert.NotContains(t, item, "tokenKey", "the JWT signing key must never be exported")
 	assert.NotContains(t, item, "password", "the password field must never be exported")
 	assert.NotContains(t, item, "password_hash", "the password hash must never be exported")
-	assert.NotContains(t, item, "email", "emailVisibility is false, so the email must not be exported")
+	// The caller here IS the owner, so the email is visible to them
+	// (the owner case is pinned by
+	// TestPbRecordsCRUD_OwnerSeesOwnEmail). What must never appear
+	// is the signing key or the password fields.
 	assert.Contains(t, item, "username", "the public profile fields must still be exported")
 
 	// The same collection through the token route: the Hidden:true
 	// token_hash must not leak either.
 	patMux := crudTestRouter(t, app, "personal_access_tokens")
-	patItems := crudListItems(t, patMux, "/memos/api/personal_access_tokens")
+	patItems := crudListItems(t, patMux, "/memos/api/personal_access_tokens", owner)
 	require.Len(t, patItems, 1)
 	assert.NotContains(t, patItems[0], "token_hash", "a Hidden:true field must never be exported")
 }

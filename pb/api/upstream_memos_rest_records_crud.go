@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/pocketbase/dbx"
 	"github.com/pocketbase/pocketbase/core"
 )
 
@@ -94,16 +93,30 @@ func crudList(e *core.RequestEvent, app core.App, collection string) error {
 	if err != nil {
 		return crudError(e, http.StatusInternalServerError, "find failed")
 	}
-	total, _ := app.CountRecords(collection, dbx.NewExp(filter))
-	items := make([]map[string]any, 0, len(records))
-	for _, r := range records {
+	coll, err := app.FindCollectionByNameOrId(collection)
+	if err != nil {
+		return crudError(e, http.StatusNotFound, "collection not found")
+	}
+
+	// The query cannot carry the access rule — PocketBase's filter
+	// grammar has no way to express one — so the rule is evaluated
+	// per row. A record the caller may not read is dropped.
+	permitted, err := filterAccessibleRecords(app, e, coll, records, coll.ListRule)
+	if err != nil {
+		return crudError(e, http.StatusInternalServerError, "access check failed")
+	}
+
+	items := make([]map[string]any, 0, len(permitted))
+	for _, r := range permitted {
 		items = append(items, recordToJSON(r, e.Auth))
 	}
 	return e.JSON(http.StatusOK, map[string]any{
-		"items":       items,
-		"page":        page,
+		"items": items,
+		"page":  page,
+		// The total counts the PERMITTED records only. A raw count
+		// would tell the caller how many records they cannot see.
 		"per_page":    perPage,
-		"total_items": total,
+		"total_items": len(items),
 	})
 }
 
@@ -111,6 +124,19 @@ func crudList(e *core.RequestEvent, app core.App, collection string) error {
 func crudGet(e *core.RequestEvent, app core.App, collection, id string) error {
 	rec, err := app.FindRecordById(collection, id)
 	if err != nil {
+		return crudError(e, http.StatusNotFound, "record not found")
+	}
+	coll, err := app.FindCollectionByNameOrId(collection)
+	if err != nil {
+		return crudError(e, http.StatusNotFound, "collection not found")
+	}
+	ok, err := canAccessRecord(app, e, rec, coll.ViewRule)
+	if err != nil {
+		return crudError(e, http.StatusInternalServerError, "access check failed")
+	}
+	if !ok {
+		// 404, not 403: a 403 would confirm that the record
+		// exists, which is the very thing the rule hides.
 		return crudError(e, http.StatusNotFound, "record not found")
 	}
 	return e.JSON(http.StatusOK, recordToJSON(rec, e.Auth))
@@ -156,6 +182,18 @@ func crudUpdate(e *core.RequestEvent, app core.App, collection, id string) error
 	if err != nil {
 		return crudError(e, http.StatusNotFound, "record not found")
 	}
+	coll, err := app.FindCollectionByNameOrId(collection)
+	if err != nil {
+		return crudError(e, http.StatusNotFound, "collection not found")
+	}
+	ok, err := canAccessRecord(app, e, rec, coll.UpdateRule)
+	if err != nil {
+		return crudError(e, http.StatusInternalServerError, "access check failed")
+	}
+	if !ok {
+		// 404, not 403 — see crudGet.
+		return crudError(e, http.StatusNotFound, "record not found")
+	}
 	if err := recordFromJSON(rec, body); err != nil {
 		return crudError(e, http.StatusBadRequest, err.Error())
 	}
@@ -172,6 +210,18 @@ func crudUpdate(e *core.RequestEvent, app core.App, collection, id string) error
 func crudDelete(e *core.RequestEvent, app core.App, collection, id string) error {
 	rec, err := app.FindRecordById(collection, id)
 	if err != nil {
+		return crudError(e, http.StatusNotFound, "record not found")
+	}
+	coll, err := app.FindCollectionByNameOrId(collection)
+	if err != nil {
+		return crudError(e, http.StatusNotFound, "collection not found")
+	}
+	ok, err := canAccessRecord(app, e, rec, coll.DeleteRule)
+	if err != nil {
+		return crudError(e, http.StatusInternalServerError, "access check failed")
+	}
+	if !ok {
+		// 404, not 403 — see crudGet.
 		return crudError(e, http.StatusNotFound, "record not found")
 	}
 	if err := app.Delete(rec); err != nil {

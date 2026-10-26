@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/pocketbase/pocketbase/core"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -31,6 +32,7 @@ func TestPbRecordsCRUD_List(t *testing.T) {
 	mux := makeTestRouter(t, app)
 
 	req := httptest.NewRequest(http.MethodGet, "/memos/api/users", nil)
+	req = req.WithContext(contextWithViewer(req.Context(), seedAuditUser(t, app, "crudbasic")))
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)
@@ -53,6 +55,7 @@ func TestPbRecordsCRUD_List_Pagination_Default(t *testing.T) {
 	mux := makeTestRouter(t, app)
 
 	req := httptest.NewRequest(http.MethodGet, "/memos/api/users", nil)
+	req = req.WithContext(contextWithViewer(req.Context(), seedAuditUser(t, app, "crudlist")))
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 	require.Equal(t, http.StatusOK, w.Code)
@@ -73,6 +76,7 @@ func TestPbRecordsCRUD_Get_NotFound(t *testing.T) {
 	mux := makeTestRouter(t, app)
 
 	req := httptest.NewRequest(http.MethodGet, "/memos/api/users/missing", nil)
+	req = req.WithContext(contextWithViewer(req.Context(), seedAuditUser(t, app, "crudget")))
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusNotFound, w.Code)
@@ -92,6 +96,7 @@ func TestPbRecordsCRUD_Delete_NotFound(t *testing.T) {
 	mux := makeTestRouter(t, app)
 
 	req := httptest.NewRequest(http.MethodDelete, "/memos/api/users/missing", nil)
+	req = req.WithContext(contextWithViewer(req.Context(), seedAuditUser(t, app, "cruddel")))
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusNotFound, w.Code)
@@ -114,6 +119,7 @@ func TestPbRecordsCRUD_RejectsUnknownField(t *testing.T) {
 
 	body := bytes.NewBufferString(`{"username":"x","definitely_not_a_field":"y"}`)
 	req := httptest.NewRequest(http.MethodPost, "/memos/api/users", body)
+	req = req.WithContext(contextWithViewer(req.Context(), seedAuditUser(t, app, "crudpost")))
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 	assert.True(t, w.Code < 500,
@@ -124,3 +130,20 @@ func TestPbRecordsCRUD_RejectsUnknownField(t *testing.T) {
 // test helpers that do not actually read the
 // body but want to be explicit about that.
 var _ = io.Discard
+
+// seedAuditUser creates a users row the crud tests can authenticate
+// as. The Memos routes that carry the ScopeAuthenticated scope are
+// behind PocketBase's RequireAuth middleware, so a test that calls
+// one has to present an identity.
+func seedAuditUser(t *testing.T, app core.App, username string) *core.Record {
+	t.Helper()
+	users, err := app.FindCollectionByNameOrId("users")
+	require.NoError(t, err)
+	rec := core.NewRecord(users)
+	rec.Set("username", username)
+	rec.Set("email", username+"@example.test")
+	rec.Set("name", username)
+	rec.SetPassword("audit-password-123")
+	require.NoError(t, app.Save(rec))
+	return rec
+}

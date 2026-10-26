@@ -43,6 +43,12 @@ const (
 	memosConnectUserListLinkedIdentitiesProcedure        = apiv1connect.UserServiceListLinkedIdentitiesProcedure
 	memosConnectUserGetLinkedIdentityProcedure           = apiv1connect.UserServiceGetLinkedIdentityProcedure
 	memosConnectUserListPersonalAccessTokensProcedure    = apiv1connect.UserServiceListPersonalAccessTokensProcedure
+	memosConnectUserListUserNotificationsProcedure       = apiv1connect.UserServiceListUserNotificationsProcedure
+	memosConnectUserUpdateUserNotificationProcedure      = apiv1connect.UserServiceUpdateUserNotificationProcedure
+	memosConnectUserDeleteUserNotificationProcedure      = apiv1connect.UserServiceDeleteUserNotificationProcedure
+	memosConnectSpaceListSpaceInvitationsProcedure       = apiv1connect.SpaceServiceListSpaceInvitationsProcedure
+	memosConnectSpaceListUserSpaceInvitationsProcedure   = apiv1connect.SpaceServiceListUserSpaceInvitationsProcedure
+	memosConnectSpaceGetSpaceInvitationProcedure         = apiv1connect.SpaceServiceGetSpaceInvitationProcedure
 )
 
 // memo_service

@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 
+	"github.com/pocketbase/pocketbase/apis"
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/pocketbase/pocketbase/tools/router"
 
@@ -135,9 +136,9 @@ func upstreamMemosRoutes() []upstreamRouteEntry {
 		{Method: http.MethodDelete, Path: "/memos/api/users/{parent}/views/{name}", Flavor: "pb_records_crud", Target: "memo_views", Scope: ratelimit.ScopeWriteUser},
 
 		// ---- User notifications ----
-		{Method: http.MethodGet, Path: "/memos/api/users/{parent}/notifications", Flavor: "pb_records_crud", Target: "notifications", Scope: ratelimit.ScopeAuthenticated},
-		{Method: http.MethodPatch, Path: "/memos/api/users/{parent}/notifications/{name}", Flavor: "pb_records_crud", Target: "notifications", Scope: ratelimit.ScopeWriteUser},
-		{Method: http.MethodDelete, Path: "/memos/api/users/{parent}/notifications/{name}", Flavor: "pb_records_crud", Target: "notifications", Scope: ratelimit.ScopeWriteUser},
+		{Method: http.MethodGet, Path: "/memos/api/users/{parent}/notifications", Flavor: "connect_proxy_wrap", Target: memosConnectUserListUserNotificationsProcedure, Scope: ratelimit.ScopeAuthenticated},
+		{Method: http.MethodPatch, Path: "/memos/api/users/{parent}/notifications/{name}", Flavor: "connect_proxy_wrap", Target: memosConnectUserUpdateUserNotificationProcedure, Scope: ratelimit.ScopeWriteUser},
+		{Method: http.MethodDelete, Path: "/memos/api/users/{parent}/notifications/{name}", Flavor: "connect_proxy_wrap", Target: memosConnectUserDeleteUserNotificationProcedure, Scope: ratelimit.ScopeWriteUser},
 
 		// ---- User webhooks ----
 		{Method: http.MethodGet, Path: "/memos/api/users/{parent}/webhooks", Flavor: "connect_proxy_wrap", Target: memosConnectUserListUserWebhooksProcedure, Scope: ratelimit.ScopeAuthenticated},
@@ -204,9 +205,9 @@ func upstreamMemosRoutes() []upstreamRouteEntry {
 		{Method: http.MethodDelete, Path: "/memos/api/spaces/{name}/members/{member_name}", Flavor: "connect_proxy_wrap", Target: memosConnectSpaceDeleteSpaceMemberProcedure, Scope: ratelimit.ScopeWriteUser},
 
 		// ---- Space invitations ----
-		{Method: http.MethodGet, Path: "/memos/api/spaces/{parent}/invitations", Flavor: "pb_records_crud", Target: "space_invitations", Scope: ratelimit.ScopeAuthenticated},
-		{Method: http.MethodGet, Path: "/memos/api/users/{parent}/spaceInvitations", Flavor: "pb_records_crud", Target: "space_invitations", Scope: ratelimit.ScopeAuthenticated},
-		{Method: http.MethodGet, Path: "/memos/api/spaces/{name}/invitations/{invitation_name}", Flavor: "pb_records_crud", Target: "space_invitations", Scope: ratelimit.ScopeAuthenticated},
+		{Method: http.MethodGet, Path: "/memos/api/spaces/{parent}/invitations", Flavor: "connect_proxy_wrap", Target: memosConnectSpaceListSpaceInvitationsProcedure, Scope: ratelimit.ScopeAuthenticated},
+		{Method: http.MethodGet, Path: "/memos/api/users/{parent}/spaceInvitations", Flavor: "connect_proxy_wrap", Target: memosConnectSpaceListUserSpaceInvitationsProcedure, Scope: ratelimit.ScopeAuthenticated},
+		{Method: http.MethodGet, Path: "/memos/api/spaces/{name}/invitations/{invitation_name}", Flavor: "connect_proxy_wrap", Target: memosConnectSpaceGetSpaceInvitationProcedure, Scope: ratelimit.ScopeAuthenticated},
 		{Method: http.MethodPost, Path: "/memos/api/spaces/{parent}/invitations", Flavor: "connect_proxy_wrap", Target: memosConnectSpaceCreateSpaceInvitationProcedure, Scope: ratelimit.ScopeWriteUser},
 		{Method: http.MethodDelete, Path: "/memos/api/spaces/{name}/invitations/{invitation_name}", Flavor: "connect_proxy_wrap", Target: memosConnectSpaceDeleteSpaceInvitationProcedure, Scope: ratelimit.ScopeWriteUser},
 		{Method: http.MethodPost, Path: "/memos/api/spaces/{name}/invitations/{invitation_name}/accept", Flavor: "connect_proxy_wrap", Target: memosConnectSpaceAcceptSpaceInvitationProcedure, Scope: ratelimit.ScopeWriteUser},
@@ -253,6 +254,24 @@ func mountUpstreamMemosRoutes(r *router.Router[*core.RequestEvent], app core.App
 		route := matchMethod(r, entry.Method)(entry.Path, handler)
 		if limiter != nil && entry.Scope != "" {
 			route.BindFunc(restRateLimit(limiter, entry.Scope))
+		}
+		if entry.Scope == ratelimit.ScopeAuthenticated {
+			// A real auth gate.
+			//
+			// The rate-limit scope is a BUDGET, not a gate:
+			// `restRateLimit` only decides whether the caller has
+			// spent their allowance, and an anonymous caller has an
+			// allowance too. The rule engine is the authority on
+			// WHO may read a row, but a route whose collection is
+			// public (the `users` profile list) still needs the
+			// caller to be identified before the handler can
+			// decide what to return.
+			//
+			// `apis.RequireAuth` is PocketBase's own middleware;
+			// `e.Auth` is already populated because PB binds its
+			// `loadAuthToken` middleware globally on the router
+			// (apis/base.go).
+			route.Bind(apis.RequireAuth())
 		}
 	}
 }

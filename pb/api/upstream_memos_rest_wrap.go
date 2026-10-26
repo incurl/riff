@@ -84,6 +84,17 @@ var pathFieldSpecs = map[string]pathWrapSpec{
 		fields: []pathFieldSpec{{from: "name", to: "name", prefix: "users"}},
 	},
 
+	// ---- user notifications ----------------------------------------
+	// The list request takes the parent user; the delete takes the
+	// composed notification resource name.
+	"memos/api/users/{parent}/notifications": {
+		fields: []pathFieldSpec{{from: "parent", to: "parent", prefix: "users"}},
+	},
+	"memos/api/users/{parent}/notifications/{name}": {
+		fields: []pathFieldSpec{{from: "parent", to: "name", prefix: "users"}},
+		append: "name",
+	},
+
 	// ---- user webhooks --------------------------------------------
 	// The signing-secret route carries BOTH the parent and the
 	// webhook name; the Connect request wants one composed
@@ -191,6 +202,13 @@ var pathFieldSpecs = map[string]pathWrapSpec{
 		append: "name",
 	},
 
+	// ---- user space invitations -------------------------------------
+	// The list request takes the parent user; the Connect handler
+	// resolves the user's own pending invitations.
+	"memos/api/users/{parent}/spaceInvitations": {
+		fields: []pathFieldSpec{{from: "parent", to: "parent", prefix: "users"}},
+	},
+
 	// ---- instance settings -----------------------------------------
 	// The setting name is the setting key itself, not a resource
 	// name, so it is injected verbatim.
@@ -242,6 +260,11 @@ var pathNestedSpecs = map[string]pathWrapSpec{
 	"PATCH memos/api/instance/settings/{name}": {
 		fields: []pathFieldSpec{{from: "name", to: "name"}},
 		nested: "setting",
+	},
+	"PATCH memos/api/users/{parent}/notifications/{name}": {
+		fields: []pathFieldSpec{{from: "parent", to: "name", prefix: "users"}},
+		append: "name",
+		nested: "notification",
 	},
 	"PATCH memos/api/users/{parent}/webhooks/{name}": {
 		fields: []pathFieldSpec{{from: "parent", to: "name", prefix: "users"}},

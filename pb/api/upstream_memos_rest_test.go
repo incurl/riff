@@ -53,10 +53,16 @@ func makeTestRouter(t *testing.T, app core.App) http.Handler {
 // handler chain can write to the recorder.
 func eventFactoryFor(app core.App) router.EventFactoryFunc[*core.RequestEvent] {
 	return func(w http.ResponseWriter, r *http.Request) (*core.RequestEvent, router.EventCleanupFunc) {
+		// Populate e.Auth from the context viewer, the role
+		// PocketBase's global loadAuthToken middleware plays on the
+		// real router. The rule engine reads e.Auth, so a test that
+		// wants an authenticated caller has to set it the same way.
+		viewer, _ := r.Context().Value(ctxKeyConnectViewer{}).(*core.Record)
 		return &core.RequestEvent{
 			App:      app,
 			Response: w,
 			Request:  r,
+			Auth:     viewer,
 		}, nil
 	}
 }
@@ -156,6 +162,7 @@ func TestUpstreamMemosRouteTableIncludesSSE(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
 	req := httptest.NewRequest(http.MethodGet, "/memos/api/sse", nil).WithContext(ctx)
+	req = req.WithContext(contextWithViewer(req.Context(), seedAuditUser(t, app, "sseprobe")))
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 	// The SSE handler writes 200 OK and a

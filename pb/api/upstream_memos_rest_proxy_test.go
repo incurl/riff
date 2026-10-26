@@ -155,6 +155,7 @@ func TestConnectProxy_PassesQueryString(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet,
 		"/memos/api/memos?filter=visibility%3D%27PUBLIC%27&page=2&page_size=10", nil)
+	req = req.WithContext(contextWithViewer(req.Context(), seedAuditUser(t, app, "proxyquery")))
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
