@@ -34,6 +34,12 @@ func init() {
 		users.Fields.Add(&core.TextField{
 			Name: "password_hash",
 			Max:  200,
+			// Hidden so the bcrypt digest is never exported.
+			// PB's `password` field is Hidden for the same
+			// reason; without this the Memos-shaped
+			// pb_records_crud surface would hand the digest
+			// to any caller that can read a user row.
+			Hidden: true,
 		})
 		return txApp.Save(users)
 	}, func(txApp core.App) error {

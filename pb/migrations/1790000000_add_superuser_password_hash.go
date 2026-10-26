@@ -34,6 +34,9 @@ func init() {
 		superusers.Fields.Add(&core.TextField{
 			Name: "password_hash",
 			Max:  200,
+			// Hidden so the bcrypt digest is never exported; see
+			// migration 1710000001 for the same field on `users`.
+			Hidden: true,
 		})
 		return txApp.Save(superusers)
 	}, func(txApp core.App) error {

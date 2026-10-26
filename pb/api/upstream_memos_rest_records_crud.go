@@ -97,7 +97,7 @@ func crudList(e *core.RequestEvent, app core.App, collection string) error {
 	total, _ := app.CountRecords(collection, dbx.NewExp(filter))
 	items := make([]map[string]any, 0, len(records))
 	for _, r := range records {
-		items = append(items, recordToJSON(r))
+		items = append(items, recordToJSON(r, e.Auth))
 	}
 	return e.JSON(http.StatusOK, map[string]any{
 		"items":       items,
@@ -113,7 +113,7 @@ func crudGet(e *core.RequestEvent, app core.App, collection, id string) error {
 	if err != nil {
 		return crudError(e, http.StatusNotFound, "record not found")
 	}
-	return e.JSON(http.StatusOK, recordToJSON(rec))
+	return e.JSON(http.StatusOK, recordToJSON(rec, e.Auth))
 }
 
 // crudCreate reads a JSON body and saves a new record.
@@ -141,7 +141,7 @@ func crudCreate(e *core.RequestEvent, app core.App, collection string) error {
 	if err := app.Save(rec); err != nil {
 		return crudError(e, http.StatusBadRequest, err.Error())
 	}
-	return e.JSON(http.StatusOK, recordToJSON(rec))
+	return e.JSON(http.StatusOK, recordToJSON(rec, e.Auth))
 }
 
 // crudUpdate reads a JSON body and updates an existing
@@ -162,7 +162,7 @@ func crudUpdate(e *core.RequestEvent, app core.App, collection, id string) error
 	if err := app.Save(rec); err != nil {
 		return crudError(e, http.StatusBadRequest, err.Error())
 	}
-	return e.JSON(http.StatusOK, recordToJSON(rec))
+	return e.JSON(http.StatusOK, recordToJSON(rec, e.Auth))
 }
 
 // crudDelete removes a record by id. Returns 204 on
@@ -187,23 +187,59 @@ func crudDelete(e *core.RequestEvent, app core.App, collection, id string) error
 // collection-defined fields, and an empty
 // "expand" object the client can fill with
 // ?expand=field requests.
-func recordToJSON(rec *core.Record) map[string]any {
-	out := map[string]any{
-		"id":             rec.Id,
-		"collectionId":   rec.Collection().Id,
-		"collectionName": rec.Collection().Name,
-		"created":        rec.GetDateTime("created").String(),
-		"updated":        rec.GetDateTime("updated").String(),
-		"expand":         map[string]any{},
+//
+// The projection delegates to PocketBase's own
+// [core.Record.PublicExport], which redacts the
+// fields PB considers unsafe for a public response:
+//
+//   - `password` — always deleted
+//   - `tokenKey`  — always deleted; it is half of the
+//     JWT signing key (core/record_tokens.go), so
+//     exposing it would let an attacker mint tokens
+//   - `email`    — deleted unless the record's
+//     `emailVisibility` is true
+//   - every field marked `Hidden: true` — e.g. the
+//     `token_hash` of a personal access token and the
+//     `signing_secret` of a webhook
+//
+// A hand-rolled field walk leaks all of them: the
+// previous implementation projected EVERY collection
+// field through rec.Get() and returned the raw
+// values, so an anonymous GET on /memos/api/users
+// returned every user's email, tokenKey and password
+// hash.
+//
+// viewer is the authenticated caller (nil for an
+// anonymous request). The record's owner always sees
+// their own email, which is what PocketBase's own
+// record API does (apis/record_helpers.go:465); every
+// other record's email is governed by the
+// `emailVisibility` flag.
+func recordToJSON(rec *core.Record, viewer *core.Record) map[string]any {
+	// Project a copy: IgnoreEmailVisibility mutates the record, and
+	// the same record is projected more than once (a list projects
+	// every row; the owner check and the export must not leak into
+	// each other). Fresh() resets the visibility flags and keeps the
+	// current field values.
+	rec = rec.Fresh()
+	if viewer != nil && viewer.Id == rec.Id {
+		// The owner sees their own email.
+		rec.IgnoreEmailVisibility(true)
 	}
-	// Project every non-meta field. The collection
-	// schema is the source of truth for which
-	// fields exist; we walk it instead of rec
-	// because the latter is a generic key/value
-	// store with no schema awareness.
-	for _, f := range rec.Collection().Fields {
-		out[f.GetName()] = rec.Get(f.GetName())
+	out := rec.PublicExport()
+
+	// PublicExport omits `expand` when the record has no
+	// expansion, but the Memos clients expect the key to
+	// be present (they fill it from ?expand=field).
+	if _, ok := out[core.FieldNameExpand]; !ok {
+		out[core.FieldNameExpand] = map[string]any{}
 	}
+
+	// PublicExport renders the autodate fields through
+	// their own MarshalJSON, which formats them as
+	// "2006-01-02 15:04:05.000Z" — the same layout
+	// rec.GetDateTime(...).String() produces, so the
+	// values need no adjustment.
 	return out
 }
 
