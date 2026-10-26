@@ -21,6 +21,12 @@
 # Layout (all on :80 - Fly's edge terminates TLS, see fly.toml):
 #
 #   https://<host>/                         ->  static site at /var/www/site/
+#   https://<host>/youtube/*                ->  the user-facing download
+#                                                tree at /youtube/ (a
+#                                                separate directory from
+#                                                the static site; the
+#                                                operator drops files in
+#                                                it to publish downloads)
 #   https://<host>/community/*              ->  riff on 127.0.0.1:8090
 #                                                (prefix is stripped by
 #                                                handle_path so riff sees
@@ -77,7 +83,7 @@
 	encode zstd gzip
 
 	# Caddy evaluates handle blocks in declaration order; the first
-	# matcher that matches wins. We declare four, in this order:
+	# matcher that matches wins. We declare five, in this order:
 	#   1. exact /community      -> 308 to /community/, so the SPA's
 	#                               relative URL resolution finds
 	#                               /community/assets/... instead of
@@ -93,10 +99,12 @@
 	#                               (so a new /blog under the static
 	#                               site still answers as itself, not
 	#                               as a SPA redirect).
-	#   4. anything else         -> file_server for the static site.
+	#   4. /youtube/*            -> file_server for the user-facing
+	#                               download tree.
+	#   5. anything else         -> file_server for the static site.
 	#
 	# The bare-`handle` at the end is a catch-all and is evaluated
-	# only when the previous three blocks do not match. Putting
+	# only when the previous four blocks do not match. Putting
 	# `redir` outside any `handle` block would be evaluated AFTER
 	# the catch-all and never see the request, because file_server
 	# would already have served a 404 for /community (no trailing
@@ -141,13 +149,32 @@
 	# Caddy's redir {uri} placeholder preserves the query string,
 	# so /auth?redirect=%2F becomes /community/auth?redirect=%2F.
 	@spa {
-		not path / /community /community/* /assets /assets/* /docs /docs/* /download /download/* /firmware /firmware/* /hardware /hardware/* /reader /reader/* /workflow /workflow/* /favicon.svg /CNAME /index.html
+		not path / /community /community/* /assets /assets/* /docs /docs/* /download /download/* /firmware /firmware/* /hardware /hardware/* /reader /reader/* /workflow /workflow/* /youtube /youtube/* /favicon.svg /CNAME /index.html
 	}
 	handle @spa {
 		redir * /community{uri} 308
 	}
 
-	# 4. Everything else: the static site. file_server handles
+	# 4. /youtube/*: the user-facing download tree. A separate
+	# directory from the static site, served by its own file_server, so
+	# an operator can publish files for end users to download without
+	# rebuilding the image (the Dockerfile creates it writable by the
+	# nonroot user).
+	#
+	# This block MUST come before the catch-all below, or the static
+	# site's file_server would answer /youtube/* first and 404 on every
+	# download.
+	handle /youtube/* {
+		root * /youtube
+		# Strip the /youtube prefix before the file lookup, or the
+		# path would be resolved as /youtube/youtube/<file>. Caddy's
+		# file_server joins the (unstripped) request path onto the
+		# root, so the prefix has to come off first.
+		uri strip_prefix /youtube
+		file_server
+	}
+
+	# 5. Everything else: the static site. file_server handles
 	# index.html fallbacks (so /about/ resolves to /about/index.html)
 	# and Content-Type detection. 404s are intentional: a path that
 	# doesn't match a file in the site tree is a real miss.

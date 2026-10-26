@@ -2,6 +2,8 @@
 #
 # Routing:
 #   https://${SITE_DOMAIN}/community/...  ->  riff on localhost:8090
+#   https://${SITE_DOMAIN}/youtube/...    ->  the user-facing download
+#                                             tree at /youtube/
 #   https://${SITE_DOMAIN}/...            ->  static site at /var/www/site/
 #
 # Caddy auto-issues a Let's Encrypt cert when the request host matches
@@ -43,6 +45,25 @@
 			header_up X-Forwarded-For {remote_host}
 			header_up X-Forwarded-Proto {scheme}
 		}
+	}
+
+	# /youtube/* is the user-facing download tree: a separate directory
+	# from the static site, served by its own file_server. It exists so
+	# an operator can publish files for end users to download without
+	# rebuilding the image (the directory is created writable by the
+	# nonroot user in the Dockerfile).
+	#
+	# This block MUST come before the catch-all below, or the static
+	# site's file_server would answer /youtube/* first and 404 on every
+	# download.
+	handle /youtube/* {
+		root * /youtube
+		# Strip the /youtube prefix before the file lookup, or the
+		# path would be resolved as /youtube/youtube/<file>. Caddy's
+		# file_server joins the (unstripped) request path onto the
+		# root, so the prefix has to come off first.
+		uri strip_prefix /youtube
+		file_server
 	}
 
 	# Everything else: serve the static site from /var/www/site.

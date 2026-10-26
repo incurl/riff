@@ -150,12 +150,19 @@ RUN set -eux; \
       su-exec=0.2-r3
 
 # Create the runtime tree. /var/www/site holds the baked-in static
-# site; /etc/caddy and /etc/supervisord hold the configs; /run is
-# where supervisord puts its socket and pid file.
+# site; /youtube holds the user-facing download tree that caddy serves
+# alongside it; /etc/caddy and /etc/supervisord hold the configs; /run
+# is where supervisord puts its socket and pid file.
+#
+# /youtube is created owned by the nonroot user, and it is writable at
+# runtime so an operator (or a script that drops files into it) can
+# publish downloads without rebuilding the image. It is NOT baked with
+# any content: the image ships an empty /youtube/.
 RUN addgroup -g 10001 -S nonroot && \
     adduser -u 10001 -S -G nonroot -h /var/opt/riff nonroot && \
-    mkdir -p /var/opt/riff /usr/local/riff /var/www/site /etc/caddy /etc/supervisord /run && \
-    chown -R nonroot:nonroot /var/opt/riff
+    mkdir -p /var/opt/riff /usr/local/riff /var/www/site /youtube /etc/caddy /etc/supervisord /run && \
+    chown -R nonroot:nonroot /var/opt/riff && \
+    chown -R nonroot:nonroot /youtube
 
 # Copy the riff binary and the original riff entrypoint (which handles
 # the UID 0 -> nonroot drop and RIFF_*_FILE env loading). The riff

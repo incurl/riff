@@ -5,6 +5,64 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## `/youtube` is a separate download tree, not a second static site (2026-10-26)
+
+The deploy image serves two file trees from caddy: the baked-in ravine
+static site at `/var/www/site/`, and `/youtube/`, a directory the
+operator fills with files for end users to download. They are separate
+roots on purpose — `/youtube` is **not** a subdirectory of the static
+site, and the static site is not moved into it.
+
+**Why two roots rather than one.** The static site is immutable: it is
+baked into the image from the `ravine` build context and only changes
+when the image is rebuilt. `/youtube` is the opposite: it is meant to
+be edited between deploys. Merging them would mean every new download
+forces a rebuild of the whole site tree.
+
+**`uri strip_prefix /youtube` is load-bearing.** Caddy's `file_server`
+joins the *unstripped* request path onto `root`, so
+
+```caddyfile
+handle /youtube/* {
+    root * /youtube
+    file_server
+}
+```
+
+looks for `/youtube/youtube/<file>` and answers 404 for every
+download. The fix is to strip the prefix first:
+
+```caddyfile
+handle /youtube/* {
+    root * /youtube
+    uri strip_prefix /youtube
+    file_server
+}
+```
+
+This was caught by running caddy against the real config, not by
+reading it — the config validates perfectly either way, and the
+symptom (a 404 on a file that is demonstrably on disk) points at the
+file, not at the routing.
+
+**The `/youtube/*` block must precede the static site's catch-all.**
+Caddy evaluates `handle` blocks in declaration order and the first
+match wins, so a `handle /youtube/*` block placed after the bare
+`handle` would never be reached — the static site's `file_server`
+would answer first and 404.
+
+**`/youtube` is excluded from the SPA redirect matcher.** In
+`Caddyfile.fly.community` the `@spa` matcher 308-redirects every path
+that is not a static-site path to `/community/<path>`. Without
+`/youtube` in its exclusion list, every download would be redirected
+to `/community/youtube/<file>` and 404 on the SPA instead.
+
+**`/youtube` is ephemeral.** The directory is created in the image and
+is empty in it; on Fly.io the container filesystem does not survive a
+deploy, so files placed there are lost unless they are copied in
+through the build context or re-added. A Fly volume would fix that,
+but it costs a line on the bill for a tree that is mostly empty.
+
 ## The Bark extension: bbolt → PocketBase, and the mux conflict it forced (2026-10-26)
 
 `pb/bark/` is a port of [finb/bark-server](https://github.com/Finb/bark-server)
