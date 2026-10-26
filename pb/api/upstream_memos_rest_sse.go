@@ -8,6 +8,8 @@ import (
 
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/pocketbase/pocketbase/tools/subscriptions"
+
+	"github.com/incurl/riff/pb/hooks"
 )
 
 // sseHeartbeatInterval is the cadence at which the SSE
@@ -68,6 +70,12 @@ func sseProxyHandler(app core.App) func(*core.RequestEvent) error {
 		// ticker) and writes each message as a
 		// SSE data frame.
 		client := subscriptions.NewDefaultClient()
+		// Record the caller's identity on the client so the
+		// broadcaster can evaluate the collection's access rule
+		// for THIS subscriber. Without it every subscriber would
+		// receive every event, including the ids of records they
+		// may not read (see pb/hooks/realtime.go).
+		client.Set(hooks.RealtimeClientAuthKey, e.Auth)
 		app.SubscriptionsBroker().Register(client)
 		defer app.SubscriptionsBroker().Unregister(client.Id())
 
