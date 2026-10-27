@@ -171,7 +171,15 @@
 		# file_server joins the (unstripped) request path onto the
 		# root, so the prefix has to come off first.
 		uri strip_prefix /youtube
-		file_server
+		# `browse` renders a directory listing. Without it a
+		# directory with no index file answers 404 — which is what
+		# an EMPTY /youtube/ did, so the download tree was
+		# unreachable until it had at least one file in it.
+		#
+		# It is a sub-directive of file_server, NOT a standalone
+		# one: a bare `browse` fails the Caddyfile parse with
+		# "unrecognized directive: browse".
+		file_server browse
 	}
 
 	# 5. Everything else: the static site. file_server handles
