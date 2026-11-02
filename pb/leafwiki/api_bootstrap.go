@@ -44,8 +44,27 @@ type configResponse struct {
 // unless Options.PublicWrite is set, and LeafWiki's own TOTP / SMTP / git
 // backup / revision features are not ported, so they are reported as
 // disabled instead of pretending to exist.
+//
+// LoginURL / LogoutURL are deliberately EMPTY. In upstream LeafWiki they are
+// "optional URL the frontend redirects to instead of showing the built-in
+// login form" (LoginURL) and "optional URL the frontend redirects to after
+// logout" (LogoutURL) — the escape hatches for pointing the wiki at an
+// external IdP. They are not the wiki's own routes. The SPA branches on them
+// exactly that way:
+//
+//	// ui/leafwiki-ui/src/features/router/router.tsx
+//	{ path: '/login', element: loginUrl ? <ExternalRedirect to={loginUrl} /> : <LoginForm /> }
+//
+// so advertising this wiki's own login page as LoginURL makes /login render
+// `<ExternalRedirect to="/wiki/login">`, which navigates to /wiki/login
+// again — an unbreakable redirect loop with nothing in the console. The
+// built-in LoginForm is the correct path here: it posts to
+// `<prefix>/api/auth/login`, which this package implements
+// (api_auth.go::loginHandler) against PocketBase's users/superusers. The
+// same applies to LogoutURL: with it set, `UserMenu.handleLogout` fires the
+// logout request fire-and-forget and hard-navigates away, so a failed logout
+// leaves the session alive while the browser reloads.
 func (s *Server) configHandler(e *core.RequestEvent) error {
-	continueURL := s.opts.Prefix + "/"
 	return e.JSON(http.StatusOK, configResponse{
 		PublicAccess:            !s.opts.PublicWrite,
 		PublicAccessEnvManaged:  false,
@@ -66,8 +85,8 @@ func (s *Server) configHandler(e *core.RequestEvent) error {
 		SMTPEnabled:             false,
 		TOTPAvailable:           false,
 		HTTPRemoteUserEnabled:   false,
-		LoginURL:                continueURL + "login",
-		LogoutURL:               continueURL,
+		LoginURL:                "",
+		LogoutURL:               "",
 		UserManagementURL:       "",
 		DefaultLanguage:         "en",
 	})

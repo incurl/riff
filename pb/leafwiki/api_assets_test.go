@@ -120,11 +120,40 @@ func TestAPI_ConfigAndHealth(t *testing.T) {
 	assert.True(t, config.PublicAccess)
 	assert.False(t, config.AuthDisabled)
 	assert.True(t, config.EnableLinkRefactor)
-	assert.Equal(t, "/wiki/login", config.LoginURL)
+	// LoginURL/LogoutURL are upstream's OPTIONAL EXTERNAL-URL escape hatches,
+	// not the wiki's own routes. Advertising this wiki's own /login page here
+	// makes the SPA render `<ExternalRedirect to="/wiki/login">` on /login —
+	// an endless redirect loop. Empty means "use the built-in login form",
+	// which posts to /wiki/api/auth/login (implemented in api_auth.go).
+	assert.Empty(t, config.LoginURL)
+	assert.Empty(t, config.LogoutURL)
 
 	health := decodeJSON[healthResponse](t, doJSON(t, handler, http.MethodGet, "/wiki/api/health", nil, nil))
 	assert.Equal(t, "ok", health.Status)
 	assert.Equal(t, "test", health.Version)
 	assert.True(t, health.IndexAvailable)
 	assert.Equal(t, server.Tree().StorageDir(), health.StorageDir)
+}
+
+// TestAPI_ConfigLoginURLIsNotTheLoginPage pins the /wiki/login redirect loop.
+//
+// The SPA renders its /login route as `loginUrl ? <ExternalRedirect
+// to={loginUrl} /> : <LoginForm />`, so any value that points back at the
+// wiki's own /login page makes that page redirect to itself forever. The
+// field must stay empty (or name a genuinely external IdP URL) exactly as it
+// does in upstream LeafWiki, where it defaults to "".
+func TestAPI_ConfigLoginURLIsNotTheLoginPage(t *testing.T) {
+	_, _, handler := newTestAPI(t)
+
+	config := decodeJSON[configResponse](t, doJSON(t, handler, http.MethodGet, "/wiki/api/config", nil, nil))
+
+	for name, value := range map[string]string{"loginUrl": config.LoginURL, "logoutUrl": config.LogoutURL} {
+		if value == "" {
+			continue
+		}
+		// A non-empty value is only legitimate when it leaves this wiki
+		// entirely; a path inside it would bounce the SPA back to itself.
+		assert.NotContains(t, value, "/wiki", "%s must not point back at the wiki's own routes", name)
+		assert.NotContains(t, value, "/login", "%s must not point at the wiki's own login page", name)
+	}
 }

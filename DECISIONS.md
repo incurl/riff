@@ -5,6 +5,54 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## `loginUrl`/`logoutUrl` are external-URL escape hatches, not the wiki's own routes (2026-11-03)
+
+`GET /wiki/api/config` used to advertise the wiki's own login page as
+`loginUrl`:
+
+    LoginURL:  continueURL + "login",   // → "/wiki/login"
+    LogoutURL: continueURL,             // → "/wiki/"
+
+In upstream LeafWiki those two fields are *optional external* URLs and
+default to empty:
+
+    LoginURL  string // Optional URL the frontend redirects to instead of showing the built-in login form
+    LogoutURL string // Optional URL the frontend redirects to after logout
+
+They exist so an operator can point the wiki at an external IdP. The SPA
+branches on them literally:
+
+    // ui/leafwiki-ui/src/features/router/router.tsx
+    { path: '/login', element: loginUrl ? <ExternalRedirect to={loginUrl} /> : <LoginForm /> }
+
+`ExternalRedirect` assigns `window.location.href = to`, so advertising
+`/wiki/login` as `loginUrl` made that page reload itself forever —
+`/wiki/login` → `ExternalRedirect to="/wiki/login"` → `/wiki/login` …
+The loop is entirely client-side, which is why the server kept answering
+200 with a perfectly good SPA shell and nothing appeared in the console.
+
+**The fix is to leave both empty.** With `loginUrl: ""` the router
+renders LeafWiki's own `LoginForm`, which posts
+`{identifier, password}` to `<prefix>/api/auth/login` — a route this port
+already implements (`api_auth.go::loginHandler`, backed by PocketBase's
+`users`/`_superusers`). With `logoutUrl: ""`, `UserMenu.handleLogout`
+uses the in-app path (`await logout(); navigate('/login')`) instead of
+firing `authAPI.logout()` fire-and-forget and hard-navigating away, which
+could leave a live session behind while the browser reloaded.
+
+Verified end-to-end against a live instance with `loginUrl`/`logoutUrl`
+empty: `POST /wiki/api/auth/login` answered 200 and set
+`leafwiki_access` + `leafwiki_csrf`, `GET /wiki/api/auth/me` returned the
+user, and `POST /wiki/api/pages` with the `X-CSRF-Token` the SPA echoes
+from the `leafwiki_csrf` cookie answered 201. So the built-in form is a
+complete replacement for the external-redirect branch, not a fallback.
+
+`TestAPI_ConfigLoginURLIsNotTheLoginPage` pins it: any non-empty value
+that names a path inside the wiki fails the test, so a future
+"helpful" refill of `continueURL + "login"` is caught at `go test` time.
+The old `TestAPI_ConfigAndHealth` had asserted the buggy
+`"/wiki/login"` value, which is how the loop shipped.
+
 ## An inline image is stored root-relative, so the browser must re-anchor it (2026-11-03)
 
 An inline ("insert image") memo picture is persisted in the memo's
