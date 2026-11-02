@@ -130,22 +130,49 @@ login" mode: anonymous writes are accepted and `/api/config` reports
 
 ## Front end
 
-`ui/index.html` is a small, dependency-free **fallback reader** (tree + raw
-Markdown), tracked in git so `go build` never needs a Node toolchain. To use the
-real UI, drop LeafWiki's build into `ui/dist/` (`dist/` is gitignored because it
-is build output):
+The wiki's UI is **LeafWiki's own React SPA**, built from the upstream
+repository's `ui/leafwiki-ui` and dropped into `ui/dist/` (`dist/` is gitignored
+because it is build output). One command does it:
 
 ```bash
-# once, in the LeafWiki checkout
-cd ui/leafwiki-ui && npm ci && npm run build
-
-# then copy the build next to the fallback
-rm -rf pb/leafwiki/ui/dist && cp -r ui/leafwiki-ui/dist pb/leafwiki/ui/dist
+scripts/build_wiki_spa.sh [/path/to/leafwiki]
 ```
 
-`index.html` is served with LeafWiki's template tokens substituted
-(`{{__BASE_PATH__}}` -> `/wiki`, `{{__PAGE_TITLE__}}`, `{{__FAVICON_HREF__}}`,
-`{{__BODY__}}`), so a build made for a base-path deployment works unchanged.
+The script installs the dependencies (Node 26 — LeafWiki's `.nvmrc`), runs
+`npm run build`, and copies the result next to the fallback. `go build ./...`
+then bakes it into the binary through the `//go:embed all:ui` directive in
+`ui_embed.go`. CI does the same in the `build-wiki-spa` job and downloads the
+artifact into `pb/leafwiki/ui/dist` before the binary and image builds.
+
+`ui/index.html` is a small, dependency-free **fallback reader** (tree + raw
+Markdown), tracked in git so a fresh clone compiles and serves *something* even
+without a built bundle. A copied-in build takes precedence over it.
+
+### The base-path rewrite
+
+LeafWiki's Vite build uses `base: "./"`, so the built `index.html` references
+its chunks relatively:
+
+```html
+<script type="module" crossorigin src="./static/index-D_z3loQL.js"></script>
+```
+
+A relative reference resolves against the **current URL**, so on a deep link
+such as `/wiki/guides/setup` the browser would request
+`/wiki/guides/static/index-D_z3loQL.js` — which is the SPA shell, not the
+script. The page renders blank with nothing in the console.
+
+Upstream avoids this by rewriting `"./static/` to `"<basePath>/static/` while
+rendering the shell (`internal/http/shell.go`); `renderIndex` does the same, so
+the built SPA works behind `/wiki` **without a rebuild**.
+
+The template tokens are substituted the same way upstream does it:
+`{{__BASE_PATH__}}` -> `/wiki` (the SPA reads it from the `base-path` meta tag
+and uses it for every API call and route), `{{__FAVICON_HREF__}}` ->
+`/wiki/favicon.svg`, `{{__PAGE_TITLE__}}` and `{{__SITE_NAME__}}` -> `Wiki`,
+and `{{__BODY__}}` -> empty (upstream server-renders the shell's contents
+there; this port has no server-side rendering and React mounts into the empty
+div).
 
 ## Not ported
 

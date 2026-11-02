@@ -75,7 +75,7 @@ func TestAPI_AssetUploadListAndServe(t *testing.T) {
 }
 
 func TestAPI_ServesTheSPAWithPrefixSubstitution(t *testing.T) {
-	_, _, handler := newTestAPI(t)
+	server, _, handler := newTestAPI(t)
 
 	for _, target := range []string{"/wiki/", "/wiki/some/deep/link"} {
 		recorder := httptest.NewRecorder()
@@ -88,7 +88,22 @@ func TestAPI_ServesTheSPAWithPrefixSubstitution(t *testing.T) {
 		assert.Contains(t, strings.ToLower(html), "<!doctype html>")
 		assert.NotContains(t, html, tokenBasePath, "the mount prefix must be substituted")
 		assert.Contains(t, html, `content="/wiki"`, "the SPA must see the mount prefix")
-		assert.Contains(t, html, `id="tree"`, "the wiki bundle must be served, not riff's SPA catch-all")
+
+		// The served document must be the LeafWiki bundle, not riff's SPA
+		// catch-all. The bundle's entry chunk is referenced through the
+		// rewritten, absolute "/wiki/static/…" path; the fallback reader
+		// (used when no build was copied in) has a "#tree" element instead.
+		//
+		// The embed is baked at COMPILE time, so the assertion follows the
+		// embedded tree rather than the working directory: a checkout
+		// without a built bundle serves the fallback reader, and one with
+		// it serves the real SPA.
+		if server.ui.dist != nil {
+			assert.Contains(t, html, `src="/wiki/static/`,
+				"the wiki bundle must be served with absolute asset paths")
+		} else {
+			assert.Contains(t, html, `id="tree"`, "the fallback reader must be served when no bundle is embedded")
+		}
 	}
 
 	// The bare prefix redirects to the trailing-slash form.

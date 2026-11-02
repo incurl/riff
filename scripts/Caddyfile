@@ -2,6 +2,9 @@
 #
 # Routing:
 #   https://${SITE_DOMAIN}/community/...  ->  riff on localhost:8090
+#   https://${SITE_DOMAIN}/wiki/...        ->  the wiki module, also on
+#                                             riff (a sibling of
+#                                             /community/, not a child)
 #   https://${SITE_DOMAIN}/youtube/...    ->  the user-facing download
 #                                             tree at /youtube/
 #   https://${SITE_DOMAIN}/...            ->  static site at /var/www/site/
@@ -42,6 +45,25 @@
 			# PocketBase uses X-Forwarded-For for the client IP; pass it
 			# through so the rate limiter and the SSRF guards see the
 			# real address and not the caddy loopback.
+			header_up X-Forwarded-For {remote_host}
+			header_up X-Forwarded-Proto {scheme}
+		}
+	}
+
+	# /wiki/* is the wiki module, a SIBLING of /community/ — the public
+	# URL is https://<host>/wiki/, not https://<host>/community/wiki/.
+	#
+	# The path is NOT rewritten: riff mounts the wiki at /wiki inside
+	# its own listener (pb/leafwiki's default prefix), so the prefix
+	# has to reach it. The wiki's SPA builds its own /wiki/api/... and
+	# /wiki/static/... URLs from the {{__BASE_PATH__}} the server
+	# renders, so nothing here has to rewrite them either.
+	@wiki {
+		path /wiki
+		path /wiki/*
+	}
+	handle @wiki {
+		reverse_proxy localhost:8090 {
 			header_up X-Forwarded-For {remote_host}
 			header_up X-Forwarded-Proto {scheme}
 		}

@@ -55,6 +55,10 @@ func (s *Server) mount(r *router.Router[*core.RequestEvent]) {
 	// --- attachment bytes ---------------------------------------------
 	r.GET(p+"/assets/{pageId}/{filename}", s.serveAssetHandler)
 
+	// --- SPA build ----------------------------------------------------
+	// The built SPA's chunks and favicon. See mountStatic.
+	s.mountStatic(r)
+
 	// --- search, tags, links ------------------------------------------
 	r.GET(api+"/search", s.searchHandler)
 	r.GET(api+"/search/status", s.searchStatusHandler)

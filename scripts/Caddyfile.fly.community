@@ -31,6 +31,14 @@
 #                                                (prefix is stripped by
 #                                                handle_path so riff sees
 #                                                its normal paths)
+#   https://<host>/wiki/*                  ->  the wiki module, ALSO on
+#                                                riff, but at the SAME
+#                                                level as /community/ (a
+#                                                sibling, not a child).
+#                                                The path is NOT rewritten:
+#                                                riff mounts the wiki at
+#                                                /wiki internally, so the
+#                                                prefix must reach it.
 #   https://<host>/community (no slash)     ->  308 redirect to /community/
 #                                                so the SPA never boots
 #                                                against a parent-only URL
@@ -124,6 +132,27 @@
 		import proxy
 	}
 
+	# 2b. /wiki/*: the wiki module, mounted by riff at /wiki INSIDE the
+	# listener. The path therefore has to reach it unchanged — this
+	# block uses `handle`, NOT `handle_path`, because handle_path
+	# would strip the /wiki prefix and riff would answer /api/...
+	# instead of /wiki/api/... (every wiki route is under /wiki:
+	# /wiki/api/tree, /wiki/api/pages, /wiki/static/…, /wiki/assets/…).
+	#
+	# This is what makes /wiki a SIBLING of /community rather than a
+	# child: the public URL is https://<host>/wiki/, not
+	# https://<host>/community/wiki/. The wiki's SPA reads its mount
+	# prefix from the base-path meta tag the server renders (pb/leafwiki
+	# substitutes {{__BASE_PATH__}} with the prefix it is mounted at),
+	# so it builds /wiki/api/... calls and /wiki/static/... asset URLs
+	# on its own — nothing here has to rewrite them.
+	handle /wiki {
+		redir * /wiki/ 308
+	}
+	handle /wiki/* {
+		import proxy
+	}
+
 	# 3. SPA-only paths: redirect to /community/<path>. The named
 	# matcher @spa excludes anything that already has a more specific
 	# handler above (/community, /community/*) and the static site's
@@ -148,8 +177,15 @@
 	#
 	# Caddy's redir {uri} placeholder preserves the query string,
 	# so /auth?redirect=%2F becomes /community/auth?redirect=%2F.
+	#
+	# /wiki and /wiki/* are also excluded. The wiki's own handle blocks
+	# above already catch them (Caddy evaluates handle blocks in
+	# declaration order and the first match wins), so this is
+	# belt-and-braces rather than the thing that makes it work — but if
+	# the wiki blocks are ever moved below this one, the exclusion is
+	# what keeps /wiki from being 308'd to /community/wiki.
 	@spa {
-		not path / /community /community/* /assets /assets/* /docs /docs/* /download /download/* /firmware /firmware/* /hardware /hardware/* /reader /reader/* /workflow /workflow/* /youtube /youtube/* /favicon.svg /CNAME /index.html
+		not path / /community /community/* /wiki /wiki/* /assets /assets/* /docs /docs/* /download /download/* /firmware /firmware/* /hardware /hardware/* /reader /reader/* /workflow /workflow/* /youtube /youtube/* /favicon.svg /CNAME /index.html
 	}
 	handle @spa {
 		redir * /community{uri} 308

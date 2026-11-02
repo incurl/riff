@@ -5,6 +5,101 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## The wiki is a SIBLING of /community/, and its prefix is never rewritten (2026-11-03)
+
+`/wiki` sits at the same level as `/community`:
+
+    https://<host>/wiki/          ->  the wiki
+    https://<host>/community/     ->  the riff SPA + Connect/gRPC surface
+
+It is **not** `/community/wiki/`. The reason is structural rather than
+cosmetic: the wiki is a module *inside* riff (`pb/leafwiki/`), mounted at
+`/wiki` on riff's own listener (`pb/leafwiki/register.go`'s `defaultPrefix`),
+so the path prefix has to reach riff intact. Two rules follow.
+
+**The proxy must not strip the prefix.** `scripts/Caddyfile.fly.community`
+proxies `/community/*` with `handle_path`, which *strips* the prefix — that
+is correct there, because riff serves the SPA at `/` and the SPA's own
+Connect base URL comes from `VITE_BASE_PATH=/community/` (`web/src/connect.ts`).
+The wiki is different: riff serves it at `/wiki`, so the `/wiki` block uses
+plain `handle` and forwards the path **verbatim**. Using `handle_path` there
+would make riff answer `/api/tree` instead of `/wiki/api/tree`, and every
+wiki route (they are all under the prefix) would 404.
+
+**The wiki's own URLs are absolute already, so no rewriting is needed.** The
+SPA reads its mount prefix from the `base-path` meta tag the server renders
+(`{{__BASE_PATH__}}` → `/wiki`) and builds `/wiki/api/...` calls and
+`/wiki/static/...` asset URLs from it. That is why the proxy is a plain
+pass-through: caddy has no idea the wiki exists, and it does not need to.
+
+The `@spa` matcher in `Caddyfile.fly.community` (the "redirect unknown paths
+to the SPA" rule) also excludes `/wiki` and `/wiki/*`. The wiki's own
+`handle` blocks already catch those paths because Caddy evaluates handle
+blocks in declaration order and the first match wins — but the exclusion is
+what keeps a *future* reordering of the blocks from 308-ing `/wiki` into
+`/community/wiki`, which is the exact nesting this layout exists to avoid.
+
+`scripts/Caddyfile` (the ACME variant) needed the same treatment: without a
+`@wiki` matcher, `/wiki/*` fell through to the static site's `file_server`
+catch-all and 404'd. `scripts/Caddyfile.fly` needed nothing — riff owns the
+whole hostname there, so its catch-all already proxies `/wiki/*`.
+
+Verified against a live riff behind a real caddy (all three variants):
+`/wiki/` and `/community/` both answer 200 side by side, `GET /wiki` 308s to
+`/wiki/` and **never** to `/community/wiki/`, `/wiki/api/health` answers
+`application/json`, and the rendered shell carries
+`base-path" content="/wiki"` with absolute `/wiki/static/…` asset URLs.
+
+## The wiki SPA is LeafWiki's own build, and the shell rewrite is load-bearing (2026-11-03)
+
+The wiki's front end is **not** a riff-written SPA: it is LeafWiki's own
+React application (`ui/leafwiki-ui` upstream), built with `npm run build` and
+dropped into `pb/leafwiki/ui/dist`. Three decisions follow from that.
+
+**The bundle is built, not vendored.** `pb/leafwiki/ui/dist` is gitignored
+(`.gitignore` ignores every `dist/`), so the `//go:embed` directive is
+`all:ui` — the whole `ui` directory — and not `all:ui/dist`: the latter
+would fail to compile in a fresh clone, because the directory does not exist
+until someone builds the SPA. The tracked `ui/index.html` is a
+dependency-free fallback reader that the embed serves when no bundle was
+built, so a clone always compiles and always serves *something*. CI builds
+the bundle in a `build-wiki-spa` job and downloads the artifact into
+`pb/leafwiki/ui/dist` before the binary and image builds, exactly as the
+main SPA's `build-frontend` job does for `server/frontend/dist`.
+
+**The base-path rewrite is the load-bearing detail.** LeafWiki's Vite build
+uses `base: "./"`, so the built `index.html` references its chunks
+*relatively*:
+
+    <script type="module" crossorigin src="./static/index-D_z3loQL.js"></script>
+
+A relative reference resolves against the **current URL**. On a deep link
+such as `/wiki/guides/setup` the browser therefore requests
+`/wiki/guides/static/index-D_z3loQL.js` — which this server answers with the
+**SPA shell** (200, `text/html`), not the script. The page renders blank and
+**nothing appears in the console**: the script tag resolved, the response
+was a 200, and the browser just ignored the HTML. Measured:
+
+    GET /wiki/guides/static/index-DnotSRoj.js  -> 200  text/html          997 bytes  (the shell)
+    GET /wiki/static/index-DnotSRoj.js          -> 200  text/javascript  1269235 bytes  (the script)
+
+Upstream LeafWiki avoids this by rewriting `"./static/` to
+`"<basePath>/static/` while rendering the shell (`internal/http/shell.go`),
+and this port does the same in `renderIndex`. That is why the built SPA
+works behind `/wiki` **without a rebuild** — no Vite base-path
+configuration, no second build for the Fly layout. The rewrite is pinned by
+`TestRenderIndex_RewritesTheViteBasePath`, because the failure mode it
+prevents is invisible: a blank page, a 200, and a clean console.
+
+**The template tokens are substituted the way upstream does it.**
+`{{__BASE_PATH__}}` becomes the mount prefix (the SPA reads it from the
+`base-path` meta tag and uses it for every API call and for the router's
+`basename`), `{{__FAVICON_HREF__}}` becomes `<prefix>/favicon.svg`,
+`{{__PAGE_TITLE__}}` and `{{__SITE_NAME__}}` become the wiki's name, and
+`{{__BODY__}}` becomes empty — upstream server-renders the shell's contents
+there, and this port has no server-side rendering, so React mounts into the
+empty div.
+
 ## Attachment downloads are logged to stdout, not to PocketBase's log table (2026-11-03)
 
 A MoeMemos client that cannot render an attachment has no diagnostic

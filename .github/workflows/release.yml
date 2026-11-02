@@ -121,9 +121,49 @@ jobs:
           path: server/frontend/dist
           retention-days: 1
 
+  build-wiki-spa:
+    name: Build Wiki SPA
+    needs: [prepare, upgrade-smoke]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout LeafWiki
+        uses: actions/checkout@v6
+        with:
+          repository: perber/leafwiki
+          path: leafwiki
+          ref: v0.13.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "26"
+          cache: npm
+          cache-dependency-path: leafwiki/ui/leafwiki-ui/package-lock.json
+
+      - name: Install dependencies
+        working-directory: leafwiki/ui/leafwiki-ui
+        run: npm ci --ignore-scripts
+
+      - name: Build the wiki SPA
+        working-directory: leafwiki/ui/leafwiki-ui
+        # LeafWiki's Vite build uses base "./", so the emitted index.html
+        # references its chunks relatively ("./static/…"). riff's shell
+        # handler rewrites those to the mount prefix at serve time, so the
+        # bundle needs no base-path configuration here.
+        env:
+          APP_VERSION: ${{ steps.version.outputs.version }}
+        run: npm run build
+
+      - name: Upload the wiki SPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wiki-spa-dist
+          path: leafwiki/ui/leafwiki-ui/dist
+          retention-days: 1
+
   build-binaries:
     name: Build ${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.goarm && format('v{0}', matrix.goarm) || '' }}
-    needs: [prepare, build-frontend]
+    needs: [prepare, build-frontend, build-wiki-spa]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -157,6 +197,12 @@ jobs:
         with:
           name: frontend-dist
           path: server/frontend/dist
+
+      - name: Download the wiki SPA artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: wiki-spa-dist
+          path: pb/leafwiki/ui/dist
 
       - name: Build binary
         env:
@@ -267,7 +313,7 @@ jobs:
 
   build-push:
     name: Build Image ${{ matrix.platform }}
-    needs: [prepare, build-frontend]
+    needs: [prepare, build-frontend, build-wiki-spa]
     if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
@@ -289,6 +335,12 @@ jobs:
         with:
           name: frontend-dist
           path: server/frontend/dist
+
+      - name: Download the wiki SPA artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: wiki-spa-dist
+          path: pb/leafwiki/ui/dist
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
