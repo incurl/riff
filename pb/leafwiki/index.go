@@ -1,24 +1,12 @@
 package leafwiki
 
 import (
-	"encoding/json"
 	"log/slog"
+	"slices"
 	"strings"
+	"sync"
 
-	"github.com/pkg/errors"
 	"github.com/pocketbase/pocketbase/core"
-	"github.com/pocketbase/pocketbase/tools/types"
-)
-
-// Collection names. They live in their own migration
-// (pb/migrations/1940000000_create_leafwiki_tables.go) and are deliberately
-// prefixed so they do not collide with riff's own collections.
-const (
-	// pagesCollection is LeafWiki's page/search/tag/property index.
-	pagesCollection = "leafwiki_pages"
-
-	// linksCollection is LeafWiki's backlink index.
-	linksCollection = "leafwiki_links"
 )
 
 // Link states, mirroring LeafWiki's LinkState.
@@ -31,7 +19,11 @@ const (
 // title (a [[WikiLink]]) instead of by route path.
 const wikilinkSentinelPrefix = "wikilink:"
 
-// indexedPage is one row of the page index.
+// indexStoreKey is the app.Store() key the index lives under. The prefix
+// matches the rest of riff's per-app state (see pb/connect/identity_cache.go).
+const indexStoreKey = "riff.leafwiki_index"
+
+// indexedPage is one entry of the page index.
 type indexedPage struct {
 	PageID       string
 	Path         string
@@ -51,13 +43,75 @@ type indexedPage struct {
 	LastAuthorID string
 }
 
-// Index is the PocketBase-backed replacement for LeafWiki's SQLite indexes
+// nodeRef is the body-free projection of a tree node: everything the index can
+// learn from the reconstructed tree WITHOUT opening the page file.
+//
+// This is what makes the sync incremental. reconstruct() already parses every
+// page's frontmatter to build the tree, so the version, path, title, kind,
+// pinned flag and position of every node are in hand before the index runs. A
+// node whose projection matches its cached entry cannot have changed, so its
+// body is never read — an edit to one page touches one page, not the wiki.
+type nodeRef struct {
+	ID       string
+	Path     string
+	Slug     string
+	Title    string
+	Kind     NodeKind
+	Version  string
+	Pinned   bool
+	Position int
+}
+
+// indexState is the per-app, in-memory index.
+//
+// Everything here is derived from the Markdown tree, which is the source of
+// truth, so the whole thing can be dropped and rebuilt at any time. It is
+// deliberately NOT persisted: the tree is re-read from disk on every load and
+// the index is rebuilt from it, so a database would only ever be written and
+// never read across a restart.
+//
+// Locking: the tree's own mutex serialises every caller (index methods are
+// only reached through *Tree), but the state is also reachable through
+// app.Store(), so it keeps its own lock rather than relying on that.
+type indexState struct {
+	mu sync.RWMutex
+
+	// pages is the page index, keyed by page id.
+	pages map[string]indexedPage
+
+	// pathToID and titleToIDs resolve a link target to the page that owns
+	// it. They are maintained alongside pages so a single page's rows can be
+	// re-derived without walking the whole index.
+	pathToID   map[string]string
+	titleToIDs map[string][]string
+
+	// links holds each page's raw outgoing targets, parsed from its body.
+	// Keeping them means a path or title change only has to re-resolve, not
+	// re-parse every page.
+	links map[string][]LinkTarget
+
+	// rows holds each page's derived backlink rows (state already resolved).
+	rows map[string][]linkRow
+}
+
+// newIndexState returns an empty index.
+func newIndexState() *indexState {
+	return &indexState{
+		pages:      map[string]indexedPage{},
+		pathToID:   map[string]string{},
+		titleToIDs: map[string][]string{},
+		links:      map[string][]LinkTarget{},
+		rows:       map[string][]linkRow{},
+	}
+}
+
+// Index is the in-memory replacement for LeafWiki's SQLite indexes
 // (pages/search/tags/properties plus links).
 //
-// The index is a cache: [Index.Sync] reconciles it with the Markdown tree, and
-// everything it holds can be dropped and rebuilt. That is why a failed write
-// is logged rather than returned — a stale search row must never stop a page
-// from loading.
+// The index is a cache: [index.syncTree] reconciles it with the Markdown tree,
+// and everything it holds can be dropped and rebuilt. That is why a page that
+// cannot be read is logged and skipped rather than failing the request — a
+// stale search entry must never stop a page from loading.
 type index struct {
 	app core.App
 	log *slog.Logger
@@ -68,73 +122,154 @@ func newIndex(app core.App) *index {
 	return &index{app: app, log: slog.Default().With("component", "leafwiki-index")}
 }
 
-// available reports whether the collections exist. A PocketBase project that
-// imports this package without its migration still runs; it simply has no
-// index.
+// available reports whether the index can be used. It is always true for a
+// bound index: the index lives in the app's own store, so there is no
+// collection to be missing and no migration to have been forgotten.
 func (i *index) available() bool {
-	if i == nil || i.app == nil {
-		return false
-	}
-	if _, err := i.app.FindCollectionByNameOrId(pagesCollection); err != nil {
-		return false
-	}
-	return true
+	return i != nil && i.app != nil
 }
 
-// Sync reconciles the index with the given pages.
+// state returns this app's index state, creating it on first use.
 //
-// Rows that are unchanged are left alone, new pages are inserted, vanished
-// pages are removed, and the link table is rebuilt from scratch: a link's
-// state depends on the whole tree (a page that was just created heals every
-// link pointing at it), so recomputing is both simpler and more correct than
-// patching individual rows.
-func (i *index) sync(pages []*Page) {
+// GetOrSet is atomic (it re-checks under the write lock), so two concurrent
+// callers share one state. The key is per app, so the many apps a test binary
+// boots cannot see each other's entries.
+func (i *index) state() *indexState {
+	raw := i.app.Store().GetOrSet(indexStoreKey, func() any { return newIndexState() })
+	state, ok := raw.(*indexState)
+	if !ok {
+		// Another component claimed the key. Rather than panic, hand back a
+		// throwaway state: the caller still gets correct results, it just
+		// does not share them.
+		return newIndexState()
+	}
+	return state
+}
+
+// syncTree reconciles the index with the tree.
+//
+// refs is the body-free projection of every node, and load is called ONLY for
+// a node whose projection differs from its cached entry — so the cost of an
+// edit is proportional to the pages that actually changed, not to the wiki.
+// Pages that are no longer in refs are dropped.
+//
+// Link rows are re-derived for the pages that changed. A path or title change
+// (a create, a rename, a delete) alters which pages every other page's links
+// resolve to, so that case re-derives the whole row set — still entirely in
+// memory, and cheaper than the per-row SQL the collections needed.
+func (i *index) syncTree(refs []nodeRef, load func(pageID string) (indexedPage, bool)) {
 	if !i.available() {
 		return
 	}
+	state := i.state()
+	state.mu.Lock()
+	defer state.mu.Unlock()
 
-	existing, err := i.allRecords()
-	if err != nil {
-		i.log.Warn("could not read the page index", "error", err)
-		return
-	}
+	seen := make(map[string]struct{}, len(refs))
+	changed := make([]string, 0, 4)
+	structural := false
 
-	seen := make(map[string]struct{}, len(pages))
-	for _, page := range pages {
-		entry := entryFromPage(page)
-		seen[entry.PageID] = struct{}{}
+	for _, ref := range refs {
+		seen[ref.ID] = struct{}{}
 
-		record, ok := existing[entry.PageID]
-		if ok && recordMatches(record, entry) {
+		cached, cachedOK := state.pages[ref.ID]
+		if cachedOK && sameNode(cached, ref) {
 			continue
 		}
+
+		entry, ok := load(ref.ID)
 		if !ok {
-			record = core.NewRecord(i.mustCollection(pagesCollection))
+			// The page file could not be read. Leave whatever is cached in
+			// place rather than serving a half-built entry.
+			continue
 		}
-		if err := i.saveEntry(record, entry); err != nil {
-			i.log.Warn("could not index page", "pageId", entry.PageID, "error", err)
+		// The tree owns the node fields; the loader only contributes the
+		// body-derived ones (content, excerpt, tags, properties).
+		entry.Path = ref.Path
+		entry.Slug = ref.Slug
+		entry.Title = ref.Title
+		entry.Kind = ref.Kind
+		entry.Version = ref.Version
+		entry.Pinned = ref.Pinned
+		entry.Position = ref.Position
+
+		if cachedOK {
+			state.removeTargetsLocked(cached)
 		}
+		if !cachedOK || cached.Path != entry.Path || cached.Title != entry.Title {
+			structural = true
+		}
+
+		state.pages[ref.ID] = entry
+		state.addTargetsLocked(entry)
+		state.links[ref.ID] = ExtractLinks(entry.Content)
+		changed = append(changed, ref.ID)
 	}
 
-	for pageID, record := range existing {
+	for pageID, cached := range state.pages {
 		if _, ok := seen[pageID]; ok {
 			continue
 		}
-		if err := i.app.Delete(record); err != nil {
-			i.log.Warn("could not remove a stale index row", "pageId", pageID, "error", err)
-		}
+		state.removeTargetsLocked(cached)
+		delete(state.pages, pageID)
+		delete(state.links, pageID)
+		delete(state.rows, pageID)
+		structural = true
 	}
 
-	i.rebuildLinks(pages)
+	if structural {
+		state.deriveAllRowsLocked()
+		return
+	}
+	for _, pageID := range changed {
+		state.rows[pageID] = state.rowsForLocked(pageID)
+	}
 }
 
-// mustCollection returns a collection that availability already checked.
-func (i *index) mustCollection(name string) *core.Collection {
-	collection, err := i.app.FindCollectionByNameOrId(name)
-	if err != nil {
-		panic("leafwiki: collection " + name + " is missing: " + err.Error())
+// sameNode reports whether a cached entry already reflects a node projection.
+//
+// Version is derived from the page's updatedAt, which every mutation bumps, so
+// it is the change signal. The rest guards against a page whose node fields
+// were rewritten without the timestamp moving.
+func sameNode(entry indexedPage, ref nodeRef) bool {
+	return entry.Version == ref.Version &&
+		entry.Path == ref.Path &&
+		entry.Slug == ref.Slug &&
+		entry.Title == ref.Title &&
+		entry.Kind == ref.Kind &&
+		entry.Pinned == ref.Pinned &&
+		entry.Position == ref.Position
+}
+
+// allPages returns every indexed page, ordered by page id so callers that do
+// not sort get a stable sequence.
+func (i *index) allPages() []indexedPage {
+	if !i.available() {
+		return []indexedPage{}
 	}
-	return collection
+	state := i.state()
+	state.mu.RLock()
+	defer state.mu.RUnlock()
+
+	pages := make([]indexedPage, 0, len(state.pages))
+	for _, entry := range state.pages {
+		pages = append(pages, entry)
+	}
+	slices.SortFunc(pages, func(a, b indexedPage) int { return strings.Compare(a.PageID, b.PageID) })
+	return pages
+}
+
+// pageByID returns one indexed page.
+func (i *index) pageByID(pageID string) (indexedPage, bool) {
+	if !i.available() {
+		return indexedPage{}, false
+	}
+	state := i.state()
+	state.mu.RLock()
+	defer state.mu.RUnlock()
+
+	entry, ok := state.pages[pageID]
+	return entry, ok
 }
 
 // normaliseWikiPath trims slashes so a stored path and a requested path
@@ -143,7 +278,7 @@ func normaliseWikiPath(path string) string {
 	return strings.Trim(strings.TrimSpace(path), "/")
 }
 
-// entryFromPage projects a page onto an index row.
+// entryFromPage projects a page onto an index entry.
 func entryFromPage(page *Page) indexedPage {
 	tags := page.Tags
 	if tags == nil {
@@ -171,123 +306,4 @@ func entryFromPage(page *Page) indexedPage {
 		CreatorID:    page.Metadata.CreatorID,
 		LastAuthorID: page.Metadata.LastAuthorID,
 	}
-}
-
-// recordMatches reports whether an index row already reflects an entry.
-func recordMatches(record *core.Record, entry indexedPage) bool {
-	return record.GetString("version") == entry.Version &&
-		record.GetString("path") == entry.Path &&
-		record.GetString("title") == entry.Title &&
-		record.GetString("kind") == string(entry.Kind)
-}
-
-// saveEntry writes an entry into a record.
-func (i *index) saveEntry(record *core.Record, entry indexedPage) error {
-	record.Set("page_id", entry.PageID)
-	record.Set("path", entry.Path)
-	record.Set("slug", entry.Slug)
-	record.Set("title", entry.Title)
-	record.Set("kind", string(entry.Kind))
-	record.Set("content", entry.Content)
-	record.Set("excerpt", entry.Excerpt)
-	record.Set("tags", entry.Tags)
-	record.Set("properties", entry.Properties)
-	record.Set("pinned", entry.Pinned)
-	record.Set("position", entry.Position)
-	record.Set("created_at", entry.CreatedAt)
-	record.Set("updated_at", entry.UpdatedAt)
-	record.Set("version", entry.Version)
-	record.Set("creator_id", entry.CreatorID)
-	record.Set("last_author_id", entry.LastAuthorID)
-	return i.app.Save(record)
-}
-
-// allRecords returns the current page index keyed by page id.
-func (i *index) allRecords() (map[string]*core.Record, error) {
-	records, err := i.app.FindAllRecords(pagesCollection)
-	if err != nil {
-		return nil, errors.Wrap(err, "leafwiki: could not load the page index")
-	}
-	byPageID := make(map[string]*core.Record, len(records))
-	for _, record := range records {
-		byPageID[record.GetString("page_id")] = record
-	}
-	return byPageID, nil
-}
-
-// AllPages returns every indexed page.
-func (i *index) allPages() []indexedPage {
-	if !i.available() {
-		return []indexedPage{}
-	}
-	records, err := i.app.FindAllRecords(pagesCollection)
-	if err != nil {
-		i.log.Warn("could not load the page index", "error", err)
-		return []indexedPage{}
-	}
-	pages := make([]indexedPage, 0, len(records))
-	for _, record := range records {
-		pages = append(pages, entryFromRecord(record))
-	}
-	return pages
-}
-
-// PageByID returns one indexed page.
-func (i *index) pageByID(pageID string) (indexedPage, bool) {
-	if !i.available() {
-		return indexedPage{}, false
-	}
-	record, err := i.app.FindFirstRecordByFilter(pagesCollection, "page_id = {:pageID}", map[string]any{"pageID": pageID})
-	if err != nil {
-		return indexedPage{}, false
-	}
-	return entryFromRecord(record), true
-}
-
-// entryFromRecord reads an index row.
-func entryFromRecord(record *core.Record) indexedPage {
-	return indexedPage{
-		PageID:       record.GetString("page_id"),
-		Path:         record.GetString("path"),
-		Slug:         record.GetString("slug"),
-		Title:        record.GetString("title"),
-		Kind:         NodeKind(record.GetString("kind")),
-		Content:      record.GetString("content"),
-		Excerpt:      record.GetString("excerpt"),
-		Tags:         jsonStrings(record, "tags"),
-		Properties:   jsonStringMap(record, "properties"),
-		Pinned:       record.GetBool("pinned"),
-		Position:     record.GetInt("position"),
-		CreatedAt:    record.GetString("created_at"),
-		UpdatedAt:    record.GetString("updated_at"),
-		Version:      record.GetString("version"),
-		CreatorID:    record.GetString("creator_id"),
-		LastAuthorID: record.GetString("last_author_id"),
-	}
-}
-
-// jsonStrings reads a JSON array field as a string slice.
-func jsonStrings(record *core.Record, field string) []string {
-	raw, ok := record.GetRaw(field).(types.JSONRaw)
-	if !ok || len(raw) == 0 || string(raw) == "null" {
-		return []string{}
-	}
-	var values []string
-	if err := json.Unmarshal(raw, &values); err != nil {
-		return []string{}
-	}
-	return values
-}
-
-// jsonStringMap reads a JSON object field as a string map.
-func jsonStringMap(record *core.Record, field string) map[string]string {
-	raw, ok := record.GetRaw(field).(types.JSONRaw)
-	if !ok || len(raw) == 0 || string(raw) == "null" {
-		return map[string]string{}
-	}
-	var values map[string]string
-	if err := json.Unmarshal(raw, &values); err != nil {
-		return map[string]string{}
-	}
-	return values
 }

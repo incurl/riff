@@ -1,15 +1,15 @@
 # pb/leafwiki — LeafWiki on PocketBase
 
 A port of [LeafWiki](https://github.com/perber/leafwiki) (MIT) onto PocketBase,
-served at `/wiki`. It replaces LeafWiki's SQLite databases with PocketBase
-collections and keeps the part of LeafWiki that matters most: **the Markdown
-files on disk are the source of truth**.
+served at `/wiki`. It replaces LeafWiki's SQLite databases with an in-memory
+index and keeps the part of LeafWiki that matters most: **the Markdown files on
+disk are the source of truth**.
 
 | Upstream | Here |
 | --- | --- |
 | `cmd/leafwiki` (urfave/cli + gin) | PocketBase app, routes bound from `OnServe` |
-| `search.db`, `tags.db`, `properties.db` | `leafwiki_pages` collection (rebuilt from disk) |
-| `links.db` | `leafwiki_links` collection (rebuilt from disk) |
+| `search.db`, `tags.db`, `properties.db` | in-memory page index on `app.Store()` |
+| `links.db` | in-memory backlink index on `app.Store()` |
 | `users.db`, `sessions.db`, `apikeys.db` | PocketBase `users` / `_superusers` + auth tokens |
 | settings / branding / SMTP / git backup | not ported (reported as disabled in `/api/config`) |
 | revisions, favorites, share links, snapshots | not ported (yet) |
@@ -53,15 +53,31 @@ instead of silently losing a page.
 
 ## Index
 
-`leafwiki_pages` and `leafwiki_links` are **caches**. `Index.Sync` reconciles them
-with the tree after every mutation and after every load: changed rows are
-upserted, vanished rows deleted, and the link table is rebuilt from scratch
-because a link's state depends on the whole tree (creating a page heals every link
-that points at it). Dropping both collections loses nothing but search results
-until the next load.
+The index (pages, search, tags, properties, links) lives **in memory**, on the
+app's own store (`app.Store()`), under the key `riff.leafwiki_index`. It is not
+persisted, because it never needed to be: the Markdown tree is re-read from disk
+on every load and the index is rebuilt from it, so a database would only ever be
+written and never read across a restart.
 
-That is why a failed index write is logged, never returned: a stale search row
-must not stop a page from loading.
+The reconcile is **incremental**. `reconstruct` already parses every page's
+frontmatter to build the tree, so the index receives a body-free projection of
+every node (id, path, slug, title, kind, version, pinned, position) and only
+opens the page file when that projection differs from the cached entry — an edit
+touches one page, not the wiki. `Version` comes from the page's `updatedAt`,
+which every mutation bumps.
+
+Link rows are re-derived for the pages that changed. A path or title change (a
+create, a rename, a delete) alters what every *other* page's links resolve to,
+so that case re-derives the whole row set — still entirely in memory, since the
+raw link targets are cached per page and only the resolution has to be redone.
+That preserves the property the previous design had (creating a page heals every
+link pointing at it) without the per-row SQL.
+
+That is why a failed index update is logged, never returned: a stale search
+entry must not stop a page from loading.
+
+The `leafwiki_pages` / `leafwiki_links` collections this replaced are dropped by
+migration `1950000000_drop_leafwiki_tables`.
 
 
 ## HTTP surface
@@ -190,7 +206,7 @@ go test -count=1 -run TestCreateLeafWikiTables ./pb/migrations/
 ```
 
 The HTTP tests boot a real PocketBase app with riff's migrations, mount the wiki
-on a router and drive it over `httptest`, so the index, the collections and the
+on a router and drive it over `httptest`, so the index, the tree and the
 auth flow are exercised for real.
 
 ```

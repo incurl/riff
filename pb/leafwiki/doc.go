@@ -11,10 +11,11 @@
 //     directory can be pointed at this module as-is.
 //
 //   - LeafWiki's SQLite files (pages, search, tags, links, properties,
-//     favorites, share links, users, sessions, settings) are replaced by two
-//     PocketBase collections, leafwiki_pages and leafwiki_links. They are
-//     derived from the Markdown tree and are rebuilt on every Load, so a
-//     missing, stale or half-written row can never lose content.
+//     favorites, share links, users, sessions, settings) are replaced by an
+//     in-memory index held on the app's own store (app.Store()), rebuilt from
+//     the Markdown tree. Only the pages that actually changed are re-read, and
+//     nothing is persisted: the tree is re-read on every Load, so a database
+//     would only ever be written and never read across a restart.
 //
 //   - LeafWiki's own user/session/API-key tables are replaced by PocketBase's
 //     auth collections. A PocketBase superuser is the wiki's "admin"; any

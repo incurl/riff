@@ -9,15 +9,35 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestCreateLeafWikiTables pins the two collections that replace LeafWiki's
-// SQLite databases.
+// TestLeafWikiIndexCollectionsAreNotLeftBehind pins the outcome of the two
+// LeafWiki migrations together.
 //
-// pb/leafwiki keeps the Markdown pages on disk and rebuilds its index from
-// them, so these collections are a cache: they must exist after a migration
-// run, carry the columns the index writes, and be closed to the generated
-// PocketBase REST API (the wiki handlers are the only authority).
+// 1940000000 creates leafwiki_pages / leafwiki_links as a PocketBase-backed
+// replacement for LeafWiki's SQLite indexes; 1950000000 drops them again,
+// because pb/leafwiki now keeps that index in memory on the app's own store.
+// The creating migration is left in the history rather than deleted (an
+// existing instance has it recorded as applied), so a fresh install creates the
+// collections and immediately drops them.
+//
+// What matters after a full migration run is that neither collection survives:
+// a leftover table would be a dead index that nothing writes and nothing reads.
+func TestLeafWikiIndexCollectionsAreNotLeftBehind(t *testing.T) {
+	app := newTestApp(t)
+
+	for _, name := range []string{"leafwiki_pages", "leafwiki_links"} {
+		_, err := app.FindCollectionByNameOrId(name)
+		assert.Error(t, err, "%s must not survive the migration run", name)
+	}
+}
+
+// TestCreateLeafWikiTables still exercises the creating migration on its own,
+// so its schema is not lost to history: the columns the old index wrote, the
+// unique page id index, and the closed access rules are all still asserted by
+// applying the up migration against a fresh app.
 func TestCreateLeafWikiTables(t *testing.T) {
 	app := newTestApp(t)
+
+	require.NoError(t, createLeafWikiCollections(app))
 
 	pages, err := app.FindCollectionByNameOrId("leafwiki_pages")
 	require.NoError(t, err, "leafwiki_pages must be created by the migration")
@@ -63,6 +83,23 @@ func TestCreateLeafWikiTables(t *testing.T) {
 	stateField, ok := links.Fields.GetByName("state").(*core.SelectField)
 	require.True(t, ok)
 	assert.ElementsMatch(t, []string{"resolved", "broken"}, stateField.Values)
+}
+
+// TestDropLeafWikiTablesIsIdempotent runs the drop twice: once against a data
+// directory that has the collections and once against one that no longer does.
+// A migration that fails on the second run would break every re-run and every
+// fresh install.
+func TestDropLeafWikiTablesIsIdempotent(t *testing.T) {
+	app := newTestApp(t)
+
+	require.NoError(t, createLeafWikiCollections(app))
+	require.NoError(t, dropLeafWikiCollections(app))
+	require.NoError(t, dropLeafWikiCollections(app), "a second drop must be a no-op")
+
+	for _, name := range []string{"leafwiki_pages", "leafwiki_links"} {
+		_, err := app.FindCollectionByNameOrId(name)
+		assert.Error(t, err, "%s must be gone after the drop", name)
+	}
 }
 
 // hasIndex reports whether a collection carries an index with the given name.

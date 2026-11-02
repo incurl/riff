@@ -120,38 +120,59 @@ func (t *Tree) reindexLocked() {
 	}
 }
 
-// syncIndexLocked pushes the current tree into the PocketBase index. A
-// failure is logged, never returned: the index is a cache, and a wiki that
-// refuses to serve a page because a search row could not be written would be
-// worse than a stale index.
+// syncIndexLocked pushes the current tree into the index. A failure is logged,
+// never returned: the index is a cache, and a wiki that refuses to serve a page
+// because a search entry could not be written would be worse than a stale
+// index.
+//
+// The tree is handed over as body-free node projections, so the index only
+// reads a page file when that page actually changed. This is what keeps an edit
+// proportional to the page edited instead of to the whole wiki.
 func (t *Tree) syncIndexLocked() {
 	if t.index == nil {
 		return
 	}
-	t.index.sync(t.pagesLocked())
+	t.index.syncTree(t.nodeRefsLocked(), func(pageID string) (indexedPage, bool) {
+		node, ok := t.byID[pageID]
+		if !ok {
+			return indexedPage{}, false
+		}
+		page, err := t.pageLocked(node)
+		if err != nil {
+			t.index.log.Warn("could not read a page for the index", "pageId", pageID, "error", err)
+			return indexedPage{}, false
+		}
+		return entryFromPage(page), true
+	})
 }
 
-// pagesLocked reads every page file and returns the pages with their derived
-// metadata. It is the only place that reads the whole tree at once.
-func (t *Tree) pagesLocked() []*Page {
-	pages := make([]*Page, 0, len(t.byID))
+// nodeRefsLocked projects every node onto the body-free shape the index needs
+// to detect change.
+func (t *Tree) nodeRefsLocked() []nodeRef {
+	refs := make([]nodeRef, 0, len(t.byID))
 	if t.root == nil {
-		return pages
+		return refs
 	}
-
 	var walk func(node *PageNode)
 	walk = func(node *PageNode) {
 		if node.ID != rootID {
-			if page, err := t.pageLocked(node); err == nil {
-				pages = append(pages, page)
-			}
+			refs = append(refs, nodeRef{
+				ID:       node.ID,
+				Path:     node.Path,
+				Slug:     node.Slug,
+				Title:    node.Title,
+				Kind:     node.Kind,
+				Version:  node.Version,
+				Pinned:   node.Pinned,
+				Position: node.Position,
+			})
 		}
 		for _, child := range node.Children {
 			walk(child)
 		}
 	}
 	walk(t.root)
-	return pages
+	return refs
 }
 
 // pageLocked builds the Page projection of a node.

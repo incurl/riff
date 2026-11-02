@@ -5,6 +5,63 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## The wiki index is in memory on `app.Store()`, and its sync is incremental (2026-11-03)
+
+The LeafWiki port originally stored its derived index in two PocketBase
+collections, `leafwiki_pages` and `leafwiki_links`
+(`1940000000_create_leafwiki_tables`), mirroring upstream LeafWiki's
+`search.db` / `tags.db` / `links.db`. That was wrong for three reasons
+found by reading the code paths rather than assuming:
+
+1. **The rows were never read across a restart.** `Tree.Load()` re-reads
+   the Markdown tree (`store.reconstruct`) and then rebuilds the index
+   from it, so every row was overwritten before it was ever read. The
+   persistence bought nothing.
+2. **Search never used the query engine.** `search`, `tagFacets` and
+   `pagesByTags` all started from `FindAllRecords(pagesCollection)` — a
+   full scan — and filtered and ranked in Go.
+3. **The write path was O(entire wiki) per edit.** `rebuildLinks` dropped
+   and re-inserted *every* link row inside a transaction, and `sync` ran
+   on every mutation (11 `loadLocked()` call sites in `tree_mutate.go`).
+   Editing one character of one page re-read every page file twice and
+   rewrote the whole link table.
+
+The index now lives on `app.Store()` under `riff.leafwiki_index`, the
+same per-app convention `pb/connect/identity_cache.go` already
+documents. That gives per-app scoping (the test binary boots many apps),
+concurrency safety, and no package-level mutable state. Nothing is
+persisted, which is correct precisely because the tree is re-read on
+every load.
+
+**The sync is incremental, not just in-memory.** `reconstruct` already
+parses every page's frontmatter to build the tree, so the index is handed
+a body-free `nodeRef` per node — id, path, slug, title, kind, version,
+pinned, position — and calls the loader *only* when that projection
+differs from the cached entry. `Version` is derived from `updatedAt`,
+which every mutation bumps, so it is a reliable change signal. An edit
+therefore opens one page file instead of the whole wiki.
+
+Link rows are derived per page from cached raw targets. A content-only
+edit re-derives that page's rows. A path or title change (create, rename,
+delete) alters what every *other* page's links resolve to, so that case
+re-derives the full row set — still entirely in memory, since only the
+resolution is redone, not the parsing. This keeps the property the
+old "drop and rebuild the link table" had: creating a page heals every
+link pointing at it.
+
+`TestIndexSyncLoadsOnlyChangedPages` pins the incrementality by counting
+loader calls (it fails if a regression starts re-reading everything),
+`TestIndexReResolvesLinksWithoutReloading` pins the correctness half, and
+`TestIndexIsScopedToTheApp` pins the per-app scoping. All three were
+mutation-checked.
+
+The collections are dropped by `1950000000_drop_leafwiki_tables`. The
+*creating* migration is deliberately kept rather than deleted: an
+existing instance has it recorded as applied, and removing the file would
+look like a missing migration to PocketBase's runner. A fresh install
+creates the two collections and immediately drops them — one no-op
+migration on a new data directory, in exchange for an honest history.
+
 ## `loginUrl`/`logoutUrl` are external-URL escape hatches, not the wiki's own routes (2026-11-03)
 
 `GET /wiki/api/config` used to advertise the wiki's own login page as

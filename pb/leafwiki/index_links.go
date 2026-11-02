@@ -1,13 +1,11 @@
 package leafwiki
 
 import (
+	"slices"
 	"strings"
-
-	"github.com/pkg/errors"
-	"github.com/pocketbase/pocketbase/core"
 )
 
-// linkRow is one row of the backlink index.
+// linkRow is one derived backlink row.
 type linkRow struct {
 	FromPageID string
 	ToPageID   string
@@ -16,40 +14,66 @@ type linkRow struct {
 	State      string
 }
 
-// rebuildLinks drops and rebuilds the link table for the given pages.
-//
-// Rebuilding rather than patching is deliberate: a link's state depends on the
-// whole tree. Creating a page heals every link that points at its path, and
-// deleting one breaks them; recomputing is the only way to get both right
-// without a per-mutation bookkeeping graph.
-func (i *index) rebuildLinks(pages []*Page) {
-	if _, err := i.app.FindCollectionByNameOrId(linksCollection); err != nil {
+// addTargetsLocked registers a page as the owner of its path and title, so
+// other pages' links can resolve to it.
+func (st *indexState) addTargetsLocked(entry indexedPage) {
+	if path := normaliseWikiPath(entry.Path); path != "" {
+		st.pathToID[path] = entry.PageID
+	}
+	key := strings.ToLower(strings.TrimSpace(entry.Title))
+	if key == "" {
 		return
 	}
+	st.titleToIDs[key] = append(st.titleToIDs[key], entry.PageID)
+}
 
-	pathToID := make(map[string]string, len(pages))
-	titleToIDs := make(map[string][]string, len(pages))
-	for _, page := range pages {
-		pathToID[normaliseWikiPath(page.Path)] = page.ID
-		key := strings.ToLower(strings.TrimSpace(page.Title))
-		if key == "" {
-			continue
+// removeTargetsLocked drops a page from the resolution maps.
+func (st *indexState) removeTargetsLocked(entry indexedPage) {
+	path := normaliseWikiPath(entry.Path)
+	// Only clear the path when this page still owns it: two pages cannot
+	// share a path, but a rename leaves the old entry behind long enough to
+	// matter here.
+	if path != "" && st.pathToID[path] == entry.PageID {
+		delete(st.pathToID, path)
+	}
+	key := strings.ToLower(strings.TrimSpace(entry.Title))
+	if key == "" {
+		return
+	}
+	ids := st.titleToIDs[key]
+	kept := ids[:0]
+	for _, id := range ids {
+		if id != entry.PageID {
+			kept = append(kept, id)
 		}
-		titleToIDs[key] = append(titleToIDs[key], page.ID)
+	}
+	if len(kept) == 0 {
+		delete(st.titleToIDs, key)
+		return
+	}
+	st.titleToIDs[key] = kept
+}
+
+// rowsForLocked derives one page's link rows from its raw targets.
+//
+// Resolution is a map lookup against the CURRENT tree, so a page that was just
+// created heals every link pointing at it — the same property the previous
+// "drop the whole link table and re-insert it" approach had, without the SQL.
+func (st *indexState) rowsForLocked(fromPageID string) []linkRow {
+	targets := st.links[fromPageID]
+	if len(targets) == 0 {
+		return nil
 	}
 
-	rows := make([]linkRow, 0, len(pages)*2)
-	seen := make(map[string]struct{}, len(pages)*2)
-
+	rows := make([]linkRow, 0, len(targets))
+	seen := make(map[string]struct{}, len(targets))
+	// One row per (source, target) pair: a page that links to the same target
+	// twice — once as a Markdown link and once as a wiki link, say — must show
+	// up once in the backlink panel.
 	appendRow := func(row linkRow) {
-		// One row per (source, target) pair: a page that links to the same
-		// target twice — once as a Markdown link and once as a wiki link,
-		// say — must show up once in the backlink panel.
-		key := row.FromPageID + "\x00"
-		if row.ToPageID != "" {
-			key += "id:" + row.ToPageID
-		} else {
-			key += "path:" + row.ToPath
+		key := "id:" + row.ToPageID
+		if row.ToPageID == "" {
+			key = "path:" + row.ToPath
 		}
 		if _, duplicate := seen[key]; duplicate {
 			return
@@ -58,119 +82,109 @@ func (i *index) rebuildLinks(pages []*Page) {
 		rows = append(rows, row)
 	}
 
-	for _, page := range pages {
-		for _, target := range ExtractLinks(page.Content) {
-			switch {
-			case target.Path != "":
-				toPath := normaliseWikiPath(target.Path)
-				row := linkRow{FromPageID: page.ID, ToPath: toPath}
-				if id, ok := pathToID[toPath]; ok {
-					row.ToPageID = id
-					row.State = linkStateResolved
-				} else {
-					row.State = linkStateBroken
-				}
-				appendRow(row)
-
-			case target.Title != "":
-				key := strings.ToLower(strings.TrimSpace(target.Title))
-				matches := titleToIDs[key]
-				if len(matches) == 0 {
-					appendRow(linkRow{
-						FromPageID: page.ID,
-						ToPath:     wikilinkSentinelPrefix + target.Title,
-						ToTitle:    target.Title,
-						State:      linkStateBroken,
-					})
-					continue
-				}
-				for _, toID := range matches {
-					appendRow(linkRow{
-						FromPageID: page.ID,
-						ToPageID:   toID,
-						ToTitle:    target.Title,
-						State:      linkStateResolved,
-					})
-				}
-
-			default:
-				// An extracted link always has a path or a title; anything
-				// else is not indexable.
+	for _, target := range targets {
+		switch {
+		case target.Path != "":
+			toPath := normaliseWikiPath(target.Path)
+			row := linkRow{FromPageID: fromPageID, ToPath: toPath}
+			if id, ok := st.pathToID[toPath]; ok {
+				row.ToPageID = id
+				row.State = linkStateResolved
+			} else {
+				row.State = linkStateBroken
 			}
+			appendRow(row)
+
+		case target.Title != "":
+			key := strings.ToLower(strings.TrimSpace(target.Title))
+			matches := st.titleToIDs[key]
+			if len(matches) == 0 {
+				appendRow(linkRow{
+					FromPageID: fromPageID,
+					ToPath:     wikilinkSentinelPrefix + target.Title,
+					ToTitle:    target.Title,
+					State:      linkStateBroken,
+				})
+				continue
+			}
+			for _, toID := range matches {
+				appendRow(linkRow{
+					FromPageID: fromPageID,
+					ToPageID:   toID,
+					ToTitle:    target.Title,
+					State:      linkStateResolved,
+				})
+			}
+
+		default:
+			// An extracted link always has a path or a title; anything else
+			// is not indexable.
 		}
 	}
+	return rows
+}
 
-	err := i.app.RunInTransaction(func(txApp core.App) error {
-		existing, findErr := txApp.FindAllRecords(linksCollection)
-		if findErr != nil {
-			return errors.Wrap(findErr, "leafwiki: could not load the link index")
+// deriveAllRowsLocked re-derives every page's rows. Used when the path or
+// title universe changed, because that alters the resolution of links in pages
+// that were not themselves edited.
+func (st *indexState) deriveAllRowsLocked() {
+	rows := make(map[string][]linkRow, len(st.links))
+	for pageID := range st.links {
+		if derived := st.rowsForLocked(pageID); len(derived) > 0 {
+			rows[pageID] = derived
 		}
-		for _, record := range existing {
-			if deleteErr := txApp.Delete(record); deleteErr != nil {
-				return errors.Wrap(deleteErr, "leafwiki: could not clear the link index")
-			}
-		}
-
-		collection, collectionErr := txApp.FindCollectionByNameOrId(linksCollection)
-		if collectionErr != nil {
-			return collectionErr
-		}
-		for _, row := range rows {
-			record := core.NewRecord(collection)
-			record.Set("from_page_id", row.FromPageID)
-			record.Set("to_page_id", row.ToPageID)
-			record.Set("to_path", row.ToPath)
-			record.Set("to_title", row.ToTitle)
-			record.Set("state", row.State)
-			if saveErr := txApp.Save(record); saveErr != nil {
-				return errors.Wrap(saveErr, "leafwiki: could not write a link row")
-			}
-		}
-		return nil
-	})
-	if err != nil {
-		i.log.Warn("could not rebuild the link index", "error", err)
 	}
+	st.rows = rows
 }
 
 // linksFrom returns the outgoing links of a page.
 func (i *index) linksFrom(pageID string) []linkRow {
-	return i.findLinks("from_page_id = {:id}", map[string]any{"id": pageID})
+	if !i.available() {
+		return nil
+	}
+	state := i.state()
+	state.mu.RLock()
+	defer state.mu.RUnlock()
+	return slices.Clone(state.rows[pageID])
 }
 
 // linksTo returns the links pointing at a page.
 func (i *index) linksTo(pageID string) []linkRow {
-	return i.findLinks("to_page_id = {:id}", map[string]any{"id": pageID})
+	return i.filterRows(func(row linkRow) bool { return row.ToPageID == pageID })
 }
 
 // linksToPath returns the links pointing at a route path, resolved or not.
 func (i *index) linksToPath(path string) []linkRow {
-	return i.findLinks("to_path = {:path}", map[string]any{"path": normaliseWikiPath(path)})
+	normalised := normaliseWikiPath(path)
+	return i.filterRows(func(row linkRow) bool { return row.ToPath == normalised })
 }
 
 // brokenLinks returns every unresolved link.
 func (i *index) brokenLinks() []linkRow {
-	return i.findLinks("state = {:state}", map[string]any{"state": linkStateBroken})
+	return i.filterRows(func(row linkRow) bool { return row.State == linkStateBroken })
 }
 
-// findLinks runs a link query.
-func (i *index) findLinks(filter string, params map[string]any) []linkRow {
-	if i == nil || i.app == nil {
+// filterRows returns the derived rows matching keep.
+//
+// The reverse lookups scan every page's rows rather than maintaining a second
+// index. A backlink panel is a per-page-view request and the row count is
+// bounded by the wiki's link count, so this stays cheap while keeping one
+// source of truth for the rows themselves.
+func (i *index) filterRows(keep func(linkRow) bool) []linkRow {
+	if !i.available() {
 		return nil
 	}
-	records, err := i.app.FindRecordsByFilter(linksCollection, filter, "", 0, 0, params)
-	if err != nil {
-		return nil
+	state := i.state()
+	state.mu.RLock()
+	defer state.mu.RUnlock()
+
+	out := make([]linkRow, 0, len(state.rows))
+	for _, rows := range state.rows {
+		for _, row := range rows {
+			if keep(row) {
+				out = append(out, row)
+			}
+		}
 	}
-	rows := make([]linkRow, 0, len(records))
-	for _, record := range records {
-		rows = append(rows, linkRow{
-			FromPageID: record.GetString("from_page_id"),
-			ToPageID:   record.GetString("to_page_id"),
-			ToPath:     record.GetString("to_path"),
-			ToTitle:    record.GetString("to_title"),
-			State:      record.GetString("state"),
-		})
-	}
-	return rows
+	return out
 }
