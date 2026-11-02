@@ -193,10 +193,15 @@ div).
 ## Not ported
 
 Revisions, favorites, share links, snapshots/restore, git backup, SMTP (password
-reset/invites), TOTP, API-key management, avatars, branding uploads, page imports
+reset/invites), TOTP, API-key management, branding uploads, page imports
 and the resync job have no equivalent yet. `/api/config` reports them as disabled
 rather than letting the SPA discover a 404. A Markdown import is still possible by
 copying files into `root/`: they are adopted on the next reload.
+
+Avatars *are* supported, but the wiki keeps no avatar store of its own: the
+profile picture is the PocketBase `users` record's `avatar` file, served at
+`GET <prefix>/avatars/{id}` and written by `POST`/`DELETE <prefix>/api/user/avatar`.
+One picture per account, shared with the Memos SPA and the admin UI.
 
 ## Tests
 

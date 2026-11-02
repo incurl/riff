@@ -49,6 +49,9 @@
 //	PUT    /wiki/api/pages/{id}/assets/rename            rename an attachment
 //	DELETE /wiki/api/pages/{id}/assets/{filename}        delete an attachment
 //	GET    /wiki/assets/{pageId}/{filename}              serve an attachment
+//	GET    /wiki/avatars/{id}                           a user's PocketBase avatar
+//	POST   /wiki/api/user/avatar                        set the caller's avatar
+//	DELETE /wiki/api/user/avatar                        clear the caller's avatar
 //	GET    /wiki/api/search                              full-text + tag search
 //	GET    /wiki/api/search/status                       index status
 //	GET    /wiki/api/tags                                tag facets

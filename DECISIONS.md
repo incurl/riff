@@ -5,6 +5,67 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## The wiki has no avatar store: it serves PocketBase's `users.avatar` (2026-11-03)
+
+Upstream LeafWiki keeps avatars in its own directory
+(`<storageDir>/avatars/<userID>.png`, `internal/avatar/avatar_service.go`)
+and serves them at `/avatars/{id}`. The port instead uses the PocketBase
+`users` record's built-in `avatar` file field, which riff deliberately
+left untouched (`pb/migrations/1700000001_extend_users.go`).
+
+**Why not a second store.** riff already has one avatar per account (the
+Memos SPA and the admin UI both read `users.avatar`). Copying it into a
+wiki-side directory would mean two files to keep in sync and a wiki
+picture that disagrees with the one on the Memos profile the moment
+someone changes it in either place. Delegating means there is exactly one
+picture, and either front end can change it.
+
+**The bytes are streamed through the wiki route, not redirected.** The
+obvious shortcut — redirect `/wiki/avatars/{id}` to PocketBase's own
+`/api/files/users/{id}/{file}` URL — does not survive the deployment.
+That native URL lives at the *root* of the riff listener, but the wiki is
+mounted at `/wiki` behind a reverse proxy, so on the
+`Caddyfile.fly.community` layout the redirect target
+(`https://host/api/files/...`) would be answered by the static site, not
+by riff. The wiki module cannot build a mount-aware redirect because it
+does not know the proxy's prefix. Serving the file here keeps every URL
+the SPA builds relative to the mount point — the same reasoning that put
+attachments on riff's own `/file/...` surface instead of the native
+`/api/files/...` one.
+
+**The route is public on purpose.** The SPA's `avatarUrl()` documents the
+URL as "public, unauthenticated" (`<img src>` cannot send a bearer), the
+`users` collection's List/View rules are already open, and the wiki shows
+author names on public pages anyway — an avatar is no more sensitive than
+the name beside it. A missing record, a record with no avatar, and every
+superuser (PocketBase's `_superusers` collection has no avatar field) all
+answer **404**, which is what makes the SPA's `AvatarFallback` render the
+initials instead of a broken image. Without the route the URL fell
+through to the SPA catch-all and answered 200 with `index.html` — the
+same failure shape as the inline-image bug fixed earlier.
+
+**Validation is PocketBase's, not a copy.** The upload handler does not
+restate the MIME allow-list or the 5 MB cap: `users.avatar` is a
+FileField and `Save` validates against it, so there is one set of rules
+rather than two that can drift. The handler's only size bound is an
+`http.MaxBytesReader` so an oversized body is not buffered before that
+check runs.
+
+**Caching keys off the SPA's own buster.** `stores/avatar.ts` bumps `?v=`
+after every upload or delete, so a versioned URL is served
+`public, max-age=31536000, immutable` and an unversioned one `no-cache`.
+
+Verified end to end on a live instance: uploading through
+`POST /wiki/api/user/avatar` wrote the PocketBase record and the public
+route served the same bytes; replacing the avatar through PocketBase's
+own `PATCH /api/collections/users/records/{id}` (the Memos SPA's path)
+was immediately what `/wiki/avatars/{id}` served; and `DELETE` cleared
+the record and turned the route back into a 404.
+`TestAPI_AvatarServesThePocketBaseUserAvatar` (and the rest of the
+`TestAPI_Avatar*` set) pin the behaviour, and removing the route
+registration makes them fail — which is the regression the route exists
+to prevent.
+
 ## The wiki index is in memory on `app.Store()`, and its sync is incremental (2026-11-03)
 
 The LeafWiki port originally stored its derived index in two PocketBase

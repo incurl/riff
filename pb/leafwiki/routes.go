@@ -55,6 +55,16 @@ func (s *Server) mount(r *router.Router[*core.RequestEvent]) {
 	// --- attachment bytes ---------------------------------------------
 	r.GET(p+"/assets/{pageId}/{filename}", s.serveAssetHandler)
 
+	// --- avatars ------------------------------------------------------
+	// The SPA builds <base>/avatars/{id} for every user picture and
+	// <base>/api/user/avatar for the settings panel's upload/delete. The
+	// bytes are PocketBase's own `users.avatar` file — the wiki keeps no
+	// avatar store of its own, so the picture is the same one the Memos SPA
+	// and the admin UI show.
+	r.GET(p+"/avatars/{id}", s.avatarHandler)
+	r.POST(api+"/user/avatar", s.uploadAvatarHandler)
+	r.DELETE(api+"/user/avatar", s.deleteAvatarHandler)
+
 	// --- SPA build ----------------------------------------------------
 	// The built SPA's chunks and favicon. See mountStatic.
 	s.mountStatic(r)
