@@ -6,6 +6,7 @@ import { normalizeIdentifier } from "micromark-util-normalize-identifier";
 import { visit } from "unist-util-visit";
 import type { Attachment } from "@/types/proto/api/v1/attachment_service_pb";
 import { getAttachmentMotionGroupId, getAttachmentUrl, isImage } from "@/utils/attachment";
+import { BASE_PATH, withBasePathWith } from "@/utils/base-path";
 
 const ATTACHMENT_NAME_PREFIX = "attachments/";
 const MANAGED_ATTACHMENT_PATH_PREFIX = "/file/attachments/";
@@ -246,10 +247,52 @@ export const filterInlineManagedAttachments = (content: string, attachments: Att
   );
 };
 
-export const resolveManagedAttachmentImageSource = (source: string | undefined, attachments: Attachment[]): string | undefined => {
+/**
+ * Pure form of {@link resolveManagedAttachmentImageSource} that accepts an
+ * explicit mount prefix. Exported so tests can exercise the sub-path
+ * branch without overriding the module-scoped `BASE_PATH` (which Vite
+ * bakes at build time).
+ */
+export const resolveManagedAttachmentImageSourceWith = (
+  source: string | undefined,
+  attachments: Attachment[],
+  prefix: "/" | `/${string}`,
+): string | undefined => {
   if (!source) return source;
   const uid = parseManagedAttachmentImageURL(source);
   if (!uid) return source;
   const attachment = attachments.find((candidate) => extractAttachmentUIDFromName(candidate.name) === uid);
-  return attachment ? getAttachmentUrl(attachment) : source;
+  if (attachment) return getAttachmentUrl(attachment);
+  // Only the managed route is rewritten; an absolute URL was already
+  // rejected by `parseManagedAttachmentImageURL` above.
+  return withBasePathWith(source, prefix);
 };
+
+/**
+ * Resolves the `src` of a managed image node to a URL the browser can
+ * actually fetch.
+ *
+ * The stored Markdown carries a ROOT-RELATIVE managed path
+ * (`/file/attachments/<uid>`) — the API only accepts that form (see
+ * `markdown.ParseManagedAttachmentImageURL`), so the path is what is
+ * persisted. But a root-relative URL resolves against the document
+ * ORIGIN, not the SPA's mount point, so on a sub-path mount
+ * (`/community/`) it would miss the riff listener entirely and land on
+ * whatever else the host serves at the root.
+ *
+ * Two ways out, in order of preference:
+ *
+ *  1. The attachment is in the memo's attachment list: use its URL,
+ *     which `getAttachmentUrl` builds from `BASE_URL` and which already
+ *     carries the mount prefix (and the `?share_token=…` a shared memo
+ *     needs).
+ *  2. The attachment is NOT in the list (a memo whose attachments did
+ *     not load, a share view that stripped them, a memo read from a
+ *     partial response): fall back to the stored path, but prefixed
+ *     with the SPA's mount point so it still addresses the right
+ *     listener. Without this the raw `/file/attachments/<uid>` reaches
+ *     the browser, which resolves it against the origin and misses the
+ *     mount point — a broken image on every sub-path deployment.
+ */
+export const resolveManagedAttachmentImageSource = (source: string | undefined, attachments: Attachment[]): string | undefined =>
+  resolveManagedAttachmentImageSourceWith(source, attachments, BASE_PATH);

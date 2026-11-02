@@ -5,6 +5,50 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## An inline image is stored root-relative, so the browser must re-anchor it (2026-11-03)
+
+An inline ("insert image") memo picture is persisted in the memo's
+Markdown as a **root-relative** managed path:
+
+    ![photo](/file/attachments/<uid>)
+
+That form is not a choice — the API accepts only that spelling
+(`markdown.ParseManagedAttachmentImageURL` rejects an absolute URL, a
+query, a fragment, percent-encoding, or a malformed uid), and the
+client mirrors the rule in `managed-attachment.ts` so the editor can
+warn about content the server would refuse.
+
+But a root-relative URL is resolved by the browser against the
+document **ORIGIN**, not against the SPA's mount point. On the
+sub-path deployment (`https://host/community/`) the stored
+`/file/attachments/<uid>` therefore addresses the root of the host —
+which, in the `Caddyfile.fly.community` layout, is the *static site*,
+not the riff listener.
+
+**Why the attachment gallery was never affected.** `getAttachmentUrl`
+is built from `BASE_URL` (origin + mount prefix), so the gallery always
+emits `<origin>/community/file/attachments/<uid>/photo.png`. The inline
+image goes through `resolveManagedAttachmentImageSource`, which
+preferred the attachment row's own URL and — when the row was **not**
+in the memo's attachment list — fell back to the stored path
+**verbatim**. The gallery had no such fallback, so it could not break.
+
+**The fix is the fallback, not the stored form.** Rewriting the stored
+Markdown to carry the mount prefix would break the API's own contract
+and every existing memo, so the stored path stays root-relative and the
+*browser-side* resolver re-anchors it: `resolveManagedAttachmentImageSourceWith`
+now applies `withBasePathWith` to the fallback, so the emitted `src`
+is `/community/file/attachments/<uid>` on a sub-path mount and
+`/file/attachments/<uid>` on a root mount.
+
+This is the second half of the sub-path sweep that commit `3ee1f584`
+("make attachment, share, and copy-link URLs sub-path-aware") started:
+that commit fixed `attachment.ts` and left `managed-attachment.ts`
+untouched, so the inline-image path was the one URL builder that stayed
+origin-relative. The pure `*With` form exists so the sub-path branch is
+testable without overriding the build-time `BASE_PATH`, matching the
+convention `attachment.ts` and `base-path.ts` already use.
+
 ## The wiki is a SIBLING of /community/, and its prefix is never rewritten (2026-11-03)
 
 `/wiki` sits at the same level as `/community`:
