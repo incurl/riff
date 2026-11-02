@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="base-path" content="{{__BASE_PATH__}}" />
+    <title>Wiki</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body { margin: 0; font: 15px/1.5 ui-sans-serif, system-ui, sans-serif; }
+      .layout { display: flex; min-height: 100vh; }
+      nav { width: 18rem; padding: 1rem; border-right: 1px solid #8884; overflow: auto; }
+      main { flex: 1; padding: 1.5rem 2rem; overflow: auto; }
+      ul { list-style: none; padding-left: 0.9rem; }
+      li { margin: 0.15rem 0; }
+      a { color: inherit; text-decoration: none; }
+      a:hover { text-decoration: underline; }
+      .section > a { font-weight: 600; }
+      pre { white-space: pre-wrap; word-break: break-word; background: #8881; padding: 1rem; border-radius: 6px; }
+      .muted { opacity: 0.65; font-size: 0.85rem; }
+      .banner { margin-bottom: 1rem; padding: 0.6rem 0.8rem; border-radius: 6px; background: #f5a62322; font-size: 0.85rem; }
+    </style>
+  </head>
+  <body>
+    <div class="layout">
+      <nav>
+        <div class="muted" style="margin-bottom: 0.6rem">Pages</div>
+        <ul id="tree"><li class="muted">loading…</li></ul>
+      </nav>
+      <main>
+        <div class="banner">
+          This is the built-in fallback reader. Build LeafWiki's SPA
+          (<code>ui/leafwiki-ui</code>) and copy its <code>dist/</code> into
+          <code>pb/leafwiki/ui/dist</code> to replace it.
+        </div>
+        <h1 id="title">Wiki</h1>
+        <p class="muted" id="meta"></p>
+        <pre id="content">Select a page on the left.</pre>
+      </main>
+    </div>
+    <script>
+      // Relative URLs keep this page working behind any mount prefix.
+      const api = (path) => new URL(`api/${path}`, document.baseURI);
+      const treeEl = document.getElementById('tree');
+      const titleEl = document.getElementById('title');
+      const metaEl = document.getElementById('meta');
+      const contentEl = document.getElementById('content');
+
+      function renderNode(node, list) {
+        for (const child of node.children || []) {
+          const item = document.createElement('li');
+          const link = document.createElement('a');
+          link.textContent = child.title || child.slug;
+          link.href = `#/${child.path}`;
+          if (child.kind === 'section') {
+            item.className = 'section';
+          }
+          item.appendChild(link);
+          if ((child.children || []).length > 0) {
+            const nested = document.createElement('ul');
+            renderNode(child, nested);
+            item.appendChild(nested);
+          }
+          list.appendChild(item);
+        }
+      }
+
+      async function loadTree() {
+        try {
+          const response = await fetch(api('tree'), { credentials: 'include' });
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          treeEl.replaceChildren();
+          renderNode(await response.json(), treeEl);
+        } catch (error) {
+          treeEl.replaceChildren();
+          const item = document.createElement('li');
+          item.className = 'muted';
+          item.textContent = `could not load the tree: ${error}`;
+          treeEl.appendChild(item);
+        }
+      }
+
+      async function loadPage(path) {
+        if (!path) return;
+        const url = api(`pages/by-path?path=${encodeURIComponent(path)}`);
+        try {
+          const response = await fetch(url, { credentials: 'include' });
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          const page = await response.json();
+          titleEl.textContent = page.title || page.slug;
+          const updated = page.metadata && page.metadata.updatedAt ? new Date(page.metadata.updatedAt) : null;
+          metaEl.textContent = updated ? `updated ${updated.toLocaleString()}` : '';
+          contentEl.textContent = page.content || '(empty page)';
+          document.title = `${page.title || page.slug} · Wiki`;
+        } catch (error) {
+          titleEl.textContent = 'Not found';
+          metaEl.textContent = '';
+          contentEl.textContent = `could not load ${path}: ${error}`;
+        }
+      }
+
+      function currentPath() {
+        const hash = decodeURIComponent(location.hash.replace(/^#\/?/, ''));
+        return hash;
+      }
+
+      window.addEventListener('hashchange', () => loadPage(currentPath()));
+      loadTree().then(() => loadPage(currentPath()));
+    </script>
+  </body>
+</html>

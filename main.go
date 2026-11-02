@@ -21,6 +21,7 @@ import (
 	"github.com/incurl/riff/pb/bark"
 	"github.com/incurl/riff/pb/connect"
 	"github.com/incurl/riff/pb/hooks"
+	"github.com/incurl/riff/pb/leafwiki"
 
 	// Register our Go migrations in core.AppMigrations. The blank import
 	// is intentional: each migration file uses an init() function to call
@@ -198,6 +199,21 @@ func main() {
 		api.SetDevicePullSigner(connect.InstallSignedURLSignerForREST())
 		return e.Next()
 	})
+
+	// --- Wiki module -----------------------------------------------------
+	// /wiki/* (LeafWiki port). The Markdown pages live in
+	// <DataDir>/leafwiki; the search/tag/link indexes are the
+	// leafwiki_pages / leafwiki_links PocketBase collections.
+	// Reads are public; writes need a PocketBase account unless the
+	// operator sets RIFF_WIKI_PUBLIC_WRITE=1. The routes are bound
+	// from an OnServe hook inside Register, so the storage directory
+	// and the migrated collections exist by the time they are used.
+	if err := leafwiki.Register(app, leafwiki.Options{
+		Version:     version.Version,
+		PublicWrite: envBool("RIFF_WIKI_PUBLIC_WRITE"),
+	}); err != nil {
+		log.Fatal(err)
+	}
 
 	// --- SPA static handler --------------------------------------------
 	// Serve the Vite build of the Memos React app from the root of

@@ -5,6 +5,62 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## LeafWiki ported onto PocketBase: what was replaced, and why (2026-11-02)
+
+The wiki module (`pb/leafwiki/`, mounted at `/wiki`) is a port of LeafWiki
+(https://github.com/perber/leafwiki, MIT). Upstream is a Markdown-on-disk wiki
+whose SQLite databases are *derived, rebuildable* indexes. That split is the
+whole design, so the port keeps the first half and replaces the second:
+
+- **The Markdown files stay the source of truth**, in upstream's exact layout
+  (`root/<slug>.md`, `root/<section>/index.md`, `.order.json`,
+  `assets/<pageId>/`, and the `leafwiki_*` frontmatter keys). A data directory
+  from a running LeafWiki can be pointed at this module unchanged, and riff can
+  hand its data directory back. That portability is the reason the frontmatter
+  keys are upstream's rather than riff's, even where a riff-shaped key would
+  read better.
+- **Every SQLite database became a PocketBase collection.**
+  `search.db` + `tags.db` + `properties.db` collapse into `leafwiki_pages`;
+  `links.db` becomes `leafwiki_links`. `Index.Sync` reconciles them after every
+  mutation and on every load: changed rows are upserted, vanished rows deleted,
+  and the link table is rebuilt from scratch, because a link's state depends on
+  the whole tree (creating a page heals every link that points at it). A failed
+  index write is **logged, never returned** — the index is a cache, and a wiki
+  that refuses to serve a page because a search row could not be written would
+  be worse than a stale index.
+- **`users.db`, `sessions.db` and `apikeys.db` are gone entirely.** Auth is
+  PocketBase's: a superuser is an `admin`, any `users` record is an `editor`, an
+  anonymous caller is a reader. The SPA's cookie auth is kept because its client
+  hard-codes it — `POST /api/auth/login` verifies the PocketBase password, mints
+  a PocketBase auth token with `record.NewAuthToken()` and stores it in an
+  HttpOnly cookie alongside a double-submit CSRF cookie. A second user table
+  would have had to be kept in sync with `users`, and would have been wrong the
+  moment someone changed their password in the PocketBase admin UI.
+- **The `/pages/*` subtree is dispatched by hand.** This is the one place where
+  "just register the routes" does not work: LeafWiki mixes a verb *before* the
+  id (`/pages/permalink/{id}`, `/pages/copy/{id}`) with a verb *after* it
+  (`/pages/{id}/assets`, `/pages/{id}/links`), and Go's `http.ServeMux` panics
+  when two patterns overlap without one being strictly more specific —
+  `/pages/{id}/assets` and `/pages/permalink/{id}` both match
+  `/pages/permalink/assets`. Two "fixes" were rejected: changing the paths
+  breaks the SPA's hard-coded client (the whole point is dropping a LeafWiki
+  build into `pb/leafwiki/ui/dist`), and the panic is a *startup* failure, so
+  there is no runtime fallback. `api_dispatch.go` matches the upstream shapes in
+  one handler instead, and the integration test builds a real mux, so a future
+  "simplification" back to per-verb registrations fails in `go test`.
+- **A missing `leafwiki_id` is written back on load.** Upstream does the same,
+  and for the same reason: the id is the page's permalink identity. Without the
+  write-back every restart re-generates ids and every saved link dies.
+- **Not ported, on purpose:** revisions, favorites, share links,
+  snapshots/restore, git backup, SMTP, TOTP, API-key management, avatars,
+  branding uploads, the ZIP importer and the resync job. `/api/config` reports
+  them as disabled so the SPA hides the affordances instead of discovering a
+  404. Markdown imports still work by copying files into `root/` — they are
+  adopted on the next load.
+
+`RIFF_WIKI_PUBLIC_WRITE=1` is upstream's "open editing without login" mode:
+anonymous writes are accepted and `/api/config` reports `authDisabled: true`.
+
 ## The PocketBase leverage audit: four defects, and what each one was (2026-10-26)
 
 An audit of how well riff reuses PocketBase rather than re-implementing
