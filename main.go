@@ -135,6 +135,24 @@ func main() {
 	// a no-op rather than a silent regression.
 	api.SetAdvertisedVersion(os.Getenv("RIFF_MEMOS_VERSION"))
 	connect.SetAdvertisedVersion(os.Getenv("RIFF_MEMOS_VERSION"))
+
+	// --- Attachment download logging -------------------------------------
+	// RIFF_FILE_ACCESS_LOG=1 turns on the per-request log of the
+	// attachment download surface (pb/api/file_access_log.go). Every
+	// line goes to the stdlib slog logger, which writes to stderr ->
+	// supervisord -> /dev/stdout, which is what `fly logs` collects.
+	// PocketBase's own app.Logger() would NOT: it writes into the
+	// logs.db table.
+	//
+	// RIFF_FILE_ACCESS_LOG_TOKEN gates the surface: when it is set, only
+	// requests presenting the token (X-Riff-Log-Token header or the
+	// log_token query parameter) are logged. That keeps a public
+	// instance's log stream from filling with lines nobody asked for.
+	api.SetFileAccessLog(
+		envBool("RIFF_FILE_ACCESS_LOG"),
+		os.Getenv("RIFF_FILE_ACCESS_LOG_TOKEN"),
+	)
+
 	api.Register(app, rateLimiter)
 
 	// --- Bark push notifications ----------------------------------------

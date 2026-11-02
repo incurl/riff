@@ -5,6 +5,67 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## Attachment downloads are logged to stdout, not to PocketBase's log table (2026-11-03)
+
+A MoeMemos client that cannot render an attachment has no diagnostic
+surface at all. The file GET answers **404** — by design, because a denial
+must not confirm that the attachment exists — the client shows a spinner,
+and the server says nothing. Every question of the form "did the request
+arrive?", "was a credential presented?", "was the attachment found?", "was
+the caller allowed?" had no answer, which made the most common client
+complaint (an iOS attachment that never renders) undiagnosable from the
+server side.
+
+The instrumentation (`pb/api/file_access_log.go`) logs one line per
+attachment GET to the **standard-library** `slog.Default()`, and that choice
+is the load-bearing part:
+
+- **PocketBase's own `app.Logger()` writes into the `logs.db` table**, not
+  to stdout. A diagnostic written there is invisible to an operator
+  watching `fly logs` — and it is also written on a 3-second batch
+  timer, so it may not exist yet when the operator is staring at the
+  screen. The stdlib logger writes to stderr, which supervisord forwards
+  to `/dev/stdout`, which is exactly what Fly collects. Every other riff
+  diagnostic (`pb/connect`, `pb/hooks`, `pb/api`) already uses
+  `slog.Default()` for the same reason; the file surface was the one
+  surface with no diagnostic at all.
+
+**What the line records, and what it deliberately does not.** The line
+carries the attachment id, the route family, the status, whether the row
+was found, whether the caller was allowed, and the *kind* of credential
+presented (`bearer` / `cookie` / `share` / `none`). It never carries a
+credential *value*: the bearer and the session cookie are not logged, and
+the share token is redacted too — it arrives in the query string, which is
+precisely the kind of thing that ends up in a proxy's access log, so
+echoing it would leak it a second time. Only presence is recorded
+(`has_bearer`, `has_cookie`, `has_share`).
+
+**Why the `found` / `allowed` / `auth` triple.** The three fields are
+what turn "it 404s" into a diagnosis:
+
+| The line says | The cause |
+| --- | --- |
+| `found=false` | Wrong id — the attachment does not exist. |
+| `found=true allowed=false auth=none` | The client sent **no credential**. This is the MoeMemos iOS signature: the server emits a *relative* `externalLink`, the client's auth middleware compares `request.url?.host` against the configured host, and a relative URL has no host, so the bearer is dropped before the request leaves the app. |
+| `found=true allowed=false auth=bearer` | The credential arrived and was refused — the memo's visibility rule. |
+| `allowed=true status=200` | Served. A spinner here means the bytes arrived and the problem is a stale cached URL. |
+
+**The token gate.** The instrumentation is **off by default**
+(`RIFF_FILE_ACCESS_LOG=1` turns it on) because every attachment GET on a
+busy instance would otherwise add a line. `RIFF_FILE_ACCESS_LOG_TOKEN` is
+a shared secret that gates it: with a secret set, only requests
+presenting it (`X-Riff-Log-Token` header or `?log_token=`) are logged.
+That is what makes "log everything" usable on a *public* instance — the
+operator gets the traffic they asked about without the log stream filling
+up with everyone else's. The token is compared in constant time and is
+never logged.
+
+**One trap worth recording.** `e.RealIP()` dereferences `e.App`, so
+calling it from the log path turns a 404 into a 500 when the event has no
+app (the unit tests build a bare `RequestEvent`). A diagnostic must never
+break the request it describes, so `fileAccessClientIP` falls back to the
+peer address when the app is absent.
+
 ## LeafWiki ported onto PocketBase: what was replaced, and why (2026-11-02)
 
 The wiki module (`pb/leafwiki/`, mounted at `/wiki`) is a port of LeafWiki

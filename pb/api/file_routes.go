@@ -77,14 +77,17 @@ func attachmentFileHandler(app core.App) func(*core.RequestEvent) error {
 	return func(e *core.RequestEvent) error {
 		uid := attachmentUIDFromRequest(e)
 		if uid == "" {
+			logFileAccess(e, "", fileAccessOutcome{Status: http.StatusNotFound}, fileAccessAuthKind(e))
 			return fileNotFound(e)
 		}
 		rec, err := findAttachmentRecord(app, uid)
 		if err != nil {
+			logFileAccess(e, uid, fileAccessOutcome{Status: http.StatusNotFound}, fileAccessAuthKind(e))
 			return fileNotFound(e)
 		}
 		filename := rec.GetString("filename")
 		if filename == "" {
+			logFileAccess(e, uid, fileAccessOutcome{Found: true, Status: http.StatusNotFound}, fileAccessAuthKind(e))
 			return fileNotFound(e)
 		}
 
@@ -93,14 +96,18 @@ func attachmentFileHandler(app core.App) func(*core.RequestEvent) error {
 		// confirms that the attachment exists.
 		access := authorizeAttachment(app, e, rec)
 		if !access.Allowed {
+			logFileAccess(e, uid, fileAccessOutcome{Found: true, Status: http.StatusNotFound}, fileAccessAuthKind(e))
 			return fileNotFound(e)
 		}
 
 		if e.Request.URL.Query().Get("motion") == "true" {
-			return serveMotionClip(e, app, rec, filename)
+			err := serveMotionClip(e, app, rec, filename)
+			logFileAccess(e, uid, fileAccessOutcome{Found: true, Allowed: true, Status: responseStatus(e, err)}, fileAccessAuthKind(e))
+			return err
 		}
 		if e.Request.URL.Query().Get("thumbnail") == "true" {
 			if served := serveThumbnail(e, app, rec, filename); served {
+				logFileAccess(e, uid, fileAccessOutcome{Found: true, Allowed: true, Status: responseStatus(e, nil)}, fileAccessAuthKind(e))
 				return nil
 			}
 			// The thumbnail could not be produced (an unsupported
@@ -109,8 +116,26 @@ func attachmentFileHandler(app core.App) func(*core.RequestEvent) error {
 			// <img onError> handler does the same.
 		}
 
-		return streamRecordFile(e, app, rec, filename, access.Public)
+		err = streamRecordFile(e, app, rec, filename, access.Public)
+		logFileAccess(e, uid, fileAccessOutcome{Found: true, Allowed: true, Status: responseStatus(e, err)}, fileAccessAuthKind(e))
+		return err
 	}
+}
+
+// responseStatus reports the status code the response carries.
+//
+// The router's ResponseWriter tracks it (see router.StatusTracker), so the
+// logged status is the one the client actually received — including the 304
+// a conditional GET earns and the 404 a missing motion clip produces. A
+// handler that returned an error before writing anything reports 0.
+func responseStatus(e *core.RequestEvent, err error) int {
+	if err != nil {
+		return http.StatusInternalServerError
+	}
+	if status := e.Status(); status != 0 {
+		return status
+	}
+	return http.StatusOK
 }
 
 // serveThumbnail writes a generated thumbnail to the response. It

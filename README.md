@@ -118,6 +118,65 @@ the Memos API at `/memos.api.v1.*/*`. Get the
 or [Firefox](https://addons.mozilla.org/en-US/firefox/addon/memos-web-clipper/),
 then point it at your riff instance.
 
+## Troubleshooting an attachment that will not load
+
+A client that cannot render an attachment has almost no diagnostic surface:
+the file GET answers **404** (by design — a denial must not confirm the file
+exists), the UI shows a spinner, and the server says nothing. riff can log
+every attachment download for exactly this case.
+
+```bash
+# on the Fly machine (or wherever the instance runs)
+fly ssh console -a ravine -C 'supervisorctl tail -100 riff'
+# or, for a local instance
+docker logs -f <container>
+```
+
+Enable it with two environment variables:
+
+| Variable | Meaning |
+| --- | --- |
+| `RIFF_FILE_ACCESS_LOG=1` | Log one line per attachment GET. Off by default. |
+| `RIFF_FILE_ACCESS_LOG_TOKEN=<secret>` | Gate: only requests presenting the token are logged. |
+
+The token is presented as the `X-Riff-Log-Token` header or the `?log_token=`
+query parameter (the latter for clients that cannot set a header). Set it on a
+public instance so the log stream only contains the traffic you asked about:
+
+```bash
+fly secrets set RIFF_FILE_ACCESS_LOG=1 RIFF_FILE_ACCESS_LOG_TOKEN=$(openssl rand -hex 16)
+```
+
+Every line carries `marker=file_access` and answers the four questions the
+404 hid:
+
+```
+WARN attachment request denied marker=file_access uid=lz8baid30sje0ec route=v0-o-r \
+  status=404 found=true allowed=false auth=none ip=203.0.113.7 method=GET \
+  has_bearer=false has_cookie=false has_share=false
+```
+
+| The line says | The cause |
+| --- | --- |
+| `found=false` | Wrong id — the attachment does not exist. |
+| `found=true allowed=false auth=none` | **The client sent no credential.** This is the MoeMemos iOS signature: the server emits a *relative* `externalLink`, the client's auth middleware compares `request.url?.host` against the configured host, and a relative URL has no host — so the bearer is dropped before the request leaves the app. |
+| `found=true allowed=false auth=bearer` | The credential arrived and was refused: the memo's visibility rule (a PRIVATE memo's file is readable only by its author). |
+| `status=200 allowed=true` | Served. If the client still shows a spinner, the bytes arrived and the problem is elsewhere — a stale cached URL, most likely. |
+
+The `route` field names the surface: `v0-o-r` (`/o/r/{uid}`, the MoeMemos
+iOS path), `file-attachments` (`/file/attachments/…`, the SPA and the V0
+`externalLink`), `upstream-memos-file` (`/memos/api/file/…`), `file-avatar`.
+
+**No credential value is ever written to the log** — only the *presence* of
+one (`has_bearer`, `has_cookie`, `has_share`). The share token is redacted
+too: it arrives in the query string, which is exactly what ends up in a
+proxy's access log.
+
+The lines are written to the standard-library logger on purpose. PocketBase's
+own `app.Logger()` writes into the `logs.db` table and never reaches stdout;
+the stdlib logger writes to stderr, which supervisord forwards to
+`/dev/stdout`, which is what Fly collects.
+
 ## Get Help
 
 Read the [design docs](docs/design/README.md), the [agent guide](AGENTS.md), and
