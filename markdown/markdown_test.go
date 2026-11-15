@@ -1089,3 +1089,67 @@ func TestExtractAllCapturesLinkDestinations(t *testing.T) {
 	}, data.LinkDestinations, "link destinations must be extracted and deduplicated")
 	assert.NotContains(t, data.LinkDestinations, "https://example.com/pic.png", "image destinations are not link destinations")
 }
+
+// TestRenderHTML_UsesTheServiceExtensions pins that RenderHTML runs
+// through the service's own goldmark instance.
+//
+// The two paths must not diverge: whatever extension renders a node in
+// the parsed AST (tables, strikethrough, task lists, linkify) must also
+// render it in the HTML. A separate ext-less instance would emit a
+// paragraph of raw Markdown for a table.
+func TestRenderHTML_UsesTheServiceExtensions(t *testing.T) {
+	svc := NewService()
+
+	rendered, err := svc.RenderHTML([]byte("| a | b |\n|---|---|\n| 1 | 2 |"))
+	if err != nil {
+		t.Fatalf("RenderHTML returned an error: %v", err)
+	}
+	if !strings.Contains(rendered, "<table>") {
+		t.Fatalf("a table must render as a table, got %q", rendered)
+	}
+
+	rendered, err = svc.RenderHTML([]byte("~~gone~~"))
+	if err != nil {
+		t.Fatalf("RenderHTML returned an error: %v", err)
+	}
+	if !strings.Contains(rendered, "<del>gone</del>") {
+		t.Fatalf("strikethrough must render, got %q", rendered)
+	}
+}
+
+// TestRenderHTML_DoesNotDropText pins that riff's memos tag and mention
+// extensions are not enabled by default.
+//
+// Those extensions build AST nodes with no HTML node renderer, so
+// enabling them makes the HTML renderer emit nothing for the node and
+// every `#tag` / `@mention` in a body silently vanishes. Callers that
+// render HTML must use the plain service.
+func TestRenderHTML_DoesNotDropText(t *testing.T) {
+	svc := NewService()
+
+	source := "hi #work and @alice"
+	rendered, err := svc.RenderHTML([]byte(source))
+	if err != nil {
+		t.Fatalf("RenderHTML returned an error: %v", err)
+	}
+	if !strings.Contains(rendered, "#work") || !strings.Contains(rendered, "@alice") {
+		t.Fatalf("the source text must survive into the HTML, got %q", rendered)
+	}
+}
+
+// TestRenderHTML_EscapesRawHTML pins that raw HTML in the source is
+// escaped.
+//
+// A client inserts the rendered body as trusted HTML, so an unescaped
+// script tag would be an injection vector.
+func TestRenderHTML_EscapesRawHTML(t *testing.T) {
+	svc := NewService()
+
+	rendered, err := svc.RenderHTML([]byte("<script>alert(1)</script>"))
+	if err != nil {
+		t.Fatalf("RenderHTML returned an error: %v", err)
+	}
+	if strings.Contains(rendered, "<script>") {
+		t.Fatalf("the raw script tag must not be passed through, got %q", rendered)
+	}
+}

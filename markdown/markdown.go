@@ -17,6 +17,7 @@ import (
 	"github.com/incurl/riff/internal/identifier"
 	mast "github.com/incurl/riff/markdown/ast"
 	"github.com/incurl/riff/markdown/extensions"
+	markdownhtml "github.com/incurl/riff/markdown/html"
 	"github.com/incurl/riff/markdown/renderer"
 )
 
@@ -68,6 +69,13 @@ type Service interface {
 
 	// RenderMarkdown renders goldmark AST back to markdown text
 	RenderMarkdown(content []byte) (string, error)
+
+	// RenderHTML renders markdown content to an HTML fragment.
+	//
+	// The fragment is what a client displays as rendered content: the
+	// riff forum serves it as a post's `contentHtml`, which the
+	// frontend inserts as trusted HTML.
+	RenderHTML(content []byte) (string, error)
 
 	// GenerateSnippet creates plain text summary
 	GenerateSnippet(content []byte, maxLength int) (string, error)
@@ -128,12 +136,16 @@ func NewService(opts ...Option) Service {
 		exts = append(exts, extensions.MentionExtension)
 	}
 
-	md := goldmark.New(
+	// The HTML renderer options are attached to the instance, so the
+	// HTML carries the same extensions as the AST (see RenderHTML).
+	options := append([]goldmark.Option{
 		goldmark.WithExtensions(exts...),
 		goldmark.WithParserOptions(
 			parser.WithAutoHeadingID(), // Generate heading IDs
 		),
-	)
+	}, markdownhtml.Options{}.GoldmarkOptions()...)
+
+	md := goldmark.New(options...)
 
 	return &service{
 		md: md,
@@ -298,6 +310,30 @@ func (s *service) RenderMarkdown(content []byte) (string, error) {
 
 	mdRenderer := renderer.NewMarkdownRenderer()
 	return mdRenderer.Render(root, content), nil
+}
+
+// RenderHTML renders markdown content to an HTML fragment.
+//
+// The conversion runs through the service's own goldmark instance, so
+// the HTML carries the same extensions (tables, strikethrough, task
+// lists, linkify) as the AST the other methods walk: a table in the AST
+// is a table in the HTML.
+//
+// The tag and mention extensions are a caveat rather than a feature
+// here. They build AST nodes with no HTML node renderer, so enabling
+// them makes the HTML renderer emit nothing for the node and every
+// `#tag` and `@mention` in the body silently vanishes. A caller that
+// renders HTML should use the plain service.
+//
+// Raw HTML in the source is escaped. The caller that inserts the result
+// into a page does so as trusted HTML, so an unescaped script tag would
+// be an injection vector.
+func (s *service) RenderHTML(content []byte) (string, error) {
+	var buf bytes.Buffer
+	if err := s.md.Convert(content, &buf); err != nil {
+		return "", err
+	}
+	return buf.String(), nil
 }
 
 // GenerateSnippet creates a plain text summary from markdown content.
