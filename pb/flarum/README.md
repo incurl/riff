@@ -16,6 +16,8 @@ contract, plus the reused Flarum frontend.
 | `pb/flarum/plugins/tags/` | The first-party Tags plugin. |
 | `pb/flarum/plugins/likes/` | The first-party Likes plugin. |
 | `pb/flarum/frontend/ui/index.html` | The tracked fallback shell, embedded into the binary. |
+| `pb/flarum/frontend/packages/core/` | The vendored Flarum core frontend (Mithril + TypeScript). |
+| `pb/flarum/frontend/packages/plugins/{tags,likes}/` | The first-party plugins’ front ends: a Flarum extension each (`composer.json` + `js/` entries + `style.css`). |
 | `pb/flarum/frontend/ui/dist/` | The built SPA (build output; gitignored). |
 | `pb/flarum/frontend/package.json` | The npm workspace root. |
 | `pb/flarum/frontend/packages/core/` | The vendored Flarum frontend source (unmodified). |

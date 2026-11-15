@@ -1,0 +1,17 @@
+{
+  "name": "@riff/flarum-likes",
+  "private": true,
+  "version": "1.0.0",
+  "description": "The riff forum's Likes extension front end.",
+  "license": "MIT",
+  "devDependencies": {
+    "flarum-webpack-config": "file:../../../webpack-config",
+    "webpack": "^5.104.1",
+    "webpack-cli": "^7.2.3",
+    "webpack-merge": "^5.8.0"
+  },
+  "scripts": {
+    "build": "webpack --mode production",
+    "dev": "webpack --mode development --watch"
+  }
+}

@@ -1,0 +1,31 @@
+/* The like button in a post's footer. */
+
+.Post-like {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0;
+  color: var(--muted-color, #777);
+  background: none;
+  border: 0;
+  cursor: pointer;
+  font-size: inherit;
+}
+
+.Post-like:hover,
+.Post-like:focus-visible {
+  color: var(--link-color, #4a90e2);
+}
+
+.Post-like:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.Post-like--liked {
+  color: var(--link-color, #4a90e2);
+}
+
+.Post-like-count {
+  font-variant-numeric: tabular-nums;
+}

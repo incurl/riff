@@ -81,6 +81,33 @@ the Likes plugin mirrors `flarum/likes`' `isLiked` / `likesCount` /
 `canLike` attributes, its `likes` relationship (capped at four likers,
 the current user's first) and its unique `(post, user)` index.
 
+Their **front ends** are real Flarum extensions, in upstream's layout
+under `pb/flarum/frontend/packages/plugins/<name>/` — a `composer.json`
+(the plugin's composer name, `riff/tags` / `riff/likes`), a `js/`
+directory with `forum.js` and `admin.js` entries and a
+`webpack.config.cjs`, and a `style.css`. They build with the vendored
+`flarum-webpack-config`, so the bundles share core's externals (a
+`flarum/...` import compiles to `flarum.reg.get('core', ...)` and never
+duplicates core) and its babel preset (JSX compiles to Mithril's `m`).
+Each bundle assigns itself onto `flarum.extensions` under the id
+derived from the composer name — `riff-tags` / `riff-likes` — which is
+what the boot shell's `app.bootExtensions(flarum.extensions)` reads.
+`scripts/build_flarum_spa.sh` builds and stages all three bundles plus
+the stylesheets into the embedded tree.
+
+Three front-end deviations are deliberate:
+
+- **Likes gets a button, Tags gets badges.** The Likes bundle extends
+  `CommentPost`'s `footerItems` with a like/unlike button; the Tags
+  bundle extends `DiscussionListItem`'s `infoItems` with tag badges.
+  Everything else upstream ships (the tag picker in the composer, the
+  tag index and tag pages, the likes list popover) is not implemented.
+- **Tag badges are labels, not links.** There is no tag route in this
+  port, so a badge links nowhere rather than to the fallback page.
+- **No locale files.** The port has no extension-locale pipeline, and
+  the translator renders a missing key as the key itself, so the
+  extension strings are literal English rather than `trans()` calls.
+
 ## 7. The permission model is Flarum's, but the storage is not
 
 Upstream stores permissions in a `group_permission` table keyed by

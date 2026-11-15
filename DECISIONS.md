@@ -5,6 +5,62 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## The forum's plugin front ends are real Flarum extensions (2026-11-16)
+
+The Tags and Likes Go plugins register an `AssetBundle` that names
+`plugins/<name>/forum.js`, `admin.js` and `style.css`, and the boot
+shell emits those `<script>`/`<link>` tags from the registered bundle
+list — it does not check whether the files exist. So for a long time the
+forum shipped three 404s per plugin: the manifest paths were real, the
+bundles were not.
+
+**They are now genuine Flarum extensions**, in upstream's layout under
+`pb/flarum/frontend/packages/plugins/<name>/`: a `composer.json` whose
+`name` is the plugin id (`riff/tags`, `riff/likes`), a `js/` directory
+holding the `forum.js`/`admin.js` entries and a `webpack.config.cjs`,
+and a `style.css`. Building them with the vendored
+`flarum-webpack-config` is what keeps them honest: a `flarum/...`
+import compiles to `flarum.reg.get('core', ...)`, so a bundle never
+duplicates core, and the babel preset is the one that turns JSX into
+Mithril's `m`.
+
+**The webpack output library is the one thing an extension must
+override.** The shared config emits `module.exports = ...`
+(`libraryTarget: 'assign'`), which is meaningless inside a `<script>`.
+Each extension therefore sets
+`output.library = 'flarum.extensions["<id>"]'`, where `<id>` is the
+composer name flattened the way `extensionId.cjs` does it
+(`riff/tags` → `riff-tags`). That assignment is what
+`app.bootExtensions(flarum.extensions)` reads. Core only gets away with
+the default because it overrides the library to `flarum.core` itself.
+
+**The bundle must export `extend` BY NAME, not as a default.** The shell
+reads `flarum.extensions[id].extend`, and webpack assigns the module
+NAMESPACE object, so `export default [...]` lands behind a `default`
+key: the boot succeeds, no extender ever runs, and nothing is logged.
+Both bundles therefore `export const extend = [...]`, and the imported
+`extend` helper is aliased (`import { extend as extendMethod }`) to
+avoid the collision. This was caught only by loading the built bundles
+in node against stubbed `flarum` internals and driving the hooks; a
+successful `webpack` compile says nothing about it.
+
+**The plugin packages are deliberately NOT npm workspaces.** Adding them
+to the workspace globs would rewrite `package-lock.json` and re-resolve
+the whole tree; `scripts/build_flarum_spa.sh` instead drives the webpack
+CLI with `NODE_PATH` pointed at the frontend's existing `node_modules`,
+so the extensions build against the exact toolchain core already uses.
+
+**The stylesheet is copied, not bundled.** The shared config carries no
+CSS rule, so each `style.css` is staged beside the bundles by the build
+script. A loader would be a dependency and a config change for one
+small file per extension.
+
+**Scope.** The Likes bundle adds a like/unlike button to
+`CommentPost`'s `footerItems`; the Tags bundle adds badges to
+`DiscussionListItem`'s `infoItems`. The tag picker, tag pages and the
+likes-list popover are not implemented — see
+`docs/design/flarum/deviations.md` §6.
+
 ## The forum renders Markdown with riff's own engine (2026-11-16)
 
 The forum's posts carry a `contentHtml` field, because the reused

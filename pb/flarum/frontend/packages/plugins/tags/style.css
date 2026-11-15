@@ -1,0 +1,36 @@
+/* The tag badges shown on a discussion in the list. */
+
+.TagsLabel {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.TagsLabel-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: var(--border-radius, 4px);
+  background: var(--control-bg, rgba(0, 0, 0, 0.05));
+  color: var(--muted-color, #777);
+  font-size: 0.85em;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.TagsLabel-dot {
+  display: inline-block;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+}
+
+/* The list item's info row is a horizontal list; keep the badges on one
+   line with the other metadata. */
+.DiscussionListItem-tags {
+  display: inline-flex;
+}

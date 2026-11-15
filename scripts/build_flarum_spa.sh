@@ -15,6 +15,13 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 FRONTEND="$ROOT/pb/flarum/frontend"
 TARGET="$ROOT/pb/flarum/frontend/ui/dist"
 
+# The first-party plugin extensions. Each one is a Flarum extension in
+# the upstream layout — <plugin>/composer.json plus <plugin>/js — and
+# builds its own forum.js/admin.js bundle. The Go plugin declares those
+# paths in its AssetBundle (plugins/<name>/forum.js and friends), so a
+# missing build here is a 404 in the forum shell.
+PLUGINS="tags likes"
+
 export PATH="$HOME/.local/bin:$PATH"
 
 cd "$FRONTEND"
@@ -24,5 +31,33 @@ npm run build
 rm -rf "$TARGET"
 mkdir -p "$TARGET"
 cp -R "$FRONTEND/packages/core/dist/." "$TARGET/"
+
+# Build and stage each plugin bundle.
+#
+# The plugin packages are NOT npm workspaces: adding them to the
+# workspace globs would rewrite package-lock.json and pull the whole
+# dependency tree through npm again. NODE_PATH is what lets the plugin's
+# webpack.config.cjs resolve `flarum-webpack-config` (and the webpack
+# CLI resolve its own plugins) out of the frontend's existing
+# node_modules, so the extension builds against the EXACT same toolchain
+# as core.
+for plugin in $PLUGINS; do
+  plugin_dir="$FRONTEND/packages/plugins/$plugin"
+
+  echo "Building the $plugin extension"
+  (
+    cd "$plugin_dir/js"
+    NODE_PATH="$FRONTEND/node_modules" node "$FRONTEND/node_modules/webpack-cli/bin/cli.js" --config webpack.config.cjs --mode production
+  )
+
+  # The asset paths the Go plugin registers are relative to the embedded
+  # root: plugins/<name>/forum.js, plugins/<name>/admin.js and
+  # plugins/<name>/style.css. webpack emits the two bundles; the
+  # stylesheet is a plain file (the shared config has no CSS rule), so
+  # it is copied rather than bundled.
+  mkdir -p "$TARGET/plugins/$plugin"
+  cp -R "$plugin_dir/js/dist/." "$TARGET/plugins/$plugin/"
+  cp "$plugin_dir/style.css" "$TARGET/plugins/$plugin/style.css"
+done
 
 echo "The forum front end is staged in $TARGET"
