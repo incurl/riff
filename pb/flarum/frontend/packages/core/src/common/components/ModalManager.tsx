@@ -1,0 +1,297 @@
+import Component from '../Component';
+
+import { createFocusTrap, FocusTrap } from '../utils/focusTrap';
+
+import { disableBodyScroll, clearAllBodyScrollLocks } from 'body-scroll-lock';
+
+import type ModalManagerState from '../states/ModalManagerState';
+import type Mithril from 'mithril';
+import LoadingIndicator from './LoadingIndicator';
+
+interface IModalManagerAttrs {
+  state: ModalManagerState;
+}
+
+/**
+ * The `ModalManager` component manages one or more modal dialogs. Stacking modals
+ * is supported. Multiple dialogs can be shown at once; loading a new component
+ * into the ModalManager will overwrite the previous one.
+ */
+export default class ModalManager extends Component<IModalManagerAttrs> {
+  // Current focus trap
+  protected focusTrap: FocusTrap | undefined;
+
+  // Keep track of the last set focus trap
+  protected lastSetFocusTrap: number | undefined;
+
+  // Current close watcher instance
+  protected closeWatcher: CloseWatcher | undefined;
+
+  // Keep track of the last set close watcher
+  protected lastCloseWatcherKey: number | undefined;
+
+  // Keep track if there's an modal closing
+  protected modalClosing: boolean = false;
+
+  // The key of the modal being closed
+  protected closingModalKey: number | undefined;
+
+  protected keyUpListener: null | ((e: KeyboardEvent) => void) = null;
+
+  view(vnode: Mithril.VnodeDOM<IModalManagerAttrs, this>): Mithril.Children {
+    return (
+      <>
+        {this.attrs.state.modalList.map((modal, i) => {
+          const Tag = modal?.componentClass;
+
+          return (
+            <div
+              key={modal.key}
+              className="ModalManager modal"
+              data-modal-key={modal.key}
+              data-modal-number={i}
+              role="dialog"
+              aria-modal="true"
+              style={!window.testing && { '--modal-number': i }}
+              aria-hidden={this.attrs.state.modal !== modal && 'true'}
+            >
+              {!!Tag && [
+                <Tag
+                  key={modal.key}
+                  {...modal.attrs}
+                  animateShow={this.animateShow.bind(this)}
+                  animateHide={this.animateHide.bind(this)}
+                  state={this.attrs.state}
+                />,
+                /* This backdrop is invisible and used for outside clicks to close the modal. */
+                <div key={modal.key} className="ModalManager-invisibleBackdrop" onclick={this.handlePossibleBackdropClick.bind(this)} />,
+              ]}
+            </div>
+          );
+        })}
+
+        {(this.attrs.state.backdropShown || this.attrs.state.loadingModal) && (
+          <div
+            className="Modal-backdrop backdrop"
+            ontransitionend={this.onBackdropTransitionEnd.bind(this)}
+            data-showing={!!this.attrs.state.modalList.length || this.attrs.state.loadingModal}
+            style={!window.testing && { '--modal-count': this.attrs.state.modalList.length + Number(this.attrs.state.loadingModal) }}
+          >
+            {this.attrs.state.loadingModal && <LoadingIndicator />}
+          </div>
+        )}
+      </>
+    );
+  }
+
+  oncreate(vnode: Mithril.VnodeDOM<IModalManagerAttrs, this>): void {
+    super.oncreate(vnode);
+
+    this.keyUpListener = this.handleEscPress.bind(this);
+    document.body.addEventListener('keyup', this.keyUpListener);
+  }
+
+  onbeforeremove(vnode: Mithril.VnodeDOM<IModalManagerAttrs, this>): void {
+    super.onbeforeremove(vnode);
+
+    this.keyUpListener && document.body.removeEventListener('keyup', this.keyUpListener);
+    this.keyUpListener = null;
+  }
+
+  onupdate(vnode: Mithril.VnodeDOM<IModalManagerAttrs, this>): void {
+    super.onupdate(vnode);
+
+    // The modal being animated out was closed some other way, such as by a
+    // page loaded at the same time (Page closes any open modal). Its dialog is
+    // gone, so its `transitionend` never fires; without this, every later
+    // modal would be ignored when asked to close.
+    if (this.modalClosing && this.attrs.state.modal?.key !== this.closingModalKey) {
+      this.modalClosing = false;
+    }
+
+    requestAnimationFrame(() => {
+      try {
+        // Main content should gain or lose `aria-hidden` when modals are shown/removed
+        // See: http://web-accessibility.carnegiemuseums.org/code/dialogs/
+
+        if (!this.attrs.state.isModalOpen()) {
+          document.getElementById('app')?.removeAttribute('aria-hidden');
+          this.focusTrap!.deactivate?.();
+
+          // Destroy a close watcher instance
+          this.closeWatcher?.destroy();
+          this.closeWatcher = undefined;
+
+          clearAllBodyScrollLocks();
+
+          return;
+        }
+
+        document.getElementById('app')?.setAttribute('aria-hidden', 'true');
+
+        // Get current dialog key
+        const dialogKey = this.attrs.state.modal!.key;
+
+        // Deactivate focus trap if there's a new dialog/closed
+        if (this.focusTrap && this.lastSetFocusTrap !== dialogKey) {
+          this.focusTrap!.deactivate?.();
+
+          clearAllBodyScrollLocks();
+        }
+
+        // Activate focus trap if there's a new dialog which is not trapped yet
+        if (this.activeDialogElement && this.lastSetFocusTrap !== dialogKey) {
+          this.focusTrap = createFocusTrap(this.activeDialogElement as HTMLElement, { allowOutsideClick: true });
+          this.focusTrap!.activate?.();
+
+          if (this.activeDialogManagerElement) {
+            // Hiding the scrollbar widens the page. Where the browser keeps its
+            // space with `scrollbar-gutter` (see scaffolding.less), nothing moves,
+            // fixed elements included; padding the body as well would double the gap.
+            const reserveScrollBarGap = !(typeof CSS !== 'undefined' && CSS.supports?.('scrollbar-gutter', 'stable'));
+
+            disableBodyScroll(this.activeDialogManagerElement, { reserveScrollBarGap });
+          }
+        }
+
+        // Update key of current opened modal
+        this.lastSetFocusTrap = dialogKey;
+
+        // Initialize CloseWatcher for the new dialog
+        if ('CloseWatcher' in window && this.lastCloseWatcherKey !== dialogKey) {
+          // Destroy previous watcher when stacking modals
+          this.closeWatcher?.destroy();
+          this.closeWatcher = undefined;
+
+          if (this.attrs.state.modal!.componentClass.dismissibleOptions.viaEscKey) {
+            this.closeWatcher = new CloseWatcher();
+            this.closeWatcher.onclose = () => {
+              this.animateHide();
+            };
+          }
+
+          // Update key of the current close watcher
+          this.lastCloseWatcherKey = dialogKey;
+        }
+      } catch {
+        // We can expect errors to occur here due to the nature of mithril rendering
+      }
+    });
+  }
+
+  /**
+   * Get current active dialog
+   */
+  private get activeDialogElement(): HTMLElement | null {
+    return document.body.querySelector(`.ModalManager[data-modal-key="${this.attrs.state.modal?.key}"] .Modal`) as HTMLElement | null;
+  }
+
+  /**
+   * Get current active dialog
+   */
+  private get activeDialogManagerElement(): HTMLElement | null {
+    return document.body.querySelector(`.ModalManager[data-modal-key="${this.attrs.state.modal?.key}"]`) as HTMLElement | null;
+  }
+
+  animateShow(readyCallback: () => void = () => {}): void {
+    if (!this.attrs.state.modal) return;
+
+    this.activeDialogElement?.addEventListener(
+      'transitionend',
+      () => {
+        readyCallback();
+      },
+      { once: true }
+    );
+
+    requestAnimationFrame(() => {
+      this.activeDialogElement?.classList.add('in');
+    });
+  }
+
+  /**
+   * Animates the current modal out, then closes it.
+   *
+   * `closedCallback` runs when the hide animation ends, or after its CSS duration
+   * if no transition event arrives. If the modal is closed
+   * some other way before then, such as by a page change (Page closes any open
+   * modal) or by a non-stacked modal replacing it, its dialog is removed, the
+   * animation never ends and `closedCallback` does not run. It is not run in
+   * that case because whatever closed the modal may already have moved on: a
+   * callback that changes the route, for example, would close the new modal too.
+   */
+  animateHide(closedCallback: () => void = () => {}): void {
+    if (this.modalClosing) return;
+    this.modalClosing = true;
+
+    const closingKey = (this.closingModalKey = this.attrs.state.modal?.key);
+
+    const dialog = this.activeDialogElement;
+    let fallback: ReturnType<typeof setTimeout>;
+
+    const afterModalClosedCallback = () => {
+      clearTimeout(fallback);
+      dialog?.removeEventListener('transitionend', afterModalClosedCallback);
+
+      // An external close has already moved on; do not run its callback later.
+      if (!this.attrs.state.modalList.some((modal) => modal.key === closingKey)) return;
+
+      // A newer modal may be closing by now; leave its flag alone.
+      if (this.closingModalKey === closingKey) this.modalClosing = false;
+
+      // Remove the dialog that was hidden, and only that one. A modal stacked
+      // on top of it while it was animating out stays open.
+      if (closingKey !== undefined) this.attrs.state.remove(closingKey);
+
+      closedCallback();
+    };
+
+    dialog?.addEventListener('transitionend', afterModalClosedCallback, { once: true });
+
+    dialog?.classList.remove('in');
+    dialog?.classList.add('out');
+
+    // Closing before the first painted frame (or with transitions disabled)
+    // produces no transitionend. Allow the CSS transition time plus a small margin.
+    const style = dialog && getComputedStyle(dialog);
+    const milliseconds = (value: string) => parseFloat(value) * (value.trim().endsWith('ms') ? 1 : 1000) || 0;
+    const durations = (style?.transitionDuration || '0s').split(',').map(milliseconds);
+    const delays = (style?.transitionDelay || '0s').split(',').map(milliseconds);
+    const properties = (style?.transitionProperty || 'all').split(',');
+    const duration = Math.max(0, ...properties.map((_, i) => durations[i % durations.length] + delays[i % delays.length]));
+    fallback = setTimeout(afterModalClosedCallback, duration + 50);
+  }
+
+  protected handleEscPress(e: KeyboardEvent): void {
+    // Skip manual Escape handling if CloseWatcher is active
+    if (!this.attrs.state.modal || this.closeWatcher?.onclose) return;
+
+    const dismissibleState = this.attrs.state.modal.componentClass.dismissibleOptions;
+
+    // Close the dialog if the escape key was pressed
+    // Check if closing via escape key is enabled
+    if (e.key === 'Escape' && dismissibleState.viaEscKey) {
+      e.preventDefault();
+
+      this.animateHide();
+    }
+  }
+
+  protected handlePossibleBackdropClick(e: MouseEvent): void {
+    if (!this.attrs.state.modal || !this.attrs.state.modal.componentClass.dismissibleOptions.viaBackdropClick) return;
+
+    this.animateHide();
+  }
+
+  protected onBackdropTransitionEnd(e: TransitionEvent) {
+    if (e.propertyName === 'opacity') {
+      const backdrop = e.currentTarget as HTMLDivElement;
+
+      if (backdrop.getAttribute('data-showing') === null) {
+        // Backdrop is fading out
+        this.attrs.state.backdropShown = false;
+        m.redraw();
+      }
+    }
+  }
+}

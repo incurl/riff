@@ -1,0 +1,159 @@
+// Package likes is the forum's first-party Likes plugin.
+//
+// Like the Tags plugin, it is a reference implementation of the
+// three-layer plugin flow: a migration that creates the plugin's
+// collection, JSON:API attributes and relationships contributed through
+// the extender mechanism, and a frontend bundle that adds the UI.
+//
+// The plugin mirrors upstream Flarum's `flarum/likes` extension: a post
+// carries a set of likes, the current user's like state is a writable
+// attribute, and the likers are exposed as a relationship.
+package likes
+
+import (
+	"context"
+
+	"github.com/pocketbase/pocketbase/core"
+
+	"github.com/incurl/riff/pb/flarum/api"
+	"github.com/incurl/riff/pb/flarum/domain"
+	"github.com/incurl/riff/pb/flarum/plugin"
+)
+
+// PluginID is the plugin's id.
+const PluginID = "riff/likes"
+
+// Version is the plugin's version.
+const Version = "1.0.0"
+
+// MaxLikes is how many likers a post's `likes` relationship exposes.
+//
+// It matches upstream Flarum's `PostResourceFields::$maxLikes`.
+const MaxLikes = 4
+
+// Plugin is the Likes plugin.
+type Plugin struct {
+	// manifest is the plugin's manifest.
+	manifest plugin.Manifest
+}
+
+// New returns the Likes plugin.
+func New() *Plugin {
+	return &Plugin{
+		manifest: plugin.Manifest{
+			ID:          PluginID,
+			Name:        "Likes",
+			Version:     Version,
+			CoreRequire: ">=2.0.0",
+			Deps:        []string{},
+			BackendKind: plugin.BackendStaticGo,
+			Icon: plugin.Icon{
+				BackgroundColor: "#3A649D",
+				Glyph:           "far fa-thumbs-up",
+			},
+		},
+	}
+}
+
+// Manifest describes the plugin.
+func (p *Plugin) Manifest() plugin.Manifest { return p.manifest }
+
+// Register declares the plugin's extenders.
+func (*Plugin) Register(_ context.Context, ext *plugin.Extenders) error {
+	physical := ext.Registry.Physical("likes")
+
+	// --- layer 1: the migration ---------------------------------------
+	ext.AddMigration(plugin.Migration{
+		Name: "create_likes",
+		Up: func(_ context.Context, app core.App) error {
+			return createLikesCollection(app, physical)
+		},
+	})
+
+	// --- layer 2: the API ----------------------------------------------
+	// The like state and the count are attributes on the post resource;
+	// the likers are a relationship.
+	ext.AddAttribute(plugin.AttributeContributor{
+		Resource: api.TypePost,
+		Name:     "likesCount",
+		Value: func(_ context.Context, req *plugin.AttributeRequest) (any, error) {
+			return likeCount(req.App, req.RecordID)
+		},
+	})
+	ext.AddAttribute(plugin.AttributeContributor{
+		Resource: api.TypePost,
+		Name:     "isLiked",
+		Value: func(_ context.Context, req *plugin.AttributeRequest) (any, error) {
+			if req.ActorID == "" {
+				return false, nil
+			}
+			return isLiked(req.App, req.RecordID, req.ActorID)
+		},
+	})
+	ext.AddAttribute(plugin.AttributeContributor{
+		Resource: api.TypePost,
+		Name:     "canLike",
+		Value: func(_ context.Context, req *plugin.AttributeRequest) (any, error) {
+			return req.ActorID != "", nil
+		},
+	})
+	ext.AddRelationship(plugin.RelationshipContributor{
+		Resource: api.TypePost,
+		Name:     "likes",
+		Type:     api.TypeUser,
+		Many:     true,
+		Resolve: func(_ context.Context, req *plugin.RelationshipRequest) ([]plugin.Identifier, error) {
+			ids, err := likerIDs(req.App, req.RecordID, MaxLikes)
+			if err != nil {
+				return nil, err
+			}
+			out := make([]plugin.Identifier, 0, len(ids))
+			for _, id := range ids {
+				out = append(out, plugin.Identifier{Type: api.TypeUser, ID: id})
+			}
+			return out, nil
+		},
+	})
+
+	// The like toggle lives on its own route, because the frontend's
+	// like button posts to it rather than patching the post.
+	ext.AddRoute(plugin.RouteDef{
+		Method:  "POST",
+		Path:    "/api/posts/{id}/like",
+		Handler: likeHandler,
+	})
+	ext.AddRoute(plugin.RouteDef{
+		Method:  "DELETE",
+		Path:    "/api/posts/{id}/like",
+		Handler: unlikeHandler,
+	})
+
+	// --- the permission key --------------------------------------------
+	ext.AddPermission(plugin.PermissionHandler{
+		Action: domain.PermissionLikePost,
+		Check: func(_ context.Context, _ *plugin.PermissionRequest) error {
+			return nil
+		},
+	})
+
+	// --- layer 3: the frontend ----------------------------------------
+	ext.AddAsset(plugin.AssetBundle{
+		PluginID: PluginID,
+		Version:  Version,
+		Forum:    "plugins/likes/forum.js",
+		Admin:    "plugins/likes/admin.js",
+		CSS:      "plugins/likes/style.css",
+	})
+
+	return nil
+}
+
+// Boot runs the plugin's startup work.
+func (*Plugin) Boot(_ context.Context, _ *plugin.Extenders) error {
+	return nil
+}
+
+// Shutdown releases the plugin's resources.
+func (*Plugin) Shutdown(_ context.Context, _ *plugin.Extenders) error {
+	return nil
+}

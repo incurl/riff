@@ -1,0 +1,24 @@
+{
+  "name": "@riff/forum-frontend",
+  "private": true,
+  "version": "2.0.0",
+  "description": "The reused Flarum frontend (Mithril + TypeScript), vendored into riff and built for the Go backend to serve.",
+  "license": "MIT",
+  "workspaces": [
+    "packages/core",
+    "packages/webpack-config",
+    "packages/tsconfig",
+    "packages/prettier-config"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace=@flarum/core",
+    "build:dev": "npm run build --workspace=@flarum/core -- --mode development",
+    "typecheck": "npm run check-typings --workspace=@flarum/core"
+  },
+  "devDependencies": {
+    "prettier": "^3.9.10"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -33,3 +33,12 @@ dist/
 # /home/peter/CLionProjects/ravine.1une.cc/website/_site/ and is not part
 # of this repository, so the symlink must not be tracked.
 scripts/ravine
+
+# The Flarum front end: the npm workspace and the built bundles.
+# `pb/flarum/frontend/ui/index.html` is the tracked fallback the Go
+# binary embeds, so a fresh clone compiles without a front-end build.
+pb/flarum/frontend/node_modules/
+pb/flarum/frontend/packages/*/node_modules/
+pb/flarum/frontend/packages/core/dist/
+pb/flarum/frontend/packages/core/dist-typings/
+pb/flarum/frontend/ui/dist/

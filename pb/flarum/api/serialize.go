@@ -1,0 +1,227 @@
+package api
+
+import (
+	"time"
+
+	"github.com/incurl/riff/pb/flarum/domain"
+)
+
+// Resource type names.
+//
+// These are the JSON:API types the reused frontend expects; the models
+// in the frontend's `common/models` directory are keyed by them.
+const (
+	// TypeForum is the forum resource.
+	TypeForum = "forums"
+	// TypeUser is the user resource.
+	TypeUser = "users"
+	// TypeGroup is the group resource.
+	TypeGroup = "groups"
+	// TypeDiscussion is the discussion resource.
+	TypeDiscussion = "discussions"
+	// TypePost is the post resource.
+	TypePost = "posts"
+	// TypeNotification is the notification resource.
+	TypeNotification = "notifications"
+	// TypeTag is the tag resource.
+	TypeTag = "tags"
+)
+
+// timestamp renders a time as the RFC 3339 string JSON:API expects.
+//
+// The frontend's Model.transformDate parses it with new Date(), so the
+// string must be a valid RFC 3339 timestamp. A zero time renders as an
+// empty string, which the frontend reads as "no date".
+func timestamp(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
+}
+
+// userResource renders a user as a JSON:API resource.
+//
+// The attribute names match the frontend's User model exactly: the
+// frontend reads `username`, `displayName`, `avatarUrl`, `groups` and the
+// `can*` flags by name.
+func userResource(user *domain.User, groups []string) Resource {
+	if groups == nil {
+		groups = user.Groups
+	}
+
+	attributes := map[string]any{
+		"username":                user.Username,
+		"displayName":             user.DisplayName,
+		"slug":                    user.Username,
+		"avatarUrl":               user.AvatarURL,
+		"isAdmin":                 user.IsAdmin,
+		"joinTime":                timestamp(user.JoinedAt),
+		"lastSeenAt":              timestamp(user.LastSeenAt),
+		"discussionCount":         user.DiscussionCount,
+		"commentCount":            user.CommentCount,
+		"unreadNotificationCount": user.UnreadNotificationCount,
+		"newNotificationCount":    user.UnreadNotificationCount,
+		"preferences":             map[string]any{},
+		"canEdit":                 false,
+		"canEditAvatar":           false,
+		"canEditGroups":           false,
+		"canDelete":               false,
+	}
+
+	relationships := map[string]Relationship{
+		"groups": {Data: identifiers(TypeGroup, groups)},
+	}
+
+	return Resource{
+		Type:          TypeUser,
+		ID:            user.ID,
+		Attributes:    attributes,
+		Relationships: relationships,
+	}
+}
+
+// groupResource renders a group as a JSON:API resource.
+func groupResource(group *domain.Group) Resource {
+	return Resource{
+		Type: TypeGroup,
+		ID:   group.ID,
+		Attributes: map[string]any{
+			"nameSingular": group.NameSingular,
+			"namePlural":   group.NamePlural,
+			"color":        group.Color,
+			"icon":         group.Icon,
+			"isHidden":     group.IsHidden,
+			"position":     group.Position,
+			"memberCount":  group.MemberCount,
+		},
+	}
+}
+
+// discussionResource renders a discussion as a JSON:API resource.
+//
+// The `can*` attributes carry the caller's own capabilities, which is
+// how the frontend decides whether to show the edit/hide/delete
+// controls.
+func discussionResource(discussion *domain.Discussion, canReply, canRename, canHide, canDelete bool, tagIDs []string) Resource {
+	attributes := map[string]any{
+		"title":            discussion.Title,
+		"slug":             discussion.Slug,
+		"createdAt":        timestamp(discussion.CreatedAt),
+		"lastPostedAt":     timestamp(discussion.LastPostedAt),
+		"lastPostNumber":   discussion.LastPostNumber,
+		"commentCount":     discussion.CommentCount,
+		"participantCount": discussion.ParticipantCount,
+		"viewCount":        discussion.ViewCount,
+		"isHidden":         discussion.IsHidden,
+		"hiddenAt":         timestamp(discussion.HiddenAt),
+		"canReply":         canReply,
+		"canRename":        canRename,
+		"canHide":          canHide,
+		"canDelete":        canDelete,
+		"unreadCount":      0,
+	}
+
+	relationships := map[string]Relationship{
+		"user":           {Data: identifier(TypeUser, discussion.UserID)},
+		"lastPostedUser": {Data: identifier(TypeUser, discussion.LastPostedUserID)},
+		"firstPost":      {Data: identifier(TypePost, discussion.FirstPostID)},
+		"lastPost":       {Data: identifier(TypePost, discussion.LastPostID)},
+		"hiddenUser":     {Data: identifier(TypeUser, discussion.HiddenUserID)},
+		"posts":          {Data: identifiers(TypePost, discussion.PostIDs)},
+		"tags":           {Data: identifiers(TypeTag, tagIDs)},
+	}
+
+	return Resource{
+		Type:          TypeDiscussion,
+		ID:            discussion.ID,
+		Attributes:    attributes,
+		Relationships: relationships,
+	}
+}
+
+// postResource renders a post as a JSON:API resource.
+//
+// The `contentHtml` attribute is what the frontend renders; `content`
+// carries the Markdown source for the edit form.
+func postResource(post *domain.Post, canEdit, canDelete, canHide bool, extra map[string]any) Resource {
+	attributes := map[string]any{
+		"content":      post.Content,
+		"contentHtml":  post.ContentHTML,
+		"contentType":  post.ContentType,
+		"createdAt":    timestamp(post.CreatedAt),
+		"editedAt":     timestamp(post.EditedAt),
+		"hiddenAt":     timestamp(post.HiddenAt),
+		"isHidden":     post.IsHidden,
+		"number":       post.Number,
+		"type":         post.Type,
+		"canEdit":      canEdit,
+		"canDelete":    canDelete,
+		"canHide":      canHide,
+		"renderFailed": false,
+	}
+
+	// A plugin's contributed attributes ride alongside the core ones.
+	for key, value := range extra {
+		attributes[key] = value
+	}
+
+	relationships := map[string]Relationship{
+		"user":       {Data: identifier(TypeUser, post.UserID)},
+		"discussion": {Data: identifier(TypeDiscussion, post.DiscussionID)},
+		"editedUser": {Data: identifier(TypeUser, post.EditedUserID)},
+		"hiddenUser": {Data: identifier(TypeUser, post.HiddenUserID)},
+	}
+
+	return Resource{
+		Type:          TypePost,
+		ID:            post.ID,
+		Attributes:    attributes,
+		Relationships: relationships,
+	}
+}
+
+// notificationResource renders a notification as a JSON:API resource.
+func notificationResource(notification *domain.Notification) Resource {
+	attributes := map[string]any{
+		"type":      notification.Type,
+		"subject":   notification.Subject,
+		"excerpt":   notification.Excerpt,
+		"readAt":    timestamp(notification.ReadAt),
+		"createdAt": timestamp(notification.CreatedAt),
+		"isRead":    notification.IsRead,
+	}
+
+	relationships := map[string]Relationship{
+		"user":       {Data: identifier(TypeUser, notification.UserID)},
+		"fromUser":   {Data: identifier(TypeUser, notification.FromUserID)},
+		"discussion": {Data: identifier(TypeDiscussion, notification.DiscussionID)},
+		"post":       {Data: identifier(TypePost, notification.PostID)},
+	}
+
+	return Resource{
+		Type:          TypeNotification,
+		ID:            notification.ID,
+		Attributes:    attributes,
+		Relationships: relationships,
+	}
+}
+
+// identifier builds a resource identifier.
+func identifier(resourceType, id string) any {
+	if id == "" {
+		return nil
+	}
+	return Identifier{Type: resourceType, ID: id}
+}
+
+// identifiers builds a list of resource identifiers.
+func identifiers(resourceType string, ids []string) []Identifier {
+	out := make([]Identifier, 0, len(ids))
+	for _, id := range ids {
+		if id == "" {
+			continue
+		}
+		out = append(out, Identifier{Type: resourceType, ID: id})
+	}
+	return out
+}

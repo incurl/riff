@@ -1,0 +1,144 @@
+import app from '../../forum/app';
+import setRouteWithForcedRefresh from '../../common/utils/setRouteWithForcedRefresh';
+import SearchState from '../../common/states/SearchState';
+
+type SearchParams = Record<string, string>;
+
+export default class GlobalSearchState extends SearchState {
+  private initialValueSet = false;
+
+  constructor(cachedSearches = []) {
+    super(cachedSearches);
+  }
+
+  getValue(): string {
+    // If we are on a search results page, we should initialize the value
+    // from the current search, if one is present.
+    // We can't do this in the constructor, as this class is instantiated
+    // before pages are rendered, and we need app.current.
+    if (!this.initialValueSet && this.currPageProvidesSearch()) {
+      this.initializeValue();
+    }
+
+    return super.getValue();
+  }
+
+  protected initializeValue() {
+    this.setValue(this.getInitialSearch());
+    this.initialValueSet = true;
+  }
+
+  protected currPageProvidesSearch(): boolean {
+    return app.current.type && 'providesInitialSearch' in app.current.type && (app.current.type as any).providesInitialSearch;
+  }
+
+  /**
+   * @inheritdoc
+   */
+  getInitialSearch(): string {
+    return this.currPageProvidesSearch() ? this.searchToQuery() : '';
+  }
+
+  private searchToQuery(): string {
+    const q = this.params().q || '';
+    const filter = this.params().filter || {};
+
+    // Some gambits serve more than one model (`author`, `group`), so each pass
+    // skips the filter keys an earlier pass already wrote back.
+    const written = new Set<string>();
+    const unwritten = () => Object.fromEntries(Object.entries(filter).filter(([key]) => !written.has(key.replace(/^-/, ''))));
+
+    let query = q;
+
+    for (const model of ['discussions', 'users', 'posts']) {
+      query = app.search.gambits.from(model, query, unwritten());
+      app.search.gambits.for(model).forEach((gambit) => written.add(gambit.filterKey()));
+    }
+
+    return query.trim();
+  }
+
+  /**
+   * Clear the search input and the current controller's active search.
+   */
+  clear() {
+    super.clear();
+
+    if (this.getInitialSearch()) {
+      this.clearInitialSearch();
+    } else {
+      m.redraw();
+    }
+  }
+
+  /**
+   * Redirect to the index page without a search filter. This is called when the
+   * 'x' is clicked in the search box in the header.
+   */
+  protected clearInitialSearch() {
+    const { q, filter, ...params } = this.params();
+
+    setRouteWithForcedRefresh(app.route(app.current.get('routeName'), params));
+  }
+
+  /**
+   * Get URL parameters that stick between filter changes.
+   *
+   * This can be used to generate a link that clears filters.
+   */
+  stickyParams(): SearchParams {
+    return {
+      sort: m.route.param('sort'),
+      q: this.routeSearch(),
+      // Objects must be copied, otherwise they are passed by reference.
+      // Which could end up undesirably modifying the mithril route params.
+      filter: Object.assign({}, m.route.param('filter')),
+    };
+  }
+
+  /**
+   * The search in the address. Mithril keeps a "+" that a browser's address
+   * bar sends for a space, and turns "true" and "false" into booleans, so
+   * the address itself is read the way browsers write it.
+   */
+  protected routeSearch(): string {
+    const q = m.route.param('q');
+
+    // No search: left as the router has it, like the other parameters.
+    if (q === undefined) return q;
+
+    return new URLSearchParams(window.location.search).get('q') ?? String(q);
+  }
+
+  /**
+   * Get parameters to be used in the current page.
+   */
+  params(): SearchParams {
+    const params = this.stickyParams();
+
+    return params;
+  }
+
+  /**
+   * The sort the current page lists discussions in when none is asked for.
+   * It is left out of the URL when chosen.
+   */
+  defaultSort(): string {
+    return Object.keys(app.discussions.sortMap())[0];
+  }
+
+  /**
+   * Redirect to the index page using the given sort parameter.
+   */
+  changeSort(sort: string) {
+    const params = this.params();
+
+    if (sort === this.defaultSort()) {
+      delete params.sort;
+    } else {
+      params.sort = sort;
+    }
+
+    setRouteWithForcedRefresh(app.route(app.current.get('routeName'), params));
+  }
+}

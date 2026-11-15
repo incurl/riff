@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 
+	"github.com/incurl/riff/pb/flarum"
 	"github.com/incurl/riff/internal/ratelimit"
 	"github.com/pocketbase/pocketbase"
 	"github.com/pocketbase/pocketbase/core"
@@ -65,6 +66,16 @@ func envBool(name string) bool {
 	return b
 }
 
+// envOr returns the environment variable's value, or the fallback when
+// the variable is unset or empty.
+func envOr(name, fallback string) string {
+	if value := os.Getenv(name); value != "" {
+		return value
+	}
+	return fallback
+}
+
+// main is the entrypoint.
 func main() {
 	app := pocketbase.NewWithConfig(pocketbase.Config{
 		DefaultDataDir: "./pb_data",
@@ -229,6 +240,18 @@ func main() {
 	if err := leafwiki.Register(app, leafwiki.Options{
 		Version:     version.Version,
 		PublicWrite: envBool("RIFF_WIKI_PUBLIC_WRITE"),
+	}); err != nil {
+		log.Fatal(err)
+	}
+
+	// --- Forum module ---------------------------------------------------
+	// /forum/* (the Flarum-compatible forum). The module reuses the
+	// shared PocketBase `users` collection as its account source and
+	// keeps every forum-owned collection under the `forum_` prefix, so
+	// it never collides with the host's own collections.
+	if err := flarum.Register(app, flarum.Options{
+		BasePath:         envOr("RIFF_FORUM_BASE_PATH", flarum.DefaultBasePath),
+		CollectionPrefix: envOr("RIFF_FORUM_COLLECTION_PREFIX", "forum_"),
 	}); err != nil {
 		log.Fatal(err)
 	}

@@ -1,0 +1,237 @@
+import app from '../app';
+
+export default interface IGambit<Type extends GambitType = GambitType> {
+  type: GambitType;
+
+  /**
+   * This is the regular expression pattern that will be used to match the gambit.
+   * The pattern language can be localized. for example, the pattern for the
+   * author gambit is `author:(.+)` in English, but `auteur:(.+)` in
+   * French.
+   */
+  pattern(): string;
+
+  /**
+   * The canonical English pattern for this gambit, used as an alias so that
+   * English always works regardless of the active locale.
+   * Implementations should derive this from canonicalKey() rather than key().
+   * Optional, so gambits that implement this interface directly keep working.
+   */
+  canonicalPattern?(): string;
+
+  /**
+   * This is the method to transform a gambit into a filter format.
+   */
+  toFilter(matches: string[], negate: boolean): Record<string, any>;
+
+  /**
+   * This is the server standardised filter key for this gambit.
+   * The filter key must not be localized.
+   */
+  filterKey(): string;
+
+  /**
+   * This is the method to transform a filter into a gambit format.
+   * The gambit format can be localized.
+   */
+  fromFilter(value: any, negate: boolean): string;
+
+  /**
+   * This returns information about how the gambit is structured for the UI.
+   * Use localized values.
+   */
+  suggestion(): Type extends GambitType.KeyValue ? KeyValueGambitSuggestion : GroupedGambitSuggestion;
+
+  /**
+   * Whether this gambit can use logical operators.
+   * For example, the tag gambit can be used as such:
+   * `tag:foo,bar tag:baz` which translates to `(foo OR bar) AND baz`.
+   *
+   * The info allows generation of the correct filtering format, which would be
+   * ```
+   * {
+   *   tag: [
+   *     'foo,bar', // OR because of the comma.
+   *     'baz', // AND because it's a separate item.
+   *   ]
+   * }
+   * ```
+   *
+   * The backend filter must be able to handle this format.
+   * Checkout the TagGambit and TagFilter classes for an example.
+   */
+  predicates: boolean;
+
+  /**
+   * Whether this gambit can be used by the actor.
+   */
+  enabled(): boolean;
+}
+
+export enum GambitType {
+  KeyValue = 'key:value',
+  Grouped = 'grouped',
+}
+
+export type GambitValueOption = {
+  value: string;
+  label?: string;
+};
+
+export type KeyValueGambitSuggestion = {
+  key: string;
+  hint: string;
+  values?: (string | GambitValueOption)[] | (() => (string | GambitValueOption)[]);
+};
+
+export type GroupedGambitSuggestion = {
+  group: 'is' | 'has' | 'allows' | string;
+  key: string | string[];
+};
+
+export abstract class BooleanGambit implements IGambit<GambitType.Grouped> {
+  type = GambitType.Grouped;
+  predicates = false;
+
+  abstract key(): string | string[];
+  abstract filterKey(): string;
+
+  /**
+   * The hardcoded English keyword(s) for this gambit, used as a canonical
+   * alias so that English always works regardless of the active locale.
+   * Defaults to key(), which is correct when the gambit is not translated.
+   * Override this in subclasses that translate key() via the translator.
+   */
+  canonicalKey(): string | string[] {
+    return this.key();
+  }
+
+  booleanKey(): 'is' | 'has' | 'allows' {
+    return 'is';
+  }
+
+  groupKey(): string {
+    return app.translator.trans('core.lib.gambits.group_keys.' + this.booleanKey(), {}, true);
+  }
+
+  pattern(): string {
+    const is = this.groupKey();
+    let key = this.key();
+
+    if (Array.isArray(key)) {
+      key = key.join('|');
+    }
+
+    return `${is}:(${key})`;
+  }
+
+  canonicalPattern(): string {
+    // Use the untranslated group key (is/has/allows) and canonical keyword(s)
+    // so that English input works regardless of the active locale.
+    let key = this.canonicalKey();
+
+    if (Array.isArray(key)) {
+      key = key.join('|');
+    }
+
+    return `${this.booleanKey()}:(${key})`;
+  }
+
+  toFilter(_matches: string[], negate: boolean): Record<string, any> {
+    const key = (negate ? '-' : '') + this.filterKey();
+
+    return {
+      [key]: true,
+    };
+  }
+
+  fromFilter(value: string, negate: boolean): string {
+    const is = this.groupKey();
+    const key = this.key();
+
+    return `${negate ? '-' : ''}${is}:${key}`;
+  }
+
+  suggestion() {
+    return {
+      group: this.groupKey(),
+      key: this.key(),
+    };
+  }
+
+  enabled(): boolean {
+    return true;
+  }
+}
+
+export abstract class KeyValueGambit implements IGambit<GambitType.KeyValue> {
+  type = GambitType.KeyValue;
+  predicates = false;
+
+  abstract key(): string;
+  abstract hint(): string;
+  abstract filterKey(): string;
+
+  /**
+   * The hardcoded English keyword for this gambit, used as a canonical
+   * alias so that English always works regardless of the active locale.
+   * Defaults to key(), which is correct when the gambit is not translated.
+   * Override this in subclasses that translate key() via the translator.
+   */
+  canonicalKey(): string {
+    return this.key();
+  }
+
+  valuePattern(): string {
+    return '(.+)';
+  }
+
+  gambitValueToFilterValue(value: string): string | number | boolean | Array<any> {
+    return value;
+  }
+
+  filterValueToGambitValue(value: any): string {
+    return Array.isArray(value) ? value.join(',') : value.toString();
+  }
+
+  pattern(): string {
+    const key = this.key();
+
+    return `${key}:` + this.valuePattern();
+  }
+
+  canonicalPattern(): string {
+    return `${this.canonicalKey()}:` + this.valuePattern();
+  }
+
+  toFilter(matches: string[], negate: boolean): Record<string, any> {
+    const key = (negate ? '-' : '') + this.filterKey();
+
+    return {
+      [key]: this.gambitValueToFilterValue(matches[1]),
+    };
+  }
+
+  fromFilter(value: any, negate: boolean): string {
+    return `${negate ? '-' : ''}${this.key()}:${this.filterValueToGambitValue(value)}`;
+  }
+
+  /**
+   * Optional list of suggested values or value options for this gambit.
+   */
+  values(): (string | GambitValueOption)[] {
+    return [];
+  }
+
+  suggestion(): KeyValueGambitSuggestion {
+    return {
+      key: this.key(),
+      hint: this.hint(),
+      values: () => this.values(),
+    };
+  }
+
+  enabled(): boolean {
+    return true;
+  }
+}

@@ -1,0 +1,403 @@
+import app from '../../admin/app';
+import Button from '../../common/components/Button';
+import EditCustomCssModal from './EditCustomCssModal';
+import EditCustomHeaderModal from './EditCustomHeaderModal';
+import EditCustomFooterModal from './EditCustomFooterModal';
+import UploadImageButton from '../../common/components/UploadImageButton';
+import AdminPage from './AdminPage';
+import ItemList from '../../common/utils/ItemList';
+import type Mithril from 'mithril';
+import Form from '../../common/components/Form';
+import SettingsSection from './SettingsSection';
+import ThemeMode from '../../common/components/ThemeMode';
+import AppIconPreview from './AppIconPreview';
+import FaviconPreview from './FaviconPreview';
+import SplashScreenPreview from './SplashScreenPreview';
+
+export default class AppearancePage extends AdminPage {
+  headerInfo() {
+    return {
+      className: 'AppearancePage',
+      icon: 'fas fa-paint-brush',
+      title: app.translator.trans('core.admin.appearance.title'),
+      description: app.translator.trans('core.admin.appearance.description'),
+    };
+  }
+
+  content() {
+    return this.contentItems().toArray();
+  }
+
+  contentItems(): ItemList<Mithril.Children> {
+    const items = new ItemList<Mithril.Children>();
+
+    items.add(
+      'colors',
+      <Form className="AdminPage-settingsForm--sectioned">
+        <SettingsSection
+          className="AppearancePage-colors"
+          id="appearance-colors"
+          icon="fas fa-palette"
+          label={app.translator.trans('core.admin.appearance.colors_heading')}
+          description={app.translator.trans('core.admin.appearance.colors_text')}
+        >
+          {this.colorItems().toArray()}
+        </SettingsSection>
+      </Form>,
+      100
+    );
+
+    items.add(
+      'branding',
+      <Form className="AdminPage-settingsForm--sectioned">
+        {this.itemSections(this.brandingItems(), [
+          {
+            id: 'appearance-logos',
+            icon: 'fas fa-image',
+            label: app.translator.trans('core.admin.appearance.sections.logos.label'),
+            description: app.translator.trans('core.admin.appearance.sections.logos.description'),
+            items: ['logo', 'logo-dark-mode', 'email-logo', 'favicon', 'app-icon', 'app-icon-background', 'splash-screen'],
+          },
+          {
+            id: 'appearance-custom-code',
+            icon: 'fas fa-code',
+            label: app.translator.trans('core.admin.appearance.sections.custom_code.label'),
+            description: app.translator.trans('core.admin.appearance.sections.custom_code.description'),
+            items: ['custom-header', 'custom-footer', 'custom-css'],
+          },
+        ]).toArray()}
+      </Form>,
+      90
+    );
+
+    return items;
+  }
+
+  brandingItems(): ItemList<Mithril.Children> {
+    const items = new ItemList<Mithril.Children>();
+
+    items.add(
+      'logo',
+      <div className="Form-group">
+        <label>{app.translator.trans('core.admin.appearance.logo_heading')}</label>
+        <div className="helpText">{app.translator.trans('core.admin.appearance.logo_text')}</div>
+        <UploadImageButton
+          name="logo"
+          routePath="logo"
+          value={app.data.settings.logo_path}
+          url={app.forum.attribute('logoUrl')}
+          {...this.themeImage('logo')}
+        />
+      </div>,
+      100
+    );
+
+    items.add(
+      'logo-dark-mode',
+      <div className="Form-group">
+        <label>{app.translator.trans('core.admin.appearance.logo_dark_mode_heading')}</label>
+        <div className="helpText">{app.translator.trans('core.admin.appearance.logo_dark_mode_text')}</div>
+        <UploadImageButton
+          name="logo-dark-mode"
+          routePath="logo-dark-mode"
+          value={app.data.settings.logo_dark_mode_path}
+          url={app.forum.attribute('logoDarkModeUrl')}
+          {...this.themeImage('logo_dark_mode')}
+        />
+      </div>,
+      99
+    );
+
+    items.add(
+      'email-logo',
+      <div className="Form-group">
+        <label>{app.translator.trans('core.admin.appearance.email_logo_heading')}</label>
+        <div className="helpText">{app.translator.trans('core.admin.appearance.email_logo_text')}</div>
+        <UploadImageButton
+          name="email-logo"
+          routePath="email-logo"
+          value={app.data.settings.email_logo_path}
+          url={app.forum.attribute('emailLogoUrl')}
+          {...this.themeImage('email_logo')}
+        />
+      </div>,
+      95
+    );
+
+    items.add(
+      'favicon',
+      <div className="Form-group">
+        <label>{app.translator.trans('core.admin.appearance.favicon_heading')}</label>
+        <div className="helpText">{app.translator.trans('core.admin.appearance.favicon_text')}</div>
+        <UploadImageButton
+          name="favicon"
+          routePath="favicon"
+          value={app.data.settings.favicon_path}
+          url={app.forum.attribute('faviconUrl')}
+          {...this.themeImage('favicon')}
+        />
+        <FaviconPreview />
+      </div>,
+      90
+    );
+
+    items.add(
+      'app-icon',
+      <div className="Form-group">
+        <label>{app.translator.trans('core.admin.appearance.app_icon_heading')}</label>
+        <div className="helpText">{app.translator.trans('core.admin.appearance.app_icon_text')}</div>
+        <UploadImageButton
+          name="app-icon"
+          routePath="app-icon"
+          value={app.data.settings.app_icon_path}
+          url={app.forum.attribute('appIconUrl')}
+          {...this.themeImage('app_icon')}
+        />
+        <AppIconPreview />
+      </div>,
+      85
+    );
+
+    if (!('app_icon' in this.themeImages())) {
+      items.add(
+        'app-icon-background',
+        <div className="AppearancePage-appIconBackground">
+          {this.buildSettingComponent({
+            type: 'color-preview',
+            setting: 'app_icon_background',
+            label: app.translator.trans('core.admin.appearance.app_icon_background_label'),
+            help: app.translator.trans('core.admin.appearance.app_icon_background_help'),
+          })}
+          <div className="Form-group">{this.submitButton()}</div>
+        </div>,
+        84
+      );
+    }
+
+    items.add(
+      'splash-screen',
+      <div className="AppearancePage-splashScreen">
+        {this.buildSettingComponent({
+          type: 'switch',
+          setting: 'open_as_app',
+          label: app.translator.trans('core.admin.appearance.open_as_app_label'),
+          help: app.translator.trans('core.admin.appearance.open_as_app_help'),
+        })}
+        {this.buildSettingComponent({
+          type: 'color-preview',
+          setting: 'splash_screen_background',
+          label: app.translator.trans('core.admin.appearance.splash_screen_background_label'),
+          help: app.translator.trans('core.admin.appearance.splash_screen_background_help'),
+          placeholder: app.forum.attribute<string>('splashScreenBackground'),
+        })}
+        <SplashScreenPreview />
+        <div className="Form-group">{this.submitButton()}</div>
+      </div>,
+      83
+    );
+
+    items.add(
+      'custom-header',
+      <div className="Form-group">
+        <label>{app.translator.trans('core.admin.appearance.custom_header_heading')}</label>
+        <div className="helpText">{app.translator.trans('core.admin.appearance.custom_header_text')}</div>
+        <Button className="Button" onclick={() => app.modal.show(EditCustomHeaderModal)}>
+          {app.translator.trans('core.admin.appearance.edit_header_button')}
+        </Button>
+      </div>,
+      80
+    );
+
+    items.add(
+      'custom-footer',
+      <div className="Form-group">
+        <label>{app.translator.trans('core.admin.appearance.custom_footer_heading')}</label>
+        <div className="helpText">{app.translator.trans('core.admin.appearance.custom_footer_text')}</div>
+        <Button className="Button" onclick={() => app.modal.show(EditCustomFooterModal)}>
+          {app.translator.trans('core.admin.appearance.edit_footer_button')}
+        </Button>
+      </div>,
+      70
+    );
+
+    items.add(
+      'custom-css',
+      <div className="Form-group">
+        <label>{app.translator.trans('core.admin.appearance.custom_styles_heading')}</label>
+        <div className="helpText">{app.translator.trans('core.admin.appearance.custom_styles_text')}</div>
+        <Button className="Button" onclick={() => app.modal.show(EditCustomCssModal)}>
+          {app.translator.trans('core.admin.appearance.edit_css_button')}
+        </Button>
+      </div>,
+      60
+    );
+
+    return items;
+  }
+
+  /**
+   * The images a theme sets with the Theme extender, with the title of the
+   * extension that set each one.
+   */
+  themeImages(): Record<string, string | null> {
+    return (app.data.themeImages as Record<string, string | null> | undefined) ?? {};
+  }
+
+  themeImage(name: string): { lockedBy?: string | null } {
+    const themeImages = this.themeImages();
+
+    return name in themeImages ? { lockedBy: themeImages[name] } : {};
+  }
+
+  colorItems() {
+    const items = new ItemList<Mithril.Children>();
+
+    items.add(
+      'theme-colors',
+      <div className="AppearancePage-colors-input">
+        {this.buildSettingComponent({
+          type: 'color-preview',
+          setting: 'theme_primary_color',
+          placeholder: '#aaaaaa',
+          ariaLabel: app.translator.trans('core.admin.appearance.colors_primary_label'),
+        })}
+        {this.buildSettingComponent({
+          type: 'color-preview',
+          setting: 'theme_secondary_color',
+          placeholder: '#aaaaaa',
+          ariaLabel: app.translator.trans('core.admin.appearance.colors_secondary_label'),
+        })}
+      </div>,
+      70
+    );
+
+    items.add(
+      'theme-modes',
+      this.buildSettingComponent(function () {
+        return (
+          <div className="Form-group">
+            <label>{app.translator.trans('core.admin.appearance.color_scheme_label')}</label>
+            <div className="ThemeMode-list">
+              {ThemeMode.colorSchemes.map((mode) => (
+                <ThemeMode
+                  mode={mode.id}
+                  label={mode.label || app.translator.trans('core.admin.appearance.color_schemes.' + mode.id.replace('-', '_') + '_mode_label')}
+                  onclick={() => {
+                    this.setting('color_scheme')(mode.id);
+
+                    this.setting('allow_user_color_scheme')(mode.id === 'auto' ? '1' : '0');
+
+                    app.setColorScheme(mode.id);
+                  }}
+                  selected={this.setting('color_scheme')() === mode.id}
+                />
+              ))}
+            </div>
+          </div>
+        );
+      }),
+      60
+    );
+
+    if (this.setting('color_scheme')() === 'auto') {
+      items.add(
+        'show-theme-selector',
+        this.buildSettingComponent({
+          type: 'switch',
+          setting: 'show_theme_selector',
+          label: app.translator.trans('core.admin.appearance.show_theme_selector_label'),
+          help: app.translator.trans('core.admin.appearance.show_theme_selector_help'),
+        }),
+        55
+      );
+    }
+
+    items.add(
+      'colored-header',
+      this.buildSettingComponent({
+        type: 'switch',
+        setting: 'theme_colored_header',
+        label: app.translator.trans('core.admin.appearance.colored_header_label'),
+        onchange: (value: boolean) => {
+          this.setting('theme_colored_header')(value ? '1' : '0');
+          app.setColoredHeader(value);
+        },
+      }),
+      50
+    );
+
+    items.add('submit', <div className="Form-group">{this.submitButton()}</div>, 0);
+
+    return items;
+  }
+
+  onsaved() {
+    window.location.reload();
+  }
+
+  static register() {
+    app.generalIndex.group('core-appearance', {
+      label: app.translator.trans('core.admin.appearance.title', {}, true),
+      icon: {
+        name: 'fas fa-paint-brush',
+      },
+      link: app.route('appearance'),
+    });
+
+    app.generalIndex.for('core-appearance').add('settings', [
+      {
+        id: 'colors_heading',
+        label: app.translator.trans('core.admin.appearance.colors_heading', {}, true),
+        help: app.translator.trans('core.admin.appearance.colors_text', {}, true),
+      },
+      {
+        id: 'color_scheme',
+        label: app.translator.trans('core.admin.appearance.color_scheme_label', {}, true),
+      },
+      {
+        id: 'colored_header',
+        label: app.translator.trans('core.admin.appearance.colored_header_label', {}, true),
+      },
+      {
+        id: 'logo_heading',
+        label: app.translator.trans('core.admin.appearance.logo_heading', {}, true),
+        help: app.translator.trans('core.admin.appearance.logo_text', {}, true),
+      },
+      {
+        id: 'email_logo_heading',
+        label: app.translator.trans('core.admin.appearance.email_logo_heading', {}, true),
+        help: app.translator.trans('core.admin.appearance.email_logo_text', {}, true),
+      },
+      {
+        id: 'favicon_heading',
+        label: app.translator.trans('core.admin.appearance.favicon_heading', {}, true),
+        help: app.translator.trans('core.admin.appearance.favicon_text', {}, true),
+      },
+      {
+        id: 'app_icon_heading',
+        label: app.translator.trans('core.admin.appearance.app_icon_heading', {}, true),
+        help: app.translator.trans('core.admin.appearance.app_icon_text', {}, true),
+      },
+      {
+        id: 'open_as_app',
+        label: app.translator.trans('core.admin.appearance.open_as_app_label', {}, true),
+        help: app.translator.trans('core.admin.appearance.open_as_app_help', {}, true),
+      },
+      {
+        id: 'custom_header_heading',
+        label: app.translator.trans('core.admin.appearance.custom_header_heading', {}, true),
+        help: app.translator.trans('core.admin.appearance.custom_header_text', {}, true),
+      },
+      {
+        id: 'custom_footer_heading',
+        label: app.translator.trans('core.admin.appearance.custom_footer_heading', {}, true),
+        help: app.translator.trans('core.admin.appearance.custom_footer_text', {}, true),
+      },
+      {
+        id: 'custom_styles_heading',
+        label: app.translator.trans('core.admin.appearance.custom_styles_heading', {}, true),
+        help: app.translator.trans('core.admin.appearance.custom_styles_text', {}, true),
+      },
+    ]);
+  }
+}

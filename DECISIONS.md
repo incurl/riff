@@ -5,6 +5,141 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## The forum renders Markdown with riff's own engine (2026-11-16)
+
+The forum's posts carry a `contentHtml` field, because the reused
+Flarum frontend inserts it as trusted HTML
+(`m.trust(contentHtml)` in flarum/forum/components/Comment.tsx). The
+forum therefore renders a post's Markdown server-side.
+
+**Why riff's engine and not a second one.** The repo already has one:
+`github.com/incurl/riff/markdown`, the riff markdown engine, with the
+GFM extras, the `#tag` and `@mention` extensions, the payload
+extraction and the AST-to-markdown renderer. Adding a forum-local
+renderer would have meant two Markdown dialects in one binary — the
+forum's posts and the host's memos would have parsed the same syntax
+differently. The forum uses the existing engine instead.
+
+**The HTML renderer lives in `markdown/html`, not in the forum.** The
+`markdown` package owns "the riff markdown engine", and it was the
+only place the renderer could live without the forum depending on
+goldmark directly. The package's layering rule (it must not import
+anything PocketBase-specific) is unchanged: `markdown/html` depends on
+goldmark and on `markdown/extensions` only.
+
+**The rendered body comes from the SAME goldmark instance the service
+parses with.** The service holds one `goldmark.Markdown` configured
+with the tables, strikethrough, task-list and linkify extensions. The
+HTML renderer options are attached to that instance (rather than the
+HTML renderer owning a second instance), so the output carries the same
+extensions as the AST the other methods walk — a post that renders a
+table also has a table in its AST.
+
+**riff's `#tag` and `@mention` extensions are deliberately off for the
+forum.** They are memos syntax, and they build AST nodes with no HTML
+node renderer: enabling them makes the HTML renderer emit nothing for
+the node, so every `#tag` and `@mention` in a post silently vanished
+from the rendered body (measured — the HTML came out as `hi  and ,`).
+In a Flarum post both are literal text, which is what upstream Flarum
+core shows too. The forum therefore uses the plain service.
+
+**Raw HTML is escaped by default.** The rendered body is inserted into
+a page as trusted HTML, so a raw `<script>` block in a post would
+otherwise be an injection vector. `markdown/html.Options.AllowRawHTML`
+is the opt-in for a caller that sanitises the result afterwards; the
+forum does not turn it on.
+
+**The forum depends on an interface, not on the markdown package.** The
+API server takes an `api.ContentRenderer`, and the module binds the
+markdown service to it. A plugin can therefore replace the renderer
+through the container — the Go equivalent of upstream's per-extension
+formatter — without the forum importing goldmark.
+
+**See** `docs/design/flarum/deviations.md` §8 for the remaining
+differences from upstream Flarum's formatter.
+
+## The forum module vendors the upstream Flarum frontend (2026-11-16)
+
+The forum module reimplements Flarum 2.x's JSON:API contract in Go and
+serves the Flarum frontend. riff had **no Flarum frontend** to reuse:
+the host's own frontend is the React/Memos SPA in `web/`. The only way
+to satisfy "reuse the Flarum frontend wholesale, without a PHP
+runtime" was to vendor it.
+
+**What was vendored.** The upstream `flarum/framework` repository
+(branch `2.x`)'s `framework/core/js` — the `forum`/`admin`/`common`
+Mithril + TypeScript SPA — together with its `js-packages/webpack-config`,
+`js-packages/tsconfig` and `js-packages/prettier-config`, into
+`pb/flarum/frontend/packages/`. The upstream source is **unmodified**; only the
+build wiring changed (see below). Upstream is MIT licensed.
+
+**Why the source needed no change at all.** The single most important
+discovery was that upstream Flarum 2.x **already supports a subpath
+mount**: `app.forum.attribute('basePath')` drives `mapRoutes`,
+`m.route`, `routeInternalLinks`, `homepageAddress` and
+`registerServiceWorker`. The specification's §6.2.8 "base-path shim"
+therefore needs no frontend patch — the backend only has to put the
+right `basePath` in the forum document, which it does. The reused
+frontend's `app` global, its `flarum.extensions` registry, its
+`extend`/`override` utilities, its `ItemList` and its `Component` base
+class all come from upstream unchanged; the backend's job is to supply
+the boot payload and the bundle manifest they need.
+
+**The three build changes.** The upstream monorepo is a **Yarn**
+workspace: (1) the `yarn` calls in `packages/core/package.json`'s
+scripts became `npm` calls; (2) the upstream webpack config reads
+`../composer.json` for the bundle namespace, so
+`pb/flarum/frontend/packages/composer.json` is a riff-authored stub with the same
+`name` field and no PHP metadata; (3) npm's strict peer resolver
+rejects the upstream hoisting assumptions, so the install runs with
+`--legacy-peer-deps`. None of them touch the shipped bundle: the build
+produces upstream's own `forum.js` (464 KiB) and `admin.js` (475 KiB).
+
+**Why the Go backend cannot use upstream's PHP.** The spec forbids a
+PHP runtime and Composer extensions, so the backend is a
+reimplementation of the *contract*, not a port of the *code*. The
+contract was read off upstream's own resource definitions
+(`Api/Resource/*Resource.php`), the boot payload
+(`Frontend/Content/CorePayload.php`), the error formatter
+(`Foundation/ErrorHandling/JsonApiFormatter.php`) and the frontend's
+`Model`/`Store`/`Session` classes — the last three are what the reused
+frontend actually reads at runtime.
+
+**The JSON:API envelope is Flarum's, not the spec's.** The spec says
+"JSON:API-specification API"; upstream's implementation answers
+`application/vnd.api+json` with `{"errors":[{"status","code",
+"detail"}]}`. The forum reproduces upstream's shape, because the
+reused frontend's `RequestError` reads that body and a spec-shaped
+error envelope would render as an empty message.
+
+**Collection ownership is marked, not inferred.** The forum shares a
+PocketBase instance with the host, and the pre-flight collision check
+has to decide "is this collection mine?". The name cannot answer it:
+the host may own a collection called `forum_groups` without the forum
+having created it. Each forum collection therefore carries a
+`forum_owned` **text field**, whose *presence* is the marker. A
+collection without it is foreign, and the migration aborts with the
+collided name and the configured prefix rather than attaching to
+somebody else's data.
+
+**The built-in groups have 15-character ids.** PocketBase requires a
+record id to be *exactly* 15 characters, so the well-known group ids
+(`forumgroupguest`, `forumgroupmembr`, `forumgroupadmin`) are terse.
+They are real rows, not implicit names: the permissions collection
+references them through a relation, so a row is what makes "every
+member may reply" expressible.
+
+**The session is a cookie plus a bearer token, not a Laravel session.**
+Upstream keeps the CSRF token in the session store. The forum uses a
+PocketBase auth token in an HttpOnly cookie plus a double-submit CSRF
+token in a readable cookie, scoped to the module's base path so the
+session cookie is not sent to the host's other routes. The frontend's
+`Session` class needs no change.
+
+**See** `docs/design/flarum/` for the contract, the mount rules, the
+extension-point reference, the plugin authoring guide and the full list
+of deviations from upstream.
+
 ## The wiki has no avatar store: it serves PocketBase's `users.avatar` (2026-11-03)
 
 Upstream LeafWiki keeps avatars in its own directory

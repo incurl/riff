@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Forum</title>
+    <style>
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        color: #333;
+        background: #fff;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 100vh;
+        margin: 0;
+      }
+      main {
+        max-width: 32rem;
+        padding: 2rem;
+        text-align: center;
+        line-height: 1.5;
+      }
+      code {
+        background: #f4f4f4;
+        border-radius: 4px;
+        padding: 0.15rem 0.35rem;
+        font-size: 0.9em;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>The forum front end is not built</h1>
+      <p>
+        This is the fallback shell. The Flarum front end is built from
+        <code>forum/packages/core</code> and has to be compiled into the
+        binary.
+      </p>
+      <p>
+        Run <code>cd forum &amp;&amp; npm install --legacy-peer-deps &amp;&amp; npm run build</code>,
+        then copy <code>forum/packages/core/dist</code> into
+        <code>forum/forum/frontend/ui/dist</code> and rebuild.
+      </p>
+    </main>
+  </body>
+</html>

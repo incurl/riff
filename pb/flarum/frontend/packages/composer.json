@@ -1,0 +1,5 @@
+{
+  "name": "flarum/core",
+  "description": "Namespace metadata for the Flarum frontend build. The upstream webpack config derives the bundle namespace from this file's `name` field; riff needs no PHP package metadata.",
+  "license": "MIT"
+}
