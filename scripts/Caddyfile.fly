@@ -55,7 +55,14 @@
 	}
 
 	# Everything else: the SPA, the PocketBase REST + Connect API, the
-	# admin UI under /_/, the MCP endpoint at /mcp, and /api/files/*.
+	# admin UI under /_/, the MCP endpoint at /mcp, /api/files/*, and the
+	# modules riff mounts under their own prefixes (/wiki, /forum).
+	#
+	# The module prefixes ride this catch-all verbatim, which is what they
+	# need: riff mounts each module at its prefix on its own listener, and
+	# both SPAs build ABSOLUTE /wiki/... and /forum/... URLs from the base
+	# path the server hands them. Stripping a prefix here would break them,
+	# so only /community/* is ever rewritten (the back-compat alias above).
 	handle {
 		import proxy
 	}

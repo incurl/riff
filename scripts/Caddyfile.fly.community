@@ -39,6 +39,15 @@
 #                                                riff mounts the wiki at
 #                                                /wiki internally, so the
 #                                                prefix must reach it.
+#   https://<host>/forum/*                 ->  the forum module, ALSO on
+#                                                riff, a sibling of
+#                                                /community/ and /wiki/.
+#                                                The path is NOT rewritten,
+#                                                for the same reason: riff
+#                                                mounts the forum at /forum
+#                                                internally and the SPA
+#                                                builds absolute /forum/...
+#                                                URLs.
 #   https://<host>/community (no slash)     ->  308 redirect to /community/
 #                                                so the SPA never boots
 #                                                against a parent-only URL
@@ -153,6 +162,25 @@
 		import proxy
 	}
 
+	# 2c. /forum/*: the forum module, mounted by riff at /forum INSIDE the
+	# listener — a SIBLING of /community, not a child of it, so the public
+	# URL is https://<host>/forum/.
+	#
+	# Like /wiki this uses `handle`, NOT `handle_path`: the forum SPA
+	# builds ABSOLUTE /forum/... URLs. pb/flarum/frontend's assetURL and
+	# scriptURLs prefix every bundle with the module's base path, and the
+	# boot payload hands that same base path to Flarum's router (the forum
+	# document's `basePath`/`baseUrl`/`apiUrl` attributes). Stripping the
+	# prefix would make riff serve /assets/forum.js instead of
+	# /forum/assets/forum.js, and every bundle would 404 against the
+	# static site's file_server.
+	handle /forum {
+		redir * /forum/ 308
+	}
+	handle /forum/* {
+		import proxy
+	}
+
 	# 3. SPA-only paths: redirect to /community/<path>. The named
 	# matcher @spa excludes anything that already has a more specific
 	# handler above (/community, /community/*) and the static site's
@@ -184,8 +212,13 @@
 	# belt-and-braces rather than the thing that makes it work — but if
 	# the wiki blocks are ever moved below this one, the exclusion is
 	# what keeps /wiki from being 308'd to /community/wiki.
+	#
+	# /forum and /forum/* are excluded for the same reason: they are a
+	# sibling module with their own handle blocks above, and a 308 to
+	# /community/forum would both lose the prefix the SPA needs and land
+	# on the wrong app.
 	@spa {
-		not path / /community /community/* /wiki /wiki/* /assets /assets/* /docs /docs/* /download /download/* /firmware /firmware/* /hardware /hardware/* /reader /reader/* /workflow /workflow/* /youtube /youtube/* /favicon.svg /CNAME /index.html
+		not path / /community /community/* /wiki /wiki/* /forum /forum/* /assets /assets/* /docs /docs/* /download /download/* /firmware /firmware/* /hardware /hardware/* /reader /reader/* /workflow /workflow/* /youtube /youtube/* /favicon.svg /CNAME /index.html
 	}
 	handle @spa {
 		redir * /community{uri} 308

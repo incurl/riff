@@ -34,6 +34,10 @@ set -eu
 # `Caddyfile.fly` layout (see the Caddyfile row in AGENTS.md).
 : "${RIFF_FLY_SMOKE_PATH:=/community/api/health}"
 : "${RIFF_FLY_SMOKE_HOST:=${RIFF_FLY_APP}.fly.dev}"
+# The forum is mounted at /forum on riff's own listener, so this path is
+# the same in EVERY caddy layout (it is a riff mount point, not a caddy
+# layout choice). It is a knob only so a future re-mount stays testable.
+: "${RIFF_FLY_FORUM_PATH:=/forum/}"
 : "${RIFF_FLY_SMOKE_TIMEOUT:=10}"
 
 # --- Preconditions -----------------------------------------------------------
@@ -66,7 +70,7 @@ echo ">> fly deploy -a ${RIFF_FLY_APP} --image ${RIFF_FLY_REGISTRY} -y"
 fly deploy -a "${RIFF_FLY_APP}" --image "${RIFF_FLY_REGISTRY}" -y
 
 # --- Smoke tests -------------------------------------------------------------
-# Two checks, both must pass:
+# Three checks, all must pass:
 #   1. The caddy-routed riff health endpoint (SPA sub-path mount is alive).
 #   2. The static site is reachable at the document root. `Caddyfile.fly.community`
 #      (the default) serves the baked Jekyll _site/ at /, so a GET / must
@@ -74,7 +78,13 @@ fly deploy -a "${RIFF_FLY_APP}" --image "${RIFF_FLY_REGISTRY}" -y
 #      missing the bare path and a future Caddyfile edit has regressed the
 #      same bug as the "caddy redirects root visits" incident on 2026-10-14.
 #
-# Check 2 uses -m timeout (not -fsS) because `-f` makes curl exit non-zero
+#   3. The forum module answers at /forum/ (a riff mount, so its prefix
+#      must reach riff UNCHANGED). A 308 to /community/forum means the
+#      @spa exclusion list in Caddyfile.fly.community lost /forum, and
+#      stripping the prefix would 404 every absolute /forum/assets/...
+#      bundle URL the SPA shell ships.
+#
+# Checks 2 and 3 use -m timeout (not -fsS) because `-f` makes curl exit non-zero
 # on 3xx and we explicitly want to inspect the 308 to assert which
 # redirect target caddy chose. The case-statement below greps
 # %{redirect_url} for /community/ to distinguish the bug from a healthy
@@ -82,13 +92,13 @@ fly deploy -a "${RIFF_FLY_APP}" --image "${RIFF_FLY_REGISTRY}" -y
 # slashes on the static site itself).
 
 echo
-echo ">> Smoke test 1/2: curl -fsS -m ${RIFF_FLY_SMOKE_TIMEOUT} https://${RIFF_FLY_SMOKE_HOST}${RIFF_FLY_SMOKE_PATH}"
+echo ">> Smoke test 1/3: curl -fsS -m ${RIFF_FLY_SMOKE_TIMEOUT} https://${RIFF_FLY_SMOKE_HOST}${RIFF_FLY_SMOKE_PATH}"
 curl -fsS -m "${RIFF_FLY_SMOKE_TIMEOUT}" "https://${RIFF_FLY_SMOKE_HOST}${RIFF_FLY_SMOKE_PATH}"
 echo
 echo "OK: ${RIFF_FLY_SMOKE_PATH} on ${RIFF_FLY_SMOKE_HOST} is healthy."
 
 echo
-echo ">> Smoke test 2/2: curl -sS -m ${RIFF_FLY_SMOKE_TIMEOUT} -o /dev/null -w 'http_code=%{http_code} redirect_url=%{redirect_url}\\n' https://${RIFF_FLY_SMOKE_HOST}/"
+echo ">> Smoke test 2/3: curl -sS -m ${RIFF_FLY_SMOKE_TIMEOUT} -o /dev/null -w 'http_code=%{http_code} redirect_url=%{redirect_url}\\n' https://${RIFF_FLY_SMOKE_HOST}/"
 _root_probe=$(curl -sS -m "${RIFF_FLY_SMOKE_TIMEOUT}" -o /dev/null -w 'http_code=%{http_code} redirect_url=%{redirect_url}' "https://${RIFF_FLY_SMOKE_HOST}/" || true)
 echo "${_root_probe}"
 _root_code=$(echo "${_root_probe}" | sed -n 's/^http_code=\([0-9][0-9][0-9]\).*/\1/p')
@@ -116,6 +126,40 @@ case "${_root_code}" in
   *)
     echo "FAIL: / on ${RIFF_FLY_SMOKE_HOST} returned ${_root_code}" >&2
     echo "      (expected 200 with the static site body)." >&2
+    exit 1
+    ;;
+esac
+
+echo
+echo ">> Smoke test 3/3: curl -sS -m ${RIFF_FLY_SMOKE_TIMEOUT} -o /dev/null -w 'http_code=%{http_code} redirect_url=%{redirect_url}\n' https://${RIFF_FLY_SMOKE_HOST}${RIFF_FLY_FORUM_PATH}"
+_forum_probe=$(curl -sS -m "${RIFF_FLY_SMOKE_TIMEOUT}" -o /dev/null -w 'http_code=%{http_code} redirect_url=%{redirect_url}' "https://${RIFF_FLY_SMOKE_HOST}${RIFF_FLY_FORUM_PATH}" || true)
+echo "${_forum_probe}"
+_forum_code=$(echo "${_forum_probe}" | sed -n 's/^http_code=\([0-9][0-9][0-9]\).*/\1/p')
+_forum_redirect=$(echo "${_forum_probe}" | sed -n 's/^.*redirect_url=\(.*\)$/\1/p')
+case "${_forum_code}" in
+  200)
+    echo "OK: ${RIFF_FLY_FORUM_PATH} on ${RIFF_FLY_SMOKE_HOST} serves the forum shell."
+    ;;
+  3[0-9][0-9])
+    case "${_forum_redirect}" in
+      *"/community"*)
+        echo "FAIL: ${RIFF_FLY_FORUM_PATH} on ${RIFF_FLY_SMOKE_HOST} is being redirected into the SPA." >&2
+        echo "      The Caddyfile.fly.community @spa matcher is missing /forum and" >&2
+        echo "      /forum/* from its 'not path' exclusion list, so the forum sibling" >&2
+        echo "      is 308'd to the wrong app. Add them next to /wiki and /wiki/*." >&2
+        exit 1
+        ;;
+      *)
+        echo "FAIL: ${RIFF_FLY_FORUM_PATH} on ${RIFF_FLY_SMOKE_HOST} returned ${_forum_code} -> ${_forum_redirect}" >&2
+        echo "      (expected 200; the forum is a verbatim-proxied sibling of /community/)." >&2
+        exit 1
+        ;;
+    esac
+    ;;
+  *)
+    echo "FAIL: ${RIFF_FLY_FORUM_PATH} on ${RIFF_FLY_SMOKE_HOST} returned ${_forum_code}" >&2
+    echo "      (expected 200). Check the caddy /forum matcher and that riff's" >&2
+    echo "      forum module is registered (RIFF_FORUM_BASE_PATH defaults to /forum)." >&2
     exit 1
     ;;
 esac

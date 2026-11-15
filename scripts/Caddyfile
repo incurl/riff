@@ -5,6 +5,9 @@
 #   https://${SITE_DOMAIN}/wiki/...        ->  the wiki module, also on
 #                                             riff (a sibling of
 #                                             /community/, not a child)
+#   https://${SITE_DOMAIN}/forum/...       ->  the forum module, also on
+#                                             riff (a sibling of
+#                                             /community/, not a child)
 #   https://${SITE_DOMAIN}/youtube/...    ->  the user-facing download
 #                                             tree at /youtube/
 #   https://${SITE_DOMAIN}/...            ->  static site at /var/www/site/
@@ -63,6 +66,27 @@
 		path /wiki/*
 	}
 	handle @wiki {
+		reverse_proxy localhost:8090 {
+			header_up X-Forwarded-For {remote_host}
+			header_up X-Forwarded-Proto {scheme}
+		}
+	}
+
+	# /forum/* is the forum module, a SIBLING of /community/ — the public
+	# URL is https://<host>/forum/, not https://<host>/community/forum/.
+	#
+	# The path is NOT rewritten: riff mounts the forum at /forum on its
+	# own listener (RIFF_FORUM_BASE_PATH), and the SPA builds ABSOLUTE
+	# /forum/... URLs — pb/flarum/frontend's assetURL and scriptURLs
+	# prefix every bundle with the module's base path, and the boot shell
+	# hands the same base path to Flarum's router. A handle_path that
+	# stripped /forum would therefore make riff answer /assets/forum.js
+	# (a 404 under the static site) instead of /forum/assets/forum.js.
+	@forum {
+		path /forum
+		path /forum/*
+	}
+	handle @forum {
 		reverse_proxy localhost:8090 {
 			header_up X-Forwarded-For {remote_host}
 			header_up X-Forwarded-Proto {scheme}
