@@ -5,6 +5,57 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## The forum's API must honour `X-HTTP-Method-Override` (2026-11-16)
+
+The forum's settings page failed with an error whose `responseText` was
+a whole HTML document. The shape of the error was the tell: the reused
+Flarum frontend throws `RequestError{status, responseText, options,
+xhr}` from `Application.request` when a response is not 2xx, and the
+`responseText` was the memos SPA's `index.html` — so the request had
+fallen through to the SPA catch-all.
+
+**The frontend does not send a DELETE.** `Application.request` rewrites
+every method other than GET and POST into a POST with the intended
+method in the `X-HTTP-Method-Override` header, because "not all servers
+and clients support" PATCH or DELETE. Upstream's API carries a
+`FakeHttpMethods` middleware that reads the header back
+(`Api/Middleware/FakeHttpMethods.php`); this port had none, so a
+frontend DELETE arrived as a POST and the DELETE-only route did not
+match.
+
+The route is registered for POST **and** DELETE, and the handler
+resolves the effective method through `effectiveMethod`. A POST without
+the header is refused with a 405: the route accepts a POST only because
+the frontend sends one, and a plain POST is a client mistake rather
+than a silent reset.
+
+**A method-less `Any` route is not an option here.** It conflicts with
+the memos SPA's method-less `/{path...}` catch-all in `http.ServeMux`,
+and that panic takes the whole process down — the same constraint the
+forum module already documents for its other routes.
+
+**An unrouted API path does not 404: it answers with the SPA's
+`index.html`, and the status is 200.** The frontend's request helper
+throws on a non-2xx, so a 200 HTML body is *worse*: the page renders
+the markup as if it were data, or the caller parses it and fails
+somewhere else entirely. Every forum API path the frontend calls has to
+exist, and the ones that do not exist yet answer with HTML, not with a
+JSON:API error.
+
+## The forum's `preferences` column is read as `types.JSONRaw` (2026-11-16)
+
+`forum_user_profiles.preferences` is a PocketBase `JSONField`, and
+`record.Get` hands back the stored document as `types.JSONRaw` (a
+`[]byte` of JSON) — **not** as a `map[string]any`. The profile reader
+only handled the map, so it read EVERY profile as having no
+preferences: the values were written correctly and then never read
+back, and a user's privacy, colour scheme and haptic preferences
+silently reset on every page load.
+
+`decodePreferences` now accepts every shape the column can arrive in —
+`types.JSONRaw`, `[]byte`, `string` and `map[string]any` — so the
+reader does not depend on which one the field layer hands back.
+
 ## The forum's plugin front ends are real Flarum extensions (2026-11-16)
 
 The Tags and Likes Go plugins register an `AssetBundle` that names
@@ -188,6 +239,140 @@ authToken duration, five days by default). This is PocketBase's model,
 not the forum's — the wiki's logout has the same shape — and the host's
 revocable credential is the personal access token, not the session
 cookie.
+
+**The profile page needs two things the feed did not have.**
+
+`GET /api/users/<slug>?bySlug=true` and
+`GET /api/posts?filter[author]=<slug>&filter[type]=comment`. Both failed
+on a real profile page:
+
+- the user show handler only looked up by record id, so the route — which
+  is keyed by the username — answered 404 for every profile. `bySlug`
+  now resolves the username instead;
+- the posts list REQUIRED `filter[discussion]` and answered 422 for
+  anything else. It now also accepts `filter[author]`, plus
+  `filter[type]` to narrow to the post types the page shows.
+
+**`filter[author]` is the SLUG (the username), and a post stores its
+author as a record id.** The slug is therefore resolved to an id first
+and the query filters on `user = {:id}`, rather than joining. That also
+avoids a trap in the repository's query helper: `dbxExp` builds RAW SQL
+(`dbx.NewExp` with named params), not PocketBase's filter grammar —
+`user.username = {:slug} && type = {:type}` is neither valid SQL nor
+valid PocketBase filter syntax, and it only fails at query time.
+An unknown slug is an empty page, not an error, because the feed is a
+listing; `repository.ErrUserNotFound` is the sentinel that keeps a real
+failure from looking like "no posts".
+
+
+**The forum's avatar is PocketBase's `users.avatar` file, streamed
+through the forum's own route.** The profile picture is the
+already-existing built-in field on the shared `users` collection — one
+picture per account, shared with the Memos SPA, the admin UI and the
+wiki. The forum adds no avatar store of its own.
+
+The frontend needs a URL it can put in an `<img src>`, and the obvious
+one — PocketBase's `/api/files/users/{id}/{file}` — lives at the ROOT of
+the riff listener, which the forum does not own. Under the
+`/community/` layout a reverse proxy serves the static site from the
+root, so that URL resolves to the site and 404s. The forum therefore
+serves the bytes itself at `{basePath}/avatars/{id}`, exactly as the
+wiki does and for the same reason.
+
+That route is public and unauthenticated, and a 404 is deliberate: a
+missing record, an account with no picture (including every superuser,
+since `_superusers` has no avatar field) and a deleted file all answer
+404, because a 404 is what makes the frontend render the user's
+initials. An empty `avatarUrl` plus `hasUploadedAvatar: false` carries
+the same information on the JSON side.
+
+The URL is built in the serializer, not in the repository: the
+repository projects the record and does not know the mount path, while
+the API server does.
+
+**The admin application needs an admin shell and an admin payload.**
+
+It is the same SPA with a different entry bundle, but it is not a
+variant of the forum app:
+
+- its `mount()` calls `m.mount(document.getElementById'admin-navigation')
+  …)` inside `main.App-content` and gives `#content` the `sideNavOffset`
+  class. Rendering the FORUM shell for it means that container is null,
+  `m.mount(null)` throws, and the page stays blank. The shell therefore
+  renders those two pieces only when it is the admin app, and the forum
+  layout is unchanged (an empty nav column would be visible).
+- its `runBeforeMount` calls `BasicsPage.register`, which walks
+  `displayNameDrivers`, `avatarDrivers` and `slugDrivers` (and `locales`)
+  during boot. A payload without them throws BEFORE anything renders,
+  which is the other way to get a blank page.
+
+`frontend.BootPayload` therefore embeds a `*frontend.Admin`. It is an
+EMBEDDED pointer, not a nested field, because the admin app reads those
+as `app.data.extensions`, `app.data.settings` and so on — at the TOP
+level of the payload. A nil pointer contributes nothing, so the forum
+app's payload is byte-for-byte what it was.
+
+The admin data does NOT depend on the caller and is set before the actor
+is resolved: an anonymous visit to `/admin` still has to boot, because
+that is what lets the app render its own sign-in redirect.
+
+**The values are the ones this port implements, not upstream's.** The
+extensions list is the forum's own Go plugins (real data, from the
+plugin manager). Composer packages and the php-side dashboard counts
+have no riff equivalent, so those fields are empty — a page shows
+nothing rather than something invented. Editing extensions is NOT
+implemented: riff's own administration surface is PocketBase's at
+`/_/`.
+
+**The payload must carry the data the admin app reads, not just the
+fields it declares.** The admin app dereferences much of it at BOOT
+time, and each missing value is a blank page:
+
+- `isExtensionEnabled` does `JSON.parse(app.data.settings
+  .extensions_enabled)`, and `JSON.parse(undefined)` throws. So
+  `settings` carries upstream's install defaults, and every key the app
+  parses as JSON holds a valid JSON document. The forum's own settings
+  win over the defaults.
+- `UserListPage` reads `app.data.modelStatistics.users.total` in a
+  FIELD INITIALISER, so `modelStatistics.users` is present even when
+  the count is zero.
+- `ExtensionPage` calls `app.data.dbDriver.toLowerCase()`, so the
+  driver is a non-empty string.
+- `MailPage.register` reads `app.session.user!.email()` — which throws
+  on a null user. See the admin gate below.
+
+**The admin application is served only to an administrator.** Upstream's
+admin routes carry the `RequireAdministrateAbility` middleware, so a
+non-administrator never receives the admin shell. The same gate is
+here, and it is load-bearing rather than cosmetic: because
+`MailPage.register` dereferences `app.session.user!` at boot, serving
+the admin shell to an anonymous visitor is a BLANK page, not a login
+prompt. An earlier revision of this port assumed the opposite — that an
+anonymous visitor should still get a bootable shell so the app could
+render its own sign-in redirect. That is wrong: the app never gets
+that far, because the boot throws first. The gate answers 403, exactly
+as upstream does.
+
+**The admin shell is not cached.** The shell carries the boot payload,
+and the payload changes with the instance (the enabled plugins, the
+user count, the settings). A cached copy replays a STALE payload,
+which reads as a blank page when the app dereferences a field the old
+payload did not have — the `settings.extensions_enabled` and
+`modelStatistics.users.total` crashes above are exactly that shape. The
+admin shell therefore answers `Cache-Control: max-age=0, no-store`,
+the same header upstream sends (its admin middleware carries
+`DisableBrowserCache`). The forum shell keeps its own caching
+behaviour: it carries no admin data, and upstream's frontend does not
+disable the cache there.
+
+**The mail settings endpoint exists because the mail page fetches it on
+mount.** `GET /api/mail/settings` answers with upstream's shape
+(`data.attributes.{fields,sending,errors,canReceiveWebhooks,
+canProvisionWebhooks,webhookUrl}`). A 404 leaves `response.data`
+undefined and the page throws on it. riff sends its mail through
+PocketBase's own SMTP configuration rather than a forum-level mail
+driver, so the driver fields are empty and the bounce-reporting flags
+are false.
 
 **The plugin packages are deliberately NOT npm workspaces.** Adding them
 to the workspace globs would rewrite `package-lock.json` and re-resolve

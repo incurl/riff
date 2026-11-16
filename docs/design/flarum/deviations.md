@@ -138,6 +138,41 @@ Three front-end deviations are deliberate:
   working until it expires (five days by default). Upstream Flarum's
   tokens are database-backed and are deleted on logout. The host's
   revocable credential is the personal access token.
+- **Avatars come from PocketBase, streamed through the forum.** The
+  picture is the shared `users` collection's built-in `avatar` file —
+  the same one the Memos SPA and the admin UI show — served at
+  `{basePath}/avatars/{id}` rather than linked at PocketBase's native
+  `/api/files/...` URL, which lives at the listener root the forum
+  does not own. A 404 means no picture, and makes the frontend draw
+  initials. Upstream stores avatars under its own upload endpoint and
+  can edit them from the profile; this port displays the shared file
+  but does not implement the editor (`canEditAvatar` is false).
+- **The admin app boots but cannot administer.** It gets an admin
+  shell (the `#admin-navigation` column and the `sideNavOffset`
+  content) and an admin payload (the driver lists its boot walks, the
+  forum's own plugin list as its extensions, the enabled-plugin list,
+  the user count, and the forum's own settings). Settings and
+  extensions are read-only here: riff's administration surface is
+  PocketBase's at `/_/`, so those forms have nothing behind them.
+- **The admin application is served only to an administrator**, exactly
+  as upstream serves it (upstream's admin routes carry the
+  `RequireAdministrateAbility` middleware). A non-administrator gets a
+  403 rather than the shell. This is load-bearing: the admin app
+  dereferences `app.session.user!.email()` at boot, so an anonymous
+  visitor served the shell would get a blank page instead of a sign-in
+  prompt.
+- **The admin shell is served with `Cache-Control: max-age=0,
+  no-store`**, the same header upstream sends (its admin middleware
+  carries `DisableBrowserCache`). The shell carries the boot payload,
+  and the payload changes with the instance, so a cached copy would
+  replay a stale one — which reads as a blank page. The forum shell
+  keeps its own caching behaviour.
+- **The mail page renders, but the forum has no mail driver.** riff
+  sends its mail through PocketBase's own SMTP configuration, so
+  `GET /api/mail/settings` answers with upstream's shape but an empty
+  driver-field set, and the bounce-reporting flags are false. The
+  endpoint exists because the page fetches it on mount, and a 404
+  would leave `response.data` undefined and throw.
 - **An extender cannot touch `app.forum` or `app.session`.** The boot
   shell runs `app.load(payload)`, then `app.bootExtensions(...)`, and
   only then `app.boot()` — and `app.boot()` is what assigns them. An
@@ -202,7 +237,29 @@ settings read/write endpoints and the extension manifest endpoint, and
 the admin SPA boots — but the forum does not yet implement every admin
 screen's backend.
 
-## 11. Notifications are limited
+## 11. The API honours `X-HTTP-Method-Override`
+
+Upstream's frontend rewrites every method other than GET and POST into
+a POST with the intended method in the `X-HTTP-Method-Override` header,
+and upstream's API carries a `FakeHttpMethods` middleware that reads it
+back. This port does the same for the routes the frontend calls with a
+non-POST method: the route is registered for both verbs and the
+handler resolves the effective method.
+
+The middleware itself is not ported: upstream's is a PSR-15 layer, and
+PocketBase's router matches on the request method before any
+middleware runs, so the override has to be resolved inside the
+handler rather than in front of the router.
+
+**An API path that does not exist answers with the memos SPA's
+`index.html` and a 200, not with a 404.** The SPA's catch-all is a
+method-less `/{path...}`, and it is the least specific route in the
+mux, so it answers everything the forum does not. The frontend's
+request helper throws on a non-2xx, so a 200 with an HTML body is the
+worst outcome: the caller tries to parse a page of markup as data.
+Every forum API path the frontend calls has to exist.
+
+## 12. Notifications are limited
 
 Upstream's notification system is a per-extension blueprint registry
 with a large catalogue of notification types. The forum's
@@ -210,7 +267,7 @@ with a large catalogue of notification types. The forum's
 first-party plugins produce (`postLiked`, `discussionTagged`,
 `mentionedInPost`, `commentOnPost`).
 
-## 12. The deferred items
+## 13. The deferred items
 
 The following are **roadmap**, not v1:
 
@@ -220,7 +277,7 @@ The following are **roadmap**, not v1:
 - the remaining upstream extensions (mentions, subscriptions, sticky,
   lock, suspend, and the rest).
 
-## 13. The frontend build needs npm's legacy peer resolver
+## 14. The frontend build needs npm's legacy peer resolver
 
 The upstream monorepo is a Yarn workspace with hoisting assumptions
 that npm's strict resolver rejects. The build therefore runs with

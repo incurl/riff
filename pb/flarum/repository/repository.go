@@ -15,11 +15,13 @@
 package repository
 
 import (
+	"encoding/json"
 	"strings"
 	"time"
 
 	"github.com/pkg/errors"
 	"github.com/pocketbase/pocketbase/core"
+	"github.com/pocketbase/pocketbase/tools/types"
 
 	"github.com/incurl/riff/pb/flarum/domain"
 )
@@ -127,6 +129,43 @@ func (r *Repository) SaveUserProfile(profile *UserProfile) error {
 	return r.app.Save(record)
 }
 
+// decodePreferences reads the preferences column into a map.
+//
+// The column is a PocketBase JSONField, and `record.Get` hands back the
+// stored document as `types.JSONRaw` (a []byte of JSON), NOT as a
+// `map[string]any`. A reader that only handles the map therefore reads
+// EVERY profile as having no preferences — the values are written
+// correctly and then never read back, so a user's privacy, colour
+// scheme and haptic preferences silently reset on every page load.
+//
+// The other shapes are accepted too: a record that has just been
+// created in memory carries the value it was set with, and a plain
+// string is what a raw column read produces.
+func decodePreferences(raw any) map[string]any {
+	switch value := raw.(type) {
+	case nil:
+		return nil
+	case map[string]any:
+		return value
+	case types.JSONRaw:
+		return decodePreferences([]byte(value))
+	case []byte:
+		var decoded map[string]any
+		if err := json.Unmarshal(value, &decoded); err != nil {
+			return nil
+		}
+		return decoded
+	case string:
+		var decoded map[string]any
+		if err := json.Unmarshal([]byte(value), &decoded); err != nil {
+			return nil
+		}
+		return decoded
+	default:
+		return nil
+	}
+}
+
 // profileFromRecord projects a forum_user_profiles record.
 func profileFromRecord(record *core.Record) *UserProfile {
 	profile := &UserProfile{
@@ -135,11 +174,7 @@ func profileFromRecord(record *core.Record) *UserProfile {
 		IsActive:    record.GetBool("is_active"),
 		IsBlocked:   record.GetBool("is_blocked"),
 	}
-	if prefs := record.Get("preferences"); prefs != nil {
-		if decoded, ok := prefs.(map[string]any); ok {
-			profile.Preferences = decoded
-		}
-	}
+	profile.Preferences = decodePreferences(record.Get("preferences"))
 	if joined := record.GetDateTime("joined_at"); !joined.IsZero() {
 		profile.JoinedAt = joined.Time()
 	}

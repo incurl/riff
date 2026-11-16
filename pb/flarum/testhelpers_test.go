@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -140,6 +141,22 @@ func seedDiscussion(t *testing.T, app core.App, title, content string) (string, 
 	return discussionID, postID
 }
 
+// seedDiscussionWithAuthor creates a discussion and its first post for an
+// existing user.
+//
+// It is the form to use when the author matters: `seedDiscussion` creates
+// its own account, because the username is unique.
+func seedDiscussionWithAuthor(t *testing.T, app core.App, authorID, title, content string) (string, string) {
+	t.Helper()
+
+	repo := repository.New(app, repository.NewRegistry(repository.DefaultPrefix))
+
+	discussionID, postID, err := repo.CreateDiscussionWithPost(authorID, title, "slug-"+title, content, content)
+	require.NoError(t, err, "the discussion should be created")
+
+	return discussionID, postID
+}
+
 // attachTag attaches a tag to a discussion.
 //
 // The link table is written directly: the test needs the link, not the
@@ -156,6 +173,32 @@ func attachTag(t *testing.T, app core.App, discussionID, tagID string) {
 	require.NoError(t, app.Save(record))
 }
 
+// testSuperuser creates a superuser and returns its session cookies.
+//
+// The admin application is only served to an administrator (see the
+// frontend server's admin gate), so a test that boots the admin app
+// needs an administrator's credentials.
+//
+// A superuser counts as one because the forum derives the admin flag
+// from the record's collection: `record.Collection().Name ==
+// core.CollectionNameSuperusers`.
+func testSuperuser(t *testing.T, app core.App) []*http.Cookie {
+	t.Helper()
+
+	superusers, err := app.FindCollectionByNameOrId(core.CollectionNameSuperusers)
+	require.NoError(t, err)
+
+	admin := core.NewRecord(superusers)
+	admin.Set("email", "forum-admin@example.com")
+	admin.Set("password", "passw0rd!")
+	require.NoError(t, app.Save(admin))
+
+	token, err := admin.NewAuthToken()
+	require.NoError(t, err)
+
+	return sessionCookies(token, "csrf-token")
+}
+
 // sessionCookies returns the cookies a signed-in browser carries.
 //
 // The CSRF token is in a readable cookie AND has to be echoed in the
@@ -166,4 +209,34 @@ func sessionCookies(token, csrf string) []*http.Cookie {
 		{Name: "forum_access_token", Value: token},
 		{Name: "forum_csrf", Value: csrf},
 	}
+}
+
+// testRepo returns a repository over the app, for a test that needs to
+// read or write forum data directly.
+func testRepo(t *testing.T, app core.App) *repository.Repository {
+	t.Helper()
+
+	return repository.New(app, repository.NewRegistry(repository.DefaultPrefix))
+}
+
+// doWithHeaders is [do] with extra request headers, for a test that
+// needs a header the standard helper does not set.
+func doWithHeaders(t *testing.T, handler http.Handler, method, path, body string, cookies []*http.Cookie, headers map[string]string) *httptest.ResponseRecorder {
+	t.Helper()
+
+	request := httptest.NewRequest(method, path, strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/vnd.api+json")
+	for _, cookie := range cookies {
+		request.AddCookie(cookie)
+		if cookie.Name == "forum_csrf" {
+			request.Header.Set("X-CSRF-Token", cookie.Value)
+		}
+	}
+	for name, value := range headers {
+		request.Header.Set(name, value)
+	}
+
+	result := httptest.NewRecorder()
+	handler.ServeHTTP(result, request)
+	return result
 }
