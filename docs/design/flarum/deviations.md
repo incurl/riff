@@ -107,6 +107,37 @@ Three front-end deviations are deliberate:
 - **No locale files.** The port has no extension-locale pipeline, and
   the translator renders a missing key as the key itself, so the
   extension strings are literal English rather than `trans()` calls.
+- **The asset layout is the frontend's, not upstream's compiler's.**
+  Upstream's PHP asset compiler moves the flat webpack output into
+  `js/<extensionId>/`; this port has no such compiler, so the shared
+  webpack config writes that layout directly (`chunkFilename` is
+  `js/<namespace>/[name].js`). The runtime's chunk url is upstream's
+  formula — `${jsChunksBaseUrl}/${namespace}/${urlPath}.js` — so the
+  two have to agree, and the namespace comes from the same
+  `extensionId.cjs` on both sides.
+- **The stylesheets are compiled with the npm `less` package, not
+  less.php.** Upstream compiles `less/forum.less` and `less/admin.less`
+  with less.php and serves `forum.css` and `admin.css`; this port has
+  no PHP, so `packages/core/build-less.cjs` compiles them with the
+  `less` npm package. The Less tree itself is vendored unmodified from
+  upstream. The compiled stylesheet is the same for both apps.
+- **Translations are compiled from the vendored YAML.** Upstream compiles
+  `locale/*.yml` into `forum-<locale>.js` / `admin-<locale>.js` with its
+  PHP `AddTranslations` step; this port produces the same two bundles from
+  `packages/core/build-locale.cjs`, with the same per-frontend key filter
+  (`*.forum.*`/`*.lib.*` vs `*.admin.*`/`*.lib.*`) and the same `=> key`
+  reference resolution. English only: the boot payload advertises `en`.
+- **The session lives in the boot payload, and the caller is a
+  resource in it.** The frontend reads `session.userId` and
+  `session.csrfToken` and looks the caller up in the store by that id,
+  so the payload carries both the session and the caller as a resource.
+  `session.userId` is a STRING: the id is the PocketBase record id, and
+  the frontend looks the record up by that exact value.
+- **A logout does not revoke the token.** PocketBase's auth tokens are
+  stateless JWTs with no server-side store, so a captured token keeps
+  working until it expires (five days by default). Upstream Flarum's
+  tokens are database-backed and are deleted on logout. The host's
+  revocable credential is the personal access token.
 - **An extender cannot touch `app.forum` or `app.session`.** The boot
   shell runs `app.load(payload)`, then `app.bootExtensions(...)`, and
   only then `app.boot()` — and `app.boot()` is what assigns them. An

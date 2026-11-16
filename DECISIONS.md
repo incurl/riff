@@ -67,6 +67,128 @@ bundle therefore keeps its loaded tags in its own map instead of pushing
 them into the store. The Likes bundle does push — but only `posts`,
 which is registered.
 
+**The async chunks live under `js/<namespace>/`, and webpack writes that
+layout directly.** The runtime builds a chunk's url as
+`${jsChunksBaseUrl}/${namespace}/${urlPath}.js`, and `jsChunksBaseUrl`
+is the assets root plus `/js` (see ExportRegistry's `versionedChunkUrl`,
+which is upstream's code unchanged). So core's chunk for
+`forum/components/PostStream` is fetched from
+`assets/js/core/forum/components/PostStream.js`.
+
+Upstream gets that layout from its PHP asset compiler, which moves the
+flat webpack output into `js/<extensionId>/` after the build. This port
+has no such compiler, so the shared webpack config sets
+`chunkFilename` to `js/<namespace>/[name].js` instead — the namespace
+comes from the same `extensionId.cjs` the chunk-loading global uses, so
+the file on disk and the url the runtime asks for cannot drift.
+
+**A chunk id and a chunk file are not the same thing.** The registry
+registers a urlPath per MODULE, so one chunk file carries many modules
+(22 files cover 268 module paths). A urlPath that has no file of its
+own is a passenger module that rides another chunk; only the chunk's own
+urlPath names the file. The check that matters is webpack's own chunk
+map (`__webpack_require__.u`), which maps each chunk id to the file it
+loads — every entry in it must exist on disk.
+
+**The forum's stylesheets are compiled by the npm `less` package, not
+by less.php.** Upstream compiles `less/forum.less` and `less/admin.less`
+with less.php (the PHP half of the project) and serves `forum.css` and
+`admin.css` beside the bundles. This port has no PHP, so
+`packages/core/build-less.cjs` compiles them with the `less` npm
+package instead, and the shell links them the same way it links the
+scripts (`forum.css` for the forum app, `admin.css` for the admin app).
+
+**The Less tree is vendored whole (106 files).** It was not vendored at
+all before, so the forum shipped no stylesheet of its own — the shell
+linked only the plugins' CSS. The tree comes from upstream's
+`framework/core/less`, unmodified.
+
+**Two things upstream's PHP compiler does that this has to reproduce.**
+It adds `variables.less` and `mixins.less` as file sources BEFORE the
+entry (see upstream's `FrontendServiceProvider::addBaseCss`) — the entry
+itself does not import them, so without them the compile fails on an
+undefined variable. And it inlines the Font Awesome stylesheets, which
+come from the `@fortawesome/fontawesome-free` npm package — the same
+Font Awesome 7 the Composer package `flarum/font-awesome` provides
+upstream. `@fa-bundled-fonts` is set to `true`, which is upstream's
+default (it is false only when an operator points the forum at a Font
+Awesome Kit or CDN).
+
+**The webfont URLs are rewritten.** The Font Awesome stylesheets
+reference their fonts as `../webfonts/…`, relative to the npm package's
+`css/` directory — the layout they had before the import was inlined.
+The compiled stylesheet is served from the assets root instead, so the
+paths become `webfonts/…` and the three font files are staged under
+`ui/dist/webfonts/`. Without the rewrite the browser asks for
+`/forum/webfonts/…`, which is not served (the asset route only covers
+`/assets/`).
+
+**The translations ship as a locale bundle, compiled from the YAML.**
+Every `trans()` call renders its raw key without them, so the whole UI
+reads `core.forum.header.back_to_index_tooltip` instead of the label.
+Upstream compiles `locale/*.yml` into `forum-<locale>.js` and
+`admin-<locale>.js`, each a single `app.translator.addTranslations(…)`
+call (see upstream's `Frontend\AddTranslations`), and loads them right
+after the entry bundle. This port has no PHP, so
+`packages/core/build-locale.cjs` produces the same two files, and
+`scriptURLs` loads them in that position (entry, locale, then plugin
+bundles).
+
+**Two details of upstream's compiler are reproduced deliberately.** The
+keys are filtered by frontend, so the forum bundle carries `*.forum.*`
+and `*.lib.*` and the admin bundle carries `*.admin.*` and `*.lib.*`;
+this is why the admin bundle does not contain `core.forum.*` and the
+forum bundle does not contain `core.admin.*`. And a value written
+`=> some.key` is a REFERENCE, not a literal: `core.yml` uses them 186
+times for repeated labels, and leaving them unresolved renders
+`=> core.ref.foo` in the UI.
+
+The locale YAML is vendored from upstream `framework/core/locale`. One
+key the frontend asks for is missing upstream too
+(`core.forum.posts_sort.toggle_dropdown_accessible_label`) and renders
+raw here exactly as it does upstream; it is not papered over locally so
+the next upstream refresh stays a straight copy.
+
+**The boot payload carries the session, and the caller is a resource in
+it.** The frontend reads `session.userId` and `session.csrfToken` and
+looks the caller up with `store.getById('users', userId)`. A payload
+with only the session would not be enough: a relationship's identifier
+carries no attributes, so the caller has to be a RESOURCE too. Without
+both, the SPA boots anonymous even with a valid session cookie — the
+login succeeds and the page still shows as signed out.
+
+**`session.userId` is a STRING.** The id is the PocketBase record id (a
+15-character random string) and the frontend looks the record up by that
+exact id; a numeric field could not carry it, and a truncated one would
+silently fail to find the user.
+
+**The login was never exercised by a test, and the boot payload never
+carried a session at all.** The login endpoint authenticated against
+PocketBase and set the cookies correctly — but the payload was built
+without the request, so the SPA always booted anonymous. The forum's
+test app also did not run the HOST's migrations, so the shared `users`
+collection had no `username` field and a login by username failed with
+"invalid filter expression: unknown field \"username\"" — a harness gap
+that masked the real bug. The test app now imports the host migrations
+(blank import, as main.go does) and the username is unique per account,
+as the host's migration makes it.
+
+**The logout redirects; the login answers JSON.** The frontend logs in
+with an XHR and reloads, so the login must answer JSON. It logs out with
+a FORM submission (the core's `Session.logout` builds a form and submits
+it), so the browser navigates to the response: the logout must REDIRECT,
+or the reader ends up staring at `{"message":"Logged out."}`. The
+logout's `return` parameter is restricted to a path inside the forum, so
+it cannot be turned into an open redirect.
+
+**A logout does not revoke the token.** PocketBase's auth tokens are
+stateless JWTs with no server-side store to delete a row from, so a
+captured token keeps working until it expires (the `users` collection's
+authToken duration, five days by default). This is PocketBase's model,
+not the forum's — the wiki's logout has the same shape — and the host's
+revocable credential is the personal access token, not the session
+cookie.
+
 **The plugin packages are deliberately NOT npm workspaces.** Adding them
 to the workspace globs would rewrite `package-lock.json` and re-resolve
 the whole tree; `scripts/build_flarum_spa.sh` instead drives the webpack
