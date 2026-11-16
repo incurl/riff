@@ -48,13 +48,29 @@ func timestamp(t time.Time) string {
 // It is exported so the module can put the caller into the boot
 // payload: the frontend reads the user from the store, and a
 // relationship's identifier alone carries no attributes.
-func UserResource(user *domain.User) Resource {
-	return userResourceWithGroups(user, user.Groups)
+func (s *Server) UserResource(user *domain.User) Resource {
+	return s.userResourceWithGroups(user, user.Groups)
+}
+
+// avatarURL is the public URL of an account's picture, or empty.
+//
+// The bytes come from PocketBase's `users.avatar` file, streamed through
+// this module's own `{basePath}/avatars/{id}` route (see the module's
+// avatar handler) rather than linked at PocketBase's native
+// `/api/files/users/...` URL: that one lives at the root of the
+// listener, which the forum does not own. The route answers 404 when
+// there is no picture, which is what makes the frontend render initials.
+func (s *Server) avatarURL(user *domain.User) string {
+	if user == nil || user.AvatarURL == "" {
+		return ""
+	}
+
+	return s.basePath + "/avatars/" + user.ID
 }
 
 // userResourceWithGroups renders a user as a JSON:API resource with an
 // explicit group list.
-func userResourceWithGroups(user *domain.User, groups []string) Resource {
+func (s *Server) userResourceWithGroups(user *domain.User, groups []string) Resource {
 	if groups == nil {
 		groups = user.Groups
 	}
@@ -63,7 +79,8 @@ func userResourceWithGroups(user *domain.User, groups []string) Resource {
 		"username":                user.Username,
 		"displayName":             user.DisplayName,
 		"slug":                    user.Username,
-		"avatarUrl":               user.AvatarURL,
+		"avatarUrl":               s.avatarURL(user),
+		"hasUploadedAvatar":       user.AvatarURL != "",
 		"isAdmin":                 user.IsAdmin,
 		"joinTime":                timestamp(user.JoinedAt),
 		"lastSeenAt":              timestamp(user.LastSeenAt),

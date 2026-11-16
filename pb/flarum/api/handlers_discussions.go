@@ -112,11 +112,25 @@ func (s *Server) listPostsHandler(e *core.RequestEvent) error {
 	query := e.Request.URL.Query()
 
 	discussionID := query.Get("filter[discussion]")
-	if discussionID == "" {
-		return fail(e, errValidation("A discussion filter is required."))
+	authorSlug := query.Get("filter[author]")
+
+	var (
+		posts []*domain.Post
+		err   error
+	)
+
+	switch {
+	case discussionID != "":
+		posts, err = s.repo.ListPosts(discussionID, limit, offset)
+	case authorSlug != "":
+		// The profile page lists a user's posts: `filter[author]` is the
+		// user's slug (their username), and `filter[type]` narrows to the
+		// post types the page shows.
+		posts, err = s.repo.ListPostsByAuthor(authorSlug, query.Get("filter[type]"), limit, offset)
+	default:
+		return fail(e, errValidation("A discussion or author filter is required."))
 	}
 
-	posts, err := s.repo.ListPosts(discussionID, limit, offset)
 	if err != nil {
 		return fail(e, errInternal("The posts could not be loaded.", err))
 	}
@@ -215,7 +229,7 @@ func (s *Server) listUsersHandler(e *core.RequestEvent) error {
 
 	resources := make([]Resource, 0, len(users))
 	for _, user := range users {
-		resources = append(resources, userResourceWithGroups(user, user.Groups))
+		resources = append(resources, s.userResourceWithGroups(user, user.Groups))
 	}
 
 	return s.writeDocument(e, Document{Data: resources})
@@ -224,11 +238,33 @@ func (s *Server) listUsersHandler(e *core.RequestEvent) error {
 // showUserHandler serves GET /api/users/{id}.
 func (s *Server) showUserHandler(e *core.RequestEvent) error {
 	id := e.Request.PathValue("id")
-	user, err := s.repo.UserByID(id)
+
+	// `?bySlug=true` means the path segment is the user's SLUG, not
+	// their record id. The profile route is keyed by the username, so
+	// that is how the frontend asks for it: a user page cannot know the
+	// record id without loading the user first.
+	var (
+		user *domain.User
+		err  error
+	)
+	if wantsSlugLookup(e) {
+		user, err = s.repo.UserBySlug(id)
+	} else {
+		user, err = s.repo.UserByID(id)
+	}
 	if err != nil {
 		return fail(e, notFoundError("That user does not exist."))
 	}
-	return s.writeDocument(e, Document{Data: userResourceWithGroups(user, user.Groups)})
+	return s.writeDocument(e, Document{Data: s.userResourceWithGroups(user, user.Groups)})
+}
+
+// wantsSlugLookup reports whether the request asked for a slug lookup.
+//
+// The frontend sends `bySlug=true`; a bare flag (`?bySlug`) is accepted
+// too, and a `false` value means a plain id lookup.
+func wantsSlugLookup(e *core.RequestEvent) bool {
+	raw := strings.ToLower(strings.TrimSpace(e.Request.URL.Query().Get("bySlug")))
+	return raw == "true" || raw == "1"
 }
 
 // listGroupsHandler serves GET /api/groups.
@@ -284,7 +320,7 @@ func (s *Server) showForumHandler(e *core.RequestEvent) error {
 
 	actorResource := any(nil)
 	if actor.User != nil {
-		actorResource = userResourceWithGroups(actor.User, actor.User.Groups)
+		actorResource = s.userResourceWithGroups(actor.User, actor.User.Groups)
 	}
 
 	attributes := map[string]any{

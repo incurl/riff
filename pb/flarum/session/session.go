@@ -41,10 +41,13 @@ const (
 	// csrfTokenBytes is the entropy of a CSRF token.
 	csrfTokenBytes = 32
 
-	// sessionCookieMaxAge is how long a session cookie lives, in
+	// SessionCookieMaxAge is how long a session cookie lives, in
 	// seconds. PocketBase's own auth tokens expire sooner; the cookie
 	// only has to outlive them.
-	sessionCookieMaxAge = 60 * 60 * 24 * 30
+	//
+	// It is exported because the admin payload reports the session
+	// lifetime to the admin application, which shows it in minutes.
+	SessionCookieMaxAge = 60 * 60 * 24 * 30
 )
 
 // Actor is the resolved caller of a request.
@@ -198,7 +201,7 @@ func (r *Resolver) SetSessionCookie(e *core.RequestEvent, token string, csrf str
 		HttpOnly: true,
 		Secure:   secure,
 		SameSite: http.SameSiteLaxMode,
-		MaxAge:   sessionCookieMaxAge,
+		MaxAge:   SessionCookieMaxAge,
 	})
 	http.SetCookie(e.Response, &http.Cookie{
 		Name:     CSRFCookieName,
@@ -207,7 +210,7 @@ func (r *Resolver) SetSessionCookie(e *core.RequestEvent, token string, csrf str
 		HttpOnly: false,
 		Secure:   secure,
 		SameSite: http.SameSiteLaxMode,
-		MaxAge:   sessionCookieMaxAge,
+		MaxAge:   SessionCookieMaxAge,
 	})
 }
 

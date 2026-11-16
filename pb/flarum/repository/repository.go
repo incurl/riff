@@ -165,6 +165,36 @@ func (r *Repository) UserByID(id string) (*domain.User, error) {
 	return r.userFromRecord(record)
 }
 
+// ErrUserNotFound reports a lookup that matched no account.
+//
+// It is a sentinel so a caller can tell "there is no such user" (an
+// empty result) from "the lookup failed" (a real error).
+var ErrUserNotFound = errors.New("forum: user not found")
+
+// UserBySlug returns the account whose slug is the given value.
+//
+// The forum's slug is the username (`userResource` reports it as the
+// `slug` attribute), and the frontend asks for a profile by slug —
+// `GET /api/users/<slug>?bySlug=true` — because the route param is the
+// username, not the record id.
+func (r *Repository) UserBySlug(slug string) (*domain.User, error) {
+	if slug == "" {
+		return nil, errors.New("forum: empty user slug")
+	}
+
+	users, err := r.app.FindCollectionByNameOrId(SharedUsersCollection)
+	if err != nil {
+		return nil, errors.Wrap(err, "forum: the shared users collection is missing")
+	}
+
+	record, err := r.app.FindFirstRecordByFilter(users, "username = {:slug}", map[string]any{"slug": slug})
+	if err != nil {
+		return nil, ErrUserNotFound
+	}
+
+	return r.userFromRecord(record)
+}
+
 // UsersByIDs returns several shared accounts at once.
 //
 // It is the batch form of [Repository.UserByID], used to resolve the
@@ -504,6 +534,60 @@ func (r *Repository) ListPosts(discussionID string, limit, offset int) ([]*domai
 	if err := query.All(&records); err != nil {
 		return nil, err
 	}
+	posts := make([]*domain.Post, 0, len(records))
+	for _, record := range records {
+		posts = append(posts, postFromRecord(record))
+	}
+	return posts, nil
+}
+
+// ListPostsByAuthor returns a user's posts, newest first.
+//
+// The user-page filter is `filter[author]=<slug>`, where the slug is the
+// username, and a post stores its author as the `user` relation — so the
+// slug is resolved to a record id first and the query filters on that.
+//
+// `postType` narrows by the post's `type` (the frontend sends `comment`
+// to leave out event posts); an empty value means every type.
+//
+// An unknown slug yields an empty page rather than an error: the feed is
+// a listing, and a user with no posts and a user that does not exist
+// read the same way to the caller.
+func (r *Repository) ListPostsByAuthor(slug, postType string, limit, offset int) ([]*domain.Post, error) {
+	collection, err := r.collection("posts")
+	if err != nil {
+		return nil, err
+	}
+
+	// No such user is an empty page: the feed is a listing, and a user
+	// with no posts and a user that does not exist read the same way to
+	// the caller. A real failure still surfaces.
+	author, lookupErr := r.UserBySlug(slug)
+	if errors.Is(lookupErr, ErrUserNotFound) {
+		return []*domain.Post{}, nil
+	}
+	if lookupErr != nil {
+		return nil, lookupErr
+	}
+
+	filter := "user = {:user}"
+	params := map[string]any{"user": author.ID}
+	if postType != "" {
+		filter += " AND type = {:type}"
+		params["type"] = postType
+	}
+
+	query := r.app.RecordQuery(collection).
+		AndWhere(dbxExp(filter, params)).
+		OrderBy("created_at DESC").
+		Limit(int64(limit)).
+		Offset(int64(offset))
+
+	var records []*core.Record
+	if err := query.All(&records); err != nil {
+		return nil, err
+	}
+
 	posts := make([]*domain.Post, 0, len(records))
 	for _, record := range records {
 		posts = append(posts, postFromRecord(record))
