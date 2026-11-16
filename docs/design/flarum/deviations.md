@@ -237,7 +237,25 @@ settings read/write endpoints and the extension manifest endpoint, and
 the admin SPA boots — but the forum does not yet implement every admin
 screen's backend.
 
-## 11. The API honours `X-HTTP-Method-Override`
+## 11. The access-token list holds the current session only
+
+Upstream lists every access token of the account: the session tokens
+and the developer tokens, with their title, device, last IP address and
+last activity.
+
+This port cannot. A PocketBase auth token is a **stateless JWT** — the
+whole payload is signed, and there is no stored token row to enumerate
+— and the forum does not mint developer tokens at all. So the list
+holds the caller's current session and nothing else, and the developer
+list is empty.
+
+The endpoint still exists and still answers with a JSON:API **array**:
+the frontend joins the session and developer answers with
+`Promise.all([...]).then(([sessions, developerTokens]) => …)`, and a
+single object is not iterable, so the destructuring fails with "e is
+not iterable".
+
+## 12. The API honours `X-HTTP-Method-Override`
 
 Upstream's frontend rewrites every method other than GET and POST into
 a POST with the intended method in the `X-HTTP-Method-Override` header,
@@ -259,7 +277,7 @@ request helper throws on a non-2xx, so a 200 with an HTML body is the
 worst outcome: the caller tries to parse a page of markup as data.
 Every forum API path the frontend calls has to exist.
 
-## 12. Notifications are limited
+## 13. Notifications are limited
 
 Upstream's notification system is a per-extension blueprint registry
 with a large catalogue of notification types. The forum's
@@ -267,7 +285,7 @@ with a large catalogue of notification types. The forum's
 first-party plugins produce (`postLiked`, `discussionTagged`,
 `mentionedInPost`, `commentOnPost`).
 
-## 13. The deferred items
+## 14. The deferred items
 
 The following are **roadmap**, not v1:
 
@@ -277,7 +295,7 @@ The following are **roadmap**, not v1:
 - the remaining upstream extensions (mentions, subscriptions, sticky,
   lock, suspend, and the rest).
 
-## 14. The frontend build needs npm's legacy peer resolver
+## 15. The frontend build needs npm's legacy peer resolver
 
 The upstream monorepo is a Yarn workspace with hoisting assumptions
 that npm's strict resolver rejects. The build therefore runs with

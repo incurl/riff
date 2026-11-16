@@ -19,8 +19,19 @@ func (s *Server) Mount(r *router.Router[*core.RequestEvent]) {
 	// --- the forum document -------------------------------------------
 	// The frontend's boot sequence fetches this to learn the API URL,
 	// the base path and the caller.
+	//
+	// The trailing-slash form is a SUBTREE match in Go's http.ServeMux
+	// ("/" acts as an anonymous "...\/" wildcard), so registering it
+	// would answer EVERY unrouted path under /forum/api/ with the forum
+	// document. That is worse than a 404: the document's `data` is a
+	// single object rather than an array, so a caller that asked for a
+	// list (the frontend's `store.find`) gets one object back, and the
+	// `Promise.all([...])` that destructures the answer fails with
+	// "e is not iterable".
+	//
+	// The forum document is served at the exact path instead, and the
+	// API's own catch-all answers everything else with a JSON:API 404.
 	r.GET(api, s.showForumHandler)
-	r.GET(api+"/", s.showForumHandler)
 
 	// --- discussions ---------------------------------------------------
 	r.GET(api+"/discussions", s.listDiscussionsHandler)
@@ -70,4 +81,30 @@ func (s *Server) Mount(r *router.Router[*core.RequestEvent]) {
 	// route has to exist: a 404 leaves `response.data` undefined and the
 	// page throws on it.
 	r.GET(api+"/mail/settings", s.showMailSettingsHandler)
+
+	// --- access tokens --------------------------------------------------
+	// The user security page lists the caller's access tokens. The
+	// route has to exist: the page destructures the answer with
+	// `Promise.all([...])`, and anything that is not an iterable fails
+	// with "e is not iterable".
+	r.GET(api+"/access-tokens", s.listAccessTokensHandler)
+
+	// --- the API's own catch-all -----------------------------------------
+	// Everything under /forum/api/ that no route above claims answers
+	// with a JSON:API 404.
+	//
+	// The catch-all is NOT optional. Without it, an unrouted API path
+	// falls through to the memos SPA's catch-all, which answers with
+	// the SPA's index.html and a 200 — and the frontend's request
+	// helper throws only on a non-2xx, so the caller parses a page of
+	// markup as if it were data.
+	//
+	// It is registered per method, because a method-less pattern
+	// conflicts with the SPA's method-less catch-all in http.ServeMux
+	// and the panic takes the process down.
+	r.GET(api+"/{path...}", s.notFoundHandler)
+	r.POST(api+"/{path...}", s.notFoundHandler)
+	r.PATCH(api+"/{path...}", s.notFoundHandler)
+	r.PUT(api+"/{path...}", s.notFoundHandler)
+	r.DELETE(api+"/{path...}", s.notFoundHandler)
 }

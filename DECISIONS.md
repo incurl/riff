@@ -5,6 +5,37 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## The forum API's trailing-slash route was a subtree match (2026-11-16)
+
+The forum document was registered at `GET /forum/api/` **with** a
+trailing slash, and in Go's `http.ServeMux` a trailing slash is an
+anonymous ".../" wildcard: the pattern matches the whole subtree. So
+**every** unrouted path under `/forum/api/` answered with the forum
+document instead of a 404.
+
+That is worse than a 404, and the symptom was a `TypeError` on the
+user security page. The document's `data` is a single resource OBJECT,
+but the page fetches the session tokens and the developer tokens
+separately and joins the two answers with
+
+```js
+Promise.all([sessionsPromise, developerPromise]).then(([sessions, developerTokens]) => …)
+```
+
+A single object is not iterable, so the destructuring fails with
+**"e is not iterable"**. The same shape of bug answers a list request
+with one object, which is exactly what `store.find` asks for.
+
+The route is now registered at `/forum/api` (no trailing slash) and the
+API carries its own catch-all, which answers everything else with a
+JSON:API 404. The catch-all is registered per method: a method-less
+pattern conflicts with the memos SPA's method-less `/{path...}` in
+`http.ServeMux`, and that panic takes the process down.
+
+**The frontend reads the forum document out of the BOOT PAYLOAD**, not
+over the API (`this.forum = this.store.getById('forums', '1')`), so
+narrowing the route breaks nothing in the SPA.
+
 ## The forum's API must honour `X-HTTP-Method-Override` (2026-11-16)
 
 The forum's settings page failed with an error whose `responseText` was
