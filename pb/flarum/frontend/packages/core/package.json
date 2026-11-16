@@ -25,6 +25,7 @@
   },
   "devDependencies": {
     "@flarum/prettier-config": "file:../prettier-config",
+    "@fortawesome/fontawesome-free": "^7.3.1",
     "@types/body-scroll-lock": "^3.1.0",
     "@types/dom-close-watcher": "^1.0.0",
     "@types/jquery": "^3.5.10",
@@ -36,6 +37,7 @@
     "expose-loader": "^3.1.0",
     "flarum-tsconfig": "file:../tsconfig",
     "flarum-webpack-config": "file:../webpack-config",
+    "less": "^4.2.2",
     "prettier": "^3.9.10",
     "typescript": "^5.9.3",
     "webpack": "^5.104.1",
@@ -44,13 +46,15 @@
   },
   "scripts": {
     "dev": "webpack --mode development --watch",
-    "build": "webpack --mode production && npm run copy-xslt-polyfill",
+    "build": "webpack --mode production && npm run build-css && npm run build-locale && npm run copy-xslt-polyfill",
     "format": "prettier --write src",
     "format-check": "prettier --check src",
     "clean-typings": "npx rimraf dist-typings && mkdir dist-typings",
     "build-typings": "npm run clean-typings && ([ -e src/@types ] && cp -r src/@types dist-typings/@types || true) && tsc && npm run post-build-typings",
     "post-build-typings": "find dist-typings -type f -name '*.d.ts' -print0 | xargs -0 sed -i 's,../src/@types,@types,g'",
     "check-typings": "tsc --noEmit --emitDeclarationOnly false",
-    "copy-xslt-polyfill": "rm -rf dist/xslt-polyfill && mkdir -p dist/xslt-polyfill/dist && SRC=$(node -e \"console.log(require('path').dirname(require.resolve('xslt-polyfill/package.json')))\") && cp $SRC/xslt-polyfill.min.js dist/xslt-polyfill/ && cp $SRC/dist/xslt-wasm.js dist/xslt-polyfill/dist/ && cp $SRC/package.json dist/xslt-polyfill/"
+    "copy-xslt-polyfill": "rm -rf dist/xslt-polyfill && mkdir -p dist/xslt-polyfill/dist && SRC=$(node -e \"console.log(require('path').dirname(require.resolve('xslt-polyfill/package.json')))\") && cp $SRC/xslt-polyfill.min.js dist/xslt-polyfill/ && cp $SRC/dist/xslt-wasm.js dist/xslt-polyfill/dist/ && cp $SRC/package.json dist/xslt-polyfill/",
+    "build-css": "node build-less.cjs",
+    "build-locale": "node build-locale.cjs"
   }
 }

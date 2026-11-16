@@ -32,6 +32,16 @@ rm -rf "$TARGET"
 mkdir -p "$TARGET"
 cp -R "$FRONTEND/packages/core/dist/." "$TARGET/"
 
+# The Font Awesome webfonts.
+#
+# The compiled stylesheet references them as `webfonts/…`, relative to
+# the assets root, so they are staged there. Only the three faces the
+# stylesheet declares are copied.
+mkdir -p "$TARGET/webfonts"
+for font in fa-brands-400.woff2 fa-regular-400.woff2 fa-solid-900.woff2; do
+  cp "$FRONTEND/node_modules/@fortawesome/fontawesome-free/webfonts/$font" "$TARGET/webfonts/$font"
+done
+
 # Build and stage each plugin bundle.
 #
 # The plugin packages are NOT npm workspaces: adding them to the
@@ -56,8 +66,27 @@ for plugin in $PLUGINS; do
   # stylesheet is a plain file (the shared config has no CSS rule), so
   # it is copied rather than bundled.
   mkdir -p "$TARGET/plugins/$plugin"
-  cp -R "$plugin_dir/js/dist/." "$TARGET/plugins/$plugin/"
+  cp "$plugin_dir/js/dist/forum.js" "$TARGET/plugins/$plugin/forum.js"
+  cp "$plugin_dir/js/dist/admin.js" "$TARGET/plugins/$plugin/admin.js"
   cp "$plugin_dir/style.css" "$TARGET/plugins/$plugin/style.css"
+
+  # The extension's async chunks go under `js/<namespace>/`, next to
+  # core's — the runtime builds a chunk's url as
+  # `${jsChunksBaseUrl}/${namespace}/${urlPath}.js`, and
+  # `jsChunksBaseUrl` is the assets root plus `/js`. The namespace is
+  # the composer name flattened the way extensionId.cjs does it
+  # (`riff/tags` -> `riff-tags`).
+  #
+  # These two extensions have no lazy imports yet, so the directory is
+  # usually absent; it is copied when it is there so an extension that
+  # grows one does not 404.
+  if [ -d "$plugin_dir/js/dist/js" ]; then
+    find "$plugin_dir/js/dist/js" -mindepth 1 -maxdepth 1 -type d | while read -r chunk_dir; do
+      chunk_namespace=$(basename "$chunk_dir")
+      mkdir -p "$TARGET/js/$chunk_namespace"
+      cp -R "$chunk_dir/." "$TARGET/js/$chunk_namespace/"
+    done
+  fi
 done
 
 echo "The forum front end is staged in $TARGET"

@@ -1,0 +1,74 @@
+// This is a mixin which styles components (buttons, inputs, etc.) for use on
+// dark backgrounds.
+.light-contents(@color: #fff; @control-bg: fade(#000, 10%); @control-color: #fff; @name: 'light-content') {
+  &, a {
+    color: var(~"--@{name}-color", @color);
+  }
+  .Button--link, .Search-input {
+    color: var(~"--@{name}-control-color", @control-color);
+  }
+  .FormControl {
+    background: var(~"--@{name}-control-bg", @control-bg);
+    border: 0;
+    color: var(~"--@{name}-control-color", @control-color);
+    .placeholder(var(~"--@{name}-control-color", @control-color));
+
+    &:focus {
+      color: @color;
+      background: var(~"--@{name}-control-bg-shaded", fadein(darken(@control-bg, 5%), 10%));
+    }
+  }
+  .Button, .Button:hover {
+    color: var(~"--@{name}-control-color", @control-color);
+    background: var(~"--@{name}-control-bg", @control-bg);
+  }
+  .Button--flat {
+    background: transparent;
+  }
+  .Button:active,
+  .Button.active,
+  .Button:focus,
+  .Button.focus,
+  .open > .Dropdown-toggle.Button {
+    background: var(~"--@{name}-control-bg-fadedin", fadein(@control-bg, 5%));
+    color: var(~"--@{name}-control-color", @control-color);
+  }
+  // Text buttons have no background to change, so, as on a plain background,
+  // they show hover, focus and an open dropdown by their colour: the full
+  // text colour instead of the muted control colour.
+  .Button--link:hover,
+  .Button--link:active,
+  .Button--link.active,
+  .Button--link:focus-visible,
+  .Button--link.focus,
+  .open > .Dropdown-toggle.Button--link {
+    color: var(~"--@{name}-color", @color);
+  }
+  // That colour is meant for the coloured background, not for dropdown panels,
+  // which have the page background: use the link colour there, as anywhere
+  // else on the page.
+  .Dropdown-menu {
+    .Button--link:hover,
+    .Button--link:active,
+    .Button--link.active,
+    .Button--link:focus-visible,
+    .Button--link.focus,
+    .open > .Dropdown-toggle.Button--link {
+      color: var(--link-color);
+    }
+  }
+
+  .Dropdown-menu>li>a, .Dropdown-menu>li>button, .Dropdown-menu>li>span {
+    color: var(--text-color);
+  }
+}
+
+.light-contents-vars(@color: #fff; @control-bg: fade(#000, 10%); @control-color: #fff; @name: 'light-content') {
+  @componentName: ~"@{name}";
+
+  --@{componentName}-color: @color;
+  --@{componentName}-control-color: @control-color;
+  --@{componentName}-control-bg: @control-bg;
+  --@{componentName}-control-bg-shaded: fadein(darken(@control-bg, 5%), 10%);
+  --@{componentName}-control-bg-fadedin: fadein(@control-bg, 5%);
+}

@@ -1,0 +1,92 @@
+@media @phone {
+  .DiscussionListPane {
+    display: none;
+  }
+}
+
+@media @tablet-up {
+  .DiscussionListPane {
+    inset-inline-start: calc(~"-6px - var(--pane-width)");
+    position: absolute;
+    z-index: var(--zindex-pane);
+    overflow: auto;
+    top: var(--header-height);
+    height: ~"calc(100vh - var(--header-height))";
+    width: var(--pane-width);
+    background: var(--body-bg);
+    padding-bottom: 40px;
+    border-top: 1px solid var(--control-bg);
+    box-shadow: 0 6px 6px var(--shadow-color);
+    transition: inset-inline-start 0.2s;
+
+    .affix & {
+      position: fixed;
+      bottom: 0;
+      height: auto;
+    }
+    .paneShowing & {
+      inset-inline-start: 0;
+    }
+    .DiscussionListItem {
+      margin: 0;
+      padding: 0;
+      border-radius: 0;
+
+      &.active {
+        background: var(--control-bg);
+      }
+    }
+    .DiscussionListItem-content {
+      padding-inline-start: 16px;
+      padding-inline-end: 28px;
+    }
+    .DiscussionListItem-title {
+      font-size: 14px;
+    }
+    .DiscussionListItem-stats {
+    top: 12px;
+    inset-inline-end: 12px;
+
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+    .DiscussionListItem-info {
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    
+  }
+}
+
+@media @desktop-hd {
+  .DiscussionListPane {
+    .panePinned & {
+      inset-inline-start: 0;
+      transition: none;
+    }
+  }
+  // When the pane is pinned, move the other page content inwards
+  .App-content, .App-footer {
+    .hasPane.panePinned & {
+      margin-inline-start: var(--pane-width);
+
+      .container {
+        max-width: 100%;
+        padding-inline-start: 30px;
+        padding-inline-end: 30px;
+      }
+    }
+  }
+  .App-header .container {
+    transition: width 0.2s;
+  }
+}
+
+.DiscussionListPane {
+  .DiscussionListItem-info {
+    .item-excerpt {
+      margin-inline-end: 0;
+    }
+  }
+}

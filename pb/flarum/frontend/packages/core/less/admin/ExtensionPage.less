@@ -1,0 +1,207 @@
+.ExtensionPage {
+  padding-bottom: 30px;
+
+  &-header {
+    .helpText {
+      margin-bottom: 5px;
+    }
+
+    h2 {
+      display: inline-block;
+      margin: 0;
+      vertical-align: middle;
+    }
+
+    &Items {
+      padding: 15px 0;
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+
+      .Checkbox {
+        margin: 5px 0 0 0;
+        display: inline-block;
+      }
+
+      .Checkbox.off {
+        .Checkbox-display {
+          background: var(--muted-more-color);
+        }
+      }
+    }
+
+    .container {
+      .clearfix();
+    }
+  }
+
+  &-header,
+  &-permissions-header {
+    background: var(--control-bg);
+
+    h2 {
+      color: var(--muted-color);
+
+      span {
+        font-size: 13px;
+        color: var(--muted-color);
+        font-weight: normal;
+      }
+    }
+
+    .Button-icon {
+      display: unset;
+    }
+
+    ul {
+      display: flex;
+      align-items: center;
+      list-style-type: none;
+      padding: 0;
+      margin: 0;
+
+      > li {
+        display: inline;
+        color: var(--muted-color);
+        margin-inline-start: 13px;
+
+
+        > a {
+          color: var(--muted-color);
+        }
+
+        > .icon {
+          margin-inline-end: 5px;
+        }
+      }
+    }
+
+    .ExtensionIcon {
+      --size: 30px;
+      margin-inline-start: 0;
+    }
+
+    &TopItems {
+      margin-inline-start: auto;
+    }
+
+    @media (max-width: @screen-phone-max) {
+      &TopItems {
+        float: inline-end;
+        position: relative;
+      }
+
+      .item-website, .item-source, .item-documentation {
+        display: none;
+      }
+    }
+  }
+
+  &-settings, &-permissions {
+    .ExtensionPage-subHeader {
+      margin: 5px 0px;
+    }
+  }
+
+  &-settings {
+    margin-top: 20px;
+    padding: 10px 0;
+
+    input, .ColorInput {
+      max-width: 400px;
+    }
+  }
+
+  &-subHeader {
+    color: var(--muted-color);
+    font-weight: normal;
+  }
+
+  &-permissions {
+    .PermissionGrid-removeScope {
+      display: none;
+    }
+
+    > .container {
+      overflow-x: auto;
+      padding-bottom: 25vh;
+    }
+
+    &-header {
+      margin: 20px 0 20px;
+      padding: 5px 0;
+    }
+  }
+
+  &-body {
+    .InfoTile {
+      padding: 4rem 0;
+    }
+  }
+}
+
+.ExtensionTitle {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  margin: 20px 0 15px;
+}
+
+.ExtensionInfo {
+  margin-inline-start: auto;
+
+  .item-authors {
+    a {
+      color: var(--muted-color);
+    }
+  }
+}
+
+.ExtensionName {
+  display: inline-block;
+  margin-inline-start: 8px;
+}
+
+.ReadmeModal {
+   .Placeholder {
+     margin-bottom: 40px;
+   }
+
+   img {
+     max-width: 100%;
+   }
+ }
+
+// Sectioned and tabbed settings pages (Extend.Admin().section() / .tab()).
+.ExtensionPage-tabs {
+  margin-top: 20px;
+
+  .Tabs-nav {
+    padding: 0;
+    overflow-x: auto;
+
+    > .Button {
+      white-space: nowrap;
+    }
+  }
+
+  .Tabs-content {
+    padding-top: 8px;
+  }
+
+  .ExtensionPage-settings {
+    margin-top: 0;
+
+    // content() brings its own container; the tab already sits in one.
+    > .container {
+      width: auto;
+      padding: 0;
+      margin: 0;
+    }
+  }
+
+  .ExtensionPage-permissions {
+    overflow-x: auto;
+    padding: 20px 0 25vh;
+  }
+}

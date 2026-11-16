@@ -24,11 +24,20 @@
 #      `go build` time without it. Build the SPA first with
 #      `cd web && VITE_BASE_PATH=/community/ pnpm release`
 #      (or `pnpm release` for the root-mounted layout).
-#   2. `scripts/ravine` is a symlink (or a path) to the built ravine Jekyll
+#   2. `pb/flarum/frontend/ui/dist/{forum,admin}.{js,css}` and the locale
+#      bundles exist. The forum's
+#      `//go:embed all:ui` (pb/flarum/frontend/frontend.go) does NOT fail
+#      without them — ui/index.html is tracked, so the embed always compiles —
+#      and the binary then serves the dependency-free fallback shell instead of
+#      the real front end. The stylesheet is the one that goes unnoticed: the
+#      forum still renders, just unstyled, with a 404 for
+#      /forum/assets/forum.css in the console. Build it first with
+#      `sh scripts/build_flarum_spa.sh`.
+#   3. `scripts/ravine` is a symlink (or a path) to the built ravine Jekyll
 #      site. The Dockerfile imports it as a buildkit named context under the
 #      name `ravine`; the symlink is the convention documented in AGENTS.md
 #      so the same command works on every developer's machine.
-#   3. `docker buildx` works on the host. The `default` builder is fine.
+#   4. `docker buildx` works on the host. The `default` builder is fine.
 #
 # Outputs:
 #   - A local image tagged `riff:dev` (override with RIFF_IMAGE_TAG).
@@ -77,6 +86,35 @@ without it. Build the SPA first:
 
     cd web && pnpm release                  # root-mounted layout
     cd web && VITE_BASE_PATH=/community/ pnpm release   # caddy /community/ sub-path
+
+Then re-run this script.
+EOF
+  exit 1
+fi
+
+# The forum front end. Its embed never fails without these files (ui/index.html
+# is tracked, so //go:embed all:ui always compiles), so a missing or stale
+# ui/dist produces an image that serves the fallback shell — or, worse, a
+# real front end with no stylesheet.
+forum_prefix="pb/flarum/frontend/ui/dist"
+forum_missing=""
+for f in forum.js forum-en.js admin.js admin-en.js forum.css admin.css; do
+  [ -f "$forum_prefix/$f" ] || forum_missing="$forum_missing $f"
+done
+if [ -n "$forum_missing" ]; then
+  cat >&2 <<EOF
+pb/flarum/frontend/ui/dist is missing:$forum_missing
+
+The forum front end has not been built (or was built before the stylesheets
+were added). The Dockerfile bakes pb/flarum/frontend/ui/dist into the riff
+binary via //go:embed all:ui (pb/flarum/frontend/frontend.go), and that embed
+does NOT fail when the directory is incomplete: ui/index.html is tracked, so
+the build succeeds and the image serves the fallback shell — the forum then
+renders unstyled and /forum/assets/forum.css answers 404.
+
+Build it first:
+
+    sh scripts/build_flarum_spa.sh
 
 Then re-run this script.
 EOF

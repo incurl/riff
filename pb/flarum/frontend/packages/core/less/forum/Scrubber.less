@@ -1,0 +1,93 @@
+.Scrubber {
+  &-first, &-last {
+    width: auto !important;
+    padding: 0;
+  }
+}
+.Scrubber-scrollbar {
+  // The left margin centres the track under the chevron buttons that cap it
+  // above and below: those sit flush with the container, and their icons are
+  // wider than the 1px track, so a smaller margin leaves the whole column
+  // visibly left of the two icons pointing at it.
+  margin: 8px 0 8px 8px;
+  height: 300px;
+  min-height: 50px; // JavaScript sets a max-height
+  position: relative;
+  cursor: pointer;
+  .user-select(none);
+}
+.Scrubber-before, .Scrubber-after {
+  border-inline-start: 1px solid var(--control-bg);
+}
+.Scrubber-unread {
+  position: absolute;
+  border-inline-start: 1px solid var(--muted-color-light);
+  width: 100%;
+  background-image: linear-gradient(to right, var(--control-bg), transparent 10px, transparent);
+  display: flex;
+  align-items: center;
+  color: var(--muted-color);
+  text-transform: uppercase;
+  font-size: 11px;
+  font-weight: bold;
+  padding-inline-start: 13px;
+}
+.Scrubber-handle {
+  position: relative;
+  z-index: 1;
+  background: transparent;
+  width: 100%;
+  padding: 5px 0;
+  cursor: ns-resize;
+}
+.Scrubber-bar {
+  height: 100%;
+  width: 5px;
+  background: var(--primary-color);
+  border-radius: 4px;
+  float: inline-start;
+  margin-inline-start: -2px;
+  transition: background 0.2s;
+
+  .disabled & {
+    background: var(--control-bg);
+  }
+}
+.Scrubber-info {
+  margin-top: -1.5em;
+  position: absolute;
+  top: 50%;
+  width: 100%;
+  inset-inline-start: 15px;
+
+  & strong {
+    display: block;
+  }
+}
+.Scrubber-description {
+  color: var(--muted-color);
+}
+
+@media @phone {
+  .PostStreamScrubber {
+    .Dropdown-toggle {
+      font-size: 14px;
+    }
+    .Dropdown-menu {
+      padding: 30px;
+      font-size: 13px;
+    }
+  }
+  .Scrubber-scrollbar {
+    height: 40vh !important;
+    max-height: none !important;
+  }
+}
+
+@media @tablet-up {
+  .PostStreamScrubber {
+    margin: 30px 0 0 0;
+
+    .Dropdown--expanded();
+  }
+}

@@ -1,0 +1,15 @@
+// FormSectionGroup stacks FormSections, which render as SettingsSections
+// (see SettingsSection.less).
+.FormSectionGroup {
+  display: flex;
+  flex-direction: column;
+
+  > .SettingsSection:first-child {
+    border-top: 0;
+    padding-top: 0;
+  }
+}
+
+.FormSection .SettingsSection-body > .Form {
+  margin-bottom: 0;
+}

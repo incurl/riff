@@ -1,0 +1,64 @@
+.FormControl {
+  --transition: border-color .15s, background .15s;
+  display: block;
+  height: 36px;
+  padding: 8px 13px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--form-control-color, var(--control-color));
+  background-color: var(--form-control-bg, var(--control-bg));
+  border: 2px solid var(--form-control-border-color, transparent);
+  border-radius: var(--border-radius);
+  transition: var(--transition);
+  -webkit-appearance: none;
+
+  &:focus {
+    background-color: var(--body-bg);
+    color: var(--text-color);
+    border-color: var(--form-control-focus-border-color, var(--primary-color));
+    outline: var(--form-control-focus-outline, none);
+  }
+
+  // Placeholder
+  .placeholder(var(--form-control-placeholder-color, var(--control-color)));
+
+  // Disabled and read-only inputs
+  &[disabled],
+  &[readonly],
+  fieldset[disabled] & {
+    opacity: 0.5;
+  }
+
+  &[disabled],
+  fieldset[disabled] & {
+    cursor: not-allowed;
+  }
+
+  textarea& {
+    height: auto;
+  }
+
+  @media @phone {
+    font-size: 16px; // minimum font-size required to prevent page zoom on focus in iOS 10
+  }
+
+  &-alt {
+    background-color: var(--body-bg);
+  }
+}
+
+.StackedFormControl {
+  > :not(:last-child) {
+    margin-bottom: 1px;
+    border-end-end-radius: 0;
+    border-end-start-radius: 0;
+  }
+  > :last-child {
+    border-start-end-radius: 0;
+    border-start-start-radius: 0;
+  }
+}
+
+.FormControl, .StackedFormControl, .ColorInput {
+  width: 100%;
+}

@@ -135,16 +135,24 @@ func (m *Module) RenderBootShell(admin bool) ([]byte, error) {
 
 // scriptURLs returns the script URLs to load, in order.
 //
-// The core bundle comes first, then the plugin bundles in dependency
-// order: a plugin's initializer may extend a core component, so the
-// core must be registered first.
+// The core bundle comes first, then its locale bundle, then the plugin
+// bundles in dependency order: a plugin's initializer may extend a core
+// component, so the core must be registered first.
+//
+// The locale bundle is the compiled `app.translator.addTranslations(…)`
+// call (see packages/core/build-locale.cjs). It is a separate script
+// rather than part of the entry because the translations are a
+// per-locale asset upstream, and the boot payload advertises which
+// locale is wanted. Without it every `trans()` call renders the raw
+// key: the UI shows "core.forum.header.back_to_index_tooltip" instead
+// of the label.
 func (m *Module) scriptURLs(admin bool) []string {
 	base := m.opts.BasePath + "/assets/"
 	urls := []string{}
 	if admin {
-		urls = append(urls, base+"admin.js")
+		urls = append(urls, base+"admin.js", base+"admin-en.js")
 	} else {
-		urls = append(urls, base+"forum.js")
+		urls = append(urls, base+"forum.js", base+"forum-en.js")
 	}
 
 	for _, bundle := range m.bundles() {
@@ -161,9 +169,25 @@ func (m *Module) scriptURLs(admin bool) []string {
 }
 
 // styleURLs returns the stylesheet URLs to load, in order.
-func (m *Module) styleURLs(_ bool) []string {
+//
+// The core stylesheet comes first — it carries the framework's own
+// classes, and a plugin's stylesheet assumes them — then the plugin
+// stylesheets in dependency order.
+//
+// The core stylesheet is compiled from the vendored Less tree
+// (packages/core/less) into `forum.css` and `admin.css`. The forum and
+// the admin app are the same SPA with a different entry bundle, so the
+// path decides which stylesheet is loaded, exactly as it does for the
+// script.
+func (m *Module) styleURLs(admin bool) []string {
 	base := m.opts.BasePath + "/assets/"
 	urls := []string{}
+
+	if admin {
+		urls = append(urls, base+"admin.css")
+	} else {
+		urls = append(urls, base+"forum.css")
+	}
 
 	for _, bundle := range m.bundles() {
 		if bundle.CSS == "" {
