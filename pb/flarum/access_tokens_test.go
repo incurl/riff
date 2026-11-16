@@ -120,7 +120,6 @@ func TestForum_AccessTokensAndTheAPICatchAll(t *testing.T) {
 // migration is the expensive part of a forum test, and under the race
 // detector it is by far the dominant cost.
 func testNotificationPreferencesReset(t *testing.T, app core.App, handler http.Handler) {
-
 	t.Run("answers with the user resource", func(t *testing.T) {
 		user := testUser(t, app, "prefs_user")
 		token, err := user.NewAuthToken()
