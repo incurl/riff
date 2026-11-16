@@ -7,12 +7,14 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/pocketbase/dbx"
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/pocketbase/pocketbase/tools/router"
 
 	"github.com/incurl/riff/pb/flarum/api"
 	"github.com/incurl/riff/pb/flarum/frontend"
 	"github.com/incurl/riff/pb/flarum/plugin"
+	"github.com/incurl/riff/pb/flarum/repository"
 	"github.com/incurl/riff/pb/flarum/session"
 )
 
@@ -30,6 +32,14 @@ func (m *Module) mount(r *router.Router[*core.RequestEvent]) {
 	// Session class does the same.
 	r.POST(m.opts.BasePath+"/login", m.loginHandler)
 	r.POST(m.opts.BasePath+"/logout", m.logoutHandler)
+
+	// --- the avatars ----------------------------------------------------
+	// The profile picture is PocketBase's `users.avatar` file, streamed
+	// through this module rather than linked at PocketBase's native
+	// `/api/files/...` URL: that URL lives at the root of the listener,
+	// which this module does not own (and a reverse proxy in front of a
+	// sub-path install puts the static site there).
+	r.GET(m.opts.BasePath+"/avatars/{id}", m.avatarHandler)
 
 	// --- the frontend --------------------------------------------------
 	frontendServer := frontend.NewServer(frontend.ServerOptions{
@@ -120,7 +130,7 @@ func (m *Module) bundles() []frontend.Bundle {
 // It is the frontend package's BootRenderer implementation: it builds
 // the payload the app boots with and lists the bundles to load.
 func (m *Module) RenderBootShell(e *core.RequestEvent, admin bool) ([]byte, error) {
-	payload, err := m.bootPayload(e)
+	payload, err := m.bootPayload(e, admin)
 	if err != nil {
 		return nil, err
 	}
@@ -131,7 +141,7 @@ func (m *Module) RenderBootShell(e *core.RequestEvent, admin bool) ([]byte, erro
 	return frontend.Render(payload, scripts, styles, map[string]string{
 		"forum.js": m.assets.Revision(),
 		"admin.js": m.assets.Revision(),
-	})
+	}, admin)
 }
 
 // scriptURLs returns the script URLs to load, in order.
@@ -216,7 +226,7 @@ func (m *Module) styleURLs(admin bool) []string {
 // The caller is resolved through the same session resolver the API
 // uses, so a bearer token, the PocketBase auth middleware and the
 // session cookie are all accepted.
-func (m *Module) bootPayload(e *core.RequestEvent) (frontend.BootPayload, error) {
+func (m *Module) bootPayload(e *core.RequestEvent, admin bool) (frontend.BootPayload, error) {
 	payload := frontend.BootPayload{
 		Resources:      []any{},
 		Session:        frontend.BootSession{},
@@ -230,6 +240,13 @@ func (m *Module) bootPayload(e *core.RequestEvent) (frontend.BootPayload, error)
 		return payload, err
 	}
 	payload.Resources = append(payload.Resources, document)
+
+	// The admin application's data. It does NOT depend on the caller, so
+	// it is set before the actor is resolved: an anonymous visit to
+	// /admin still has to boot (the app then sends the visitor to log in).
+	if admin {
+		payload.Admin = m.adminPayload()
+	}
 
 	// The caller. A failure to resolve is not fatal: the page still
 	// boots, anonymously.
@@ -251,9 +268,220 @@ func (m *Module) bootPayload(e *core.RequestEvent) (frontend.BootPayload, error)
 	// and a relationship's identifier alone carries no attributes. The
 	// resource goes in beside the forum document, exactly as upstream's
 	// API document carries the actor.
-	payload.Resources = append(payload.Resources, api.UserResource(actor.User))
+	payload.Resources = append(payload.Resources, m.api.UserResource(actor.User))
 
 	return payload, nil
+}
+
+// adminPayload builds the data the admin application reads.
+//
+// The admin app is the same SPA with a different entry bundle and a much
+// larger payload: `BasicsPage.register` walks the driver lists during
+// boot, so a payload without them throws and the page renders blank.
+//
+// The extensions list is the forum's own plugins, which is real data.
+// Everything riff has no equivalent for (composer packages, editable
+// instance settings, the php-side dashboard counts) is left empty, so a
+// page shows nothing rather than something invented.
+func (m *Module) adminPayload() *frontend.Admin {
+	extensions := map[string]any{}
+	for _, manifest := range m.plugins.Manifests() {
+		extensions[manifest.ID] = map[string]any{
+			"id":          manifest.ID,
+			"name":        manifest.Name,
+			"version":     manifest.Version,
+			"description": "",
+			"icon":        map[string]any{"name": manifest.Icon.Glyph},
+			"links":       map[string]any{},
+			"extra": map[string]any{
+				"flarum-extension": map[string]any{"title": manifest.Name},
+			},
+		}
+	}
+
+	return &frontend.Admin{
+		Extensions:        extensions,
+		InstalledPackages: []string{},
+		Settings:          m.adminSettings(),
+		ModelStatistics:   m.adminModelStatistics(),
+		// The display name is the username, and the avatar is PocketBase's
+		// own file — upstream's `default` driver.
+		DisplayNameDrivers: []string{"username"},
+		AvatarDrivers:      []string{"default"},
+		SlugDrivers: map[string][]string{
+			"users":       {"username"},
+			"discussions": {"id"},
+		},
+		SearchDrivers:       map[string][]string{},
+		Permissions:         map[string][]string{},
+		MaintenanceByConfig: false,
+		DBDriver:            m.databaseDriver(),
+		DBVersion:           "",
+		DBDriverMismatch:    nil,
+		DBVersionStatus:     nil,
+		DBOptions:           map[string]any{},
+		PHPVersion:          "",
+		// riff has no job queue, so the queue is synchronous.
+		QueueDriver:                 "sync",
+		PausedQueues:                []string{},
+		KnownQueues:                 []string{},
+		SchedulerStatus:             "never-run",
+		SessionDriver:               "cookie",
+		SessionByConfig:             false,
+		SessionLifetime:             session.SessionCookieMaxAge / 60,
+		SessionCookieExpiresOnClose: false,
+		AccessTokenLifetimes:        []map[string]any{},
+		Bisecting:                   false,
+		SafeModeExtensions:          []string{},
+		SafeModeExtensionsConfig:    []string{},
+		AnnouncementsDisabled:       true,
+		FontAwesomeByConfig:         false,
+		FontAwesomeConfig:           map[string]any{},
+		DebugEnabled:                false,
+		ThemeImages:                 map[string]any{},
+		SortMaps:                    map[string]any{},
+	}
+}
+
+// adminSettings returns the settings the admin application reads.
+//
+// The values are the forum's own settings, plus the upstream defaults
+// for the keys the admin app dereferences. The defaults matter: the
+// admin app PARSES some of them as JSON (`isExtensionEnabled` does
+// `JSON.parse(app.data.settings.extensions_enabled)`), and
+// `JSON.parse(undefined)` throws — so an absent key is a blank page.
+//
+// The forum's own settings win over the defaults, so an operator's
+// choice is what the admin app shows.
+func (m *Module) adminSettings() map[string]any {
+	settings := map[string]any{
+		// The defaults upstream writes at install. The keys the admin app
+		// reads are the ones that matter; the rest fill the settings
+		// forms with the same values upstream shows.
+		"allow_hide_own_posts":           "reply",
+		"allow_post_editing":             "reply",
+		"allow_renaming":                 "10",
+		"allow_sign_up":                  "1",
+		"avatar_driver":                  "default",
+		"custom_less":                    "",
+		"default_locale":                 "en",
+		"default_route":                  "/all",
+		"display_name_driver":            "username",
+		"extension_bisect_state":         `{"ids":[],"low":0,"high":0}`,
+		"fontawesome_source":             "local",
+		"fontawesome_cdn_url":            "",
+		"fontawesome_kit_url":            "",
+		"forum_description":              "",
+		"forum_title":                    "Forum",
+		"mail_driver":                    "mail",
+		"mail_format":                    "multipart",
+		"mail_from":                      "noreply@localhost",
+		"open_as_app":                    "1",
+		"show_advanced_settings":         "0",
+		"slug_driver_Flarum\\User\\User": "default",
+		"theme_colored_header":           "0",
+		"color_scheme":                   "auto",
+		"theme_primary_color":            "#4D698E",
+		"theme_secondary_color":          "#4D698E",
+		"welcome_message":                "",
+		"welcome_title":                  "",
+	}
+
+	// The enabled plugins, as upstream's setting holds them: a JSON
+	// array of the plugin ids.
+	//
+	// This is the value `isExtensionEnabled` parses, so it must be a
+	// JSON document and not a Go slice.
+	enabled := []string{}
+	for _, manifest := range m.plugins.Manifests() {
+		enabled = append(enabled, manifest.ID)
+	}
+	settings["extensions_enabled"] = mustJSON(enabled)
+
+	// The forum's own settings win.
+	if stored, err := m.repo.AllSettings(); err == nil {
+		for key, value := range stored {
+			settings[key] = value
+		}
+	}
+
+	return settings
+}
+
+// adminModelStatistics returns the counts the admin app reads.
+//
+// `UserListPage` reads `app.data.modelStatistics.users.total` in a
+// field initialiser, so the `users` entry must be there even when the
+// forum has no accounts yet.
+func (m *Module) adminModelStatistics() map[string]any {
+	users := 0
+	if collection, err := m.app.FindCollectionByNameOrId(repository.SharedUsersCollection); err == nil {
+		if count, err := m.app.CountRecords(collection); err == nil {
+			users = int(count)
+		}
+	}
+
+	return map[string]any{
+		"users": map[string]any{"total": users},
+	}
+}
+
+// databaseDriver reports the running database driver, in the spelling
+// the admin app expects.
+//
+// `ExtensionPage` calls `app.data.dbDriver.toLowerCase()`, so the value
+// must be a non-empty string.
+func (m *Module) databaseDriver() string {
+	// `app.DB()` is a `*dbx.DB` in the common case, but PocketBase wraps
+	// it in a `dualDBBuilder` when the concurrent and non-concurrent
+	// handles differ, so the assertion is checked rather than assumed.
+	driver := ""
+	if db, ok := m.app.DB().(*dbx.DB); ok {
+		driver = db.DriverName()
+	}
+
+	switch driver {
+	case "mysql":
+		return "MySQL"
+	case "postgres":
+		return "PostgreSQL"
+	default:
+		// SQLite, and any driver riff does not know, is reported as
+		// SQLite rather than left empty: `ExtensionPage` calls
+		// `app.data.dbDriver.toLowerCase()`, so an empty string throws.
+		return "SQLite"
+	}
+}
+
+// mustJSON encodes a value as JSON.
+//
+// It cannot fail for the values it is given (a list of strings), so a
+// failure would be a programming error rather than a runtime condition.
+func mustJSON(value any) string {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return "[]"
+	}
+	return string(encoded)
+}
+
+// IsAdmin reports whether the caller administers the forum.
+//
+// The admin application is only served to an administrator, exactly as
+// upstream serves it: upstream's admin routes carry the
+// `RequireAdministrateAbility` middleware, so a non-administrator never
+// receives the admin shell.
+//
+// The admin app assumes a signed-in administrator at BOOT time —
+// `MailPage.register` reads `app.session.user!.email()`, which throws on
+// a null user — so this gate is what keeps the admin page from
+// rendering blank for an anonymous visitor.
+func (m *Module) IsAdmin(e *core.RequestEvent) bool {
+	actor, err := m.sessions.Resolve(e)
+	if err != nil {
+		return false
+	}
+	return actor.IsAdmin()
 }
 
 // forumDocument builds the forum resource the SPA boots with.

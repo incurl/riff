@@ -46,6 +46,19 @@ type BootRenderer interface {
 	// session: the caller is resolved from it, so the SPA can boot
 	// signed in rather than anonymous.
 	RenderBootShell(e *core.RequestEvent, admin bool) ([]byte, error)
+	// IsAdmin reports whether the caller administers the forum.
+	//
+	// The admin application is only served to an administrator, exactly
+	// as upstream serves it: upstream's admin routes carry the
+	// `RequireAdministrateAbility` middleware, so a non-administrator
+	// never receives the admin shell.
+	//
+	// This matters because the admin app assumes a signed-in
+	// administrator at BOOT time: `MailPage.register` reads
+	// `app.session.user!.email()`, which throws on a null user. Serving
+	// the admin shell to an anonymous visitor is therefore a blank page,
+	// not a login prompt.
+	IsAdmin(e *core.RequestEvent) bool
 }
 
 // ServerOptions configures the frontend server.
@@ -195,6 +208,26 @@ func (s *Server) spaHandler(e *core.RequestEvent) error {
 	}
 
 	admin := strings.HasPrefix(e.Request.URL.Path, s.basePath+"/admin")
+
+	if admin {
+		// The admin shell carries the boot payload, and the payload
+		// changes with the instance (the enabled plugins, the user
+		// count, the settings). A cached copy would replay a STALE
+		// payload — which reads as a blank page when the app dereferences
+		// a field the old payload did not have.
+		//
+		// Upstream sends the same header for the same reason: its admin
+		// middleware carries `DisableBrowserCache`.
+		e.Response.Header().Set("Cache-Control", "max-age=0, no-store")
+	}
+
+	if admin && !s.boot.IsAdmin(e) {
+		// Upstream answers a non-administrator with a 403 on the admin
+		// routes. The same answer here keeps the admin application away
+		// from a caller it cannot boot for, and answers the same way the
+		// upstream does.
+		return e.ForbiddenError("You are not allowed to access the administration panel.", nil)
+	}
 
 	body, err := s.boot.RenderBootShell(e, admin)
 	if err != nil {

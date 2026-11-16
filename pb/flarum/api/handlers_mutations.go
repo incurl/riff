@@ -393,7 +393,7 @@ func (s *Server) updateUserHandler(e *core.RequestEvent) error {
 	if err != nil {
 		return fail(e, errInternal("The profile could not be saved.", err))
 	}
-	return s.writeDocument(e, Document{Data: userResourceWithGroups(user, user.Groups)})
+	return s.writeDocument(e, Document{Data: s.userResourceWithGroups(user, user.Groups)})
 }
 
 // readNotificationHandler serves PATCH /api/notifications/{id}.
@@ -480,4 +480,105 @@ func (s *Server) showGroupHandler(e *core.RequestEvent) error {
 		return fail(e, notFoundError("That group does not exist."))
 	}
 	return s.writeDocument(e, Document{Data: groupResource(group)})
+}
+
+// showMailSettingsHandler serves GET /api/mail/settings.
+//
+// The admin application's mail page fetches this on mount and reads
+// `response.data.attributes`. The route has to answer with that shape:
+// a 404 (or a body without `data`) leaves `response.data` undefined and
+// the page throws on it.
+//
+// riff sends its mail through PocketBase's own SMTP configuration
+// rather than through a forum-level mail driver, so the driver fields
+// are empty and the page renders without the upstream driver settings.
+// The bounce-reporting flags are false because there is no forum-level
+// mail driver to report bounces for.
+func (s *Server) showMailSettingsHandler(e *core.RequestEvent) error {
+	return s.writeDocument(e, Document{Data: map[string]any{
+		"type": "mailSettings",
+		"id":   "mailSettings",
+		"attributes": map[string]any{
+			"fields":               map[string]any{},
+			"sending":              false,
+			"errors":               []any{},
+			"canReceiveWebhooks":   false,
+			"canProvisionWebhooks": false,
+			"webhookUrl":           nil,
+		},
+	}})
+}
+
+// resetNotificationPreferencesHandler serves
+// DELETE /api/users/{id}/notification-preferences.
+//
+// It resets the user's notification preferences to the defaults in one
+// save, so the registered defaults apply again.
+//
+// The route has to exist: the frontend's settings page calls it, and an
+// unrouted path falls through to the SPA catch-all, which answers with
+// the SPA's index.html. The frontend's request helper throws on a
+// non-2xx response, so the page reports an error — and because the
+// body is HTML rather than JSON, the error carries the whole document
+// instead of a readable message.
+//
+// Only the user themselves may reset their own preferences, the same
+// rule upstream applies to the `preferences` field.
+func (s *Server) resetNotificationPreferencesHandler(e *core.RequestEvent) error {
+	// The frontend sends this as a POST with an `X-HTTP-Method-Override`
+	// header, because it rewrites every method other than GET and POST.
+	// The route is registered as `Any` for that reason, so the effective
+	// method is resolved here.
+	if err := requireMethod(e, http.MethodDelete); err != nil {
+		return fail(e, err)
+	}
+
+	actor, err := s.requireAuth(e)
+	if err != nil {
+		return fail(e, err)
+	}
+
+	if err := sessionCSRF(e); err != nil {
+		return fail(e, errForbidden("The request could not be verified."))
+	}
+
+	id := e.Request.PathValue("id")
+	if id != actor.User.ID {
+		return fail(e, errForbidden("You are not allowed to change that account."))
+	}
+
+	profile, err := s.repo.FindUserProfile(id)
+	if err != nil {
+		return fail(e, errInternal("The profile could not be loaded.", err))
+	}
+	if profile == nil {
+		// A user without a profile row has no preferences to reset,
+		// and the answer is still the user: the frontend pushes the
+		// response into its store.
+		profile = &repository.UserProfile{UserID: id, IsActive: true}
+	}
+
+	if profile.Preferences == nil {
+		profile.Preferences = map[string]any{}
+	}
+	// Upstream drops the `notify_{subject}_{driver}` keys so the
+	// registered defaults apply again. The forum has no notification
+	// drivers of its own, so there is normally nothing to drop — but
+	// the keys are removed anyway, so a preference carried over from
+	// another instance does not linger.
+	for key := range profile.Preferences {
+		if strings.HasPrefix(key, "notify_") {
+			delete(profile.Preferences, key)
+		}
+	}
+
+	if err := s.repo.SaveUserProfile(profile); err != nil {
+		return fail(e, errInternal("The profile could not be saved.", err))
+	}
+
+	user, err := s.repo.UserByID(id)
+	if err != nil {
+		return fail(e, errInternal("The profile could not be loaded.", err))
+	}
+	return s.writeDocument(e, Document{Data: s.userResourceWithGroups(user, user.Groups)})
 }

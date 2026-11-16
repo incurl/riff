@@ -173,6 +173,123 @@ type BootPayload struct {
 	AssetsRevision string `json:"assetsRevision"`
 	// MaintenanceMode is set when the forum is in maintenance mode.
 	MaintenanceMode string `json:"maintenanceMode,omitempty"`
+	// Admin carries the admin application's data. It is nil for the forum
+	// app, which reads only the fields above.
+	//
+	// The field is EMBEDDED (not nested) on purpose: the admin application
+	// reads these as `app.data.extensions`, `app.data.settings` and so on,
+	// i.e. at the top level of the payload. An embedded nil pointer
+	// contributes nothing, so the forum app's payload is unchanged.
+	*Admin
+}
+
+// Admin is the data the admin application reads.
+//
+// The admin app is the same SPA with a different entry bundle, and it
+// expects a much larger payload than the forum: `BasicsPage.register`
+// walks `displayNameDrivers`, `avatarDrivers` and `slugDrivers` during
+// boot, so a payload without them throws and the page renders BLANK.
+//
+// The values are the ones this port actually implements. Where riff has
+// no equivalent of an upstream feature the field is empty rather than
+// invented, so a page shows nothing instead of something wrong.
+type Admin struct {
+	// Extensions are the forum's installed plugins, keyed by id.
+	Extensions map[string]any `json:"extensions"`
+	// InstalledPackages is the composer package list upstream shows. riff
+	// loads Go plugins, not composer packages, so it is empty.
+	InstalledPackages []string `json:"installedPackages"`
+	// Settings are the forum's own settings, keyed by name.
+	//
+	// These are NOT optional: the admin app reads them during boot.
+	// `isExtensionEnabled` does `JSON.parse(app.data.settings
+	// .extensions_enabled)`, and `JSON.parse(undefined)` throws — so a
+	// missing key is a blank page, not a missing field. Every key the
+	// app parses as JSON therefore carries a valid JSON document.
+	Settings map[string]any `json:"settings"`
+	// ModelStatistics are the dashboard counts, per model.
+	//
+	// `UserListPage` reads `app.data.modelStatistics.users.total` in its
+	// field initialiser, so the `users` entry must be present even when
+	// the count is zero.
+	ModelStatistics map[string]any `json:"modelStatistics"`
+	// DisplayNameDrivers are the ways a display name can be derived. The
+	// forum derives it from the username.
+	DisplayNameDrivers []string `json:"displayNameDrivers"`
+	// AvatarDrivers are the ways an avatar can be supplied. The forum
+	// shows PocketBase's own file, which is upstream's `default`.
+	AvatarDrivers []string `json:"avatarDrivers"`
+	// SlugDrivers are the ways a model can be addressed in a url, per
+	// model.
+	SlugDrivers map[string][]string `json:"slugDrivers"`
+	// SearchDrivers are the registered search drivers.
+	SearchDrivers map[string][]string `json:"searchDrivers"`
+	// Permissions are the custom permission keys, per group.
+	Permissions map[string][]string `json:"permissions"`
+	// MaintenanceByConfig reports whether maintenance mode is forced by
+	// configuration rather than the admin switch.
+	MaintenanceByConfig bool `json:"maintenanceByConfig"`
+	// DBDriver is the database driver, in the upstream spelling
+	// ("SQLite", "MySQL", "MariaDB", "PostgreSQL").
+	//
+	// `ExtensionPage` calls `app.data.dbDriver.toLowerCase()`, so this
+	// must be a non-empty string.
+	DBDriver string `json:"dbDriver"`
+	// DBVersion is the database server version.
+	DBVersion string `json:"dbVersion"`
+	// DBDriverMismatch is the configured driver when it differs from the
+	// running one, empty otherwise.
+	DBDriverMismatch *string `json:"dbDriverMismatch"`
+	// DBVersionStatus reports the server version against the minimum
+	// this build supports.
+	DBVersionStatus map[string]any `json:"dbVersionStatus"`
+	// DBOptions are the database-specific options.
+	DBOptions map[string]any `json:"dbOptions"`
+	// PHPVersion is the PHP version upstream shows. riff has no PHP, so
+	// this is empty.
+	PHPVersion string `json:"phpVersion"`
+	// QueueDriver is the job queue driver. riff has no job queue, so
+	// this is "sync".
+	QueueDriver string `json:"queueDriver"`
+	// PausedQueues are the queues the operator paused.
+	PausedQueues []string `json:"pausedQueues"`
+	// KnownQueues are the queues the instance knows.
+	KnownQueues []string `json:"knownQueues"`
+	// SchedulerStatus is the scheduler's state: "active", "inactive" or
+	// "never-run".
+	SchedulerStatus string `json:"schedulerStatus"`
+	// SessionDriver is the session driver upstream shows. riff's sessions
+	// are PocketBase auth tokens carried in a cookie.
+	SessionDriver string `json:"sessionDriver"`
+	// SessionByConfig reports whether the session settings come from the
+	// configuration rather than the database.
+	SessionByConfig bool `json:"sessionByConfig"`
+	// SessionLifetime is the session lifetime in MINUTES.
+	SessionLifetime int `json:"sessionLifetime"`
+	// SessionCookieExpiresOnClose reports whether the session cookie is
+	// a session cookie.
+	SessionCookieExpiresOnClose bool `json:"sessionCookieExpiresOnClose"`
+	// AccessTokenLifetimes are the token lifetimes, in seconds.
+	AccessTokenLifetimes []map[string]any `json:"accessTokenLifetimes"`
+	// Bisecting reports whether the extension bisect is running.
+	Bisecting bool `json:"bisecting"`
+	// SafeModeExtensions are the extensions disabled in safe mode.
+	SafeModeExtensions []string `json:"safeModeExtensions"`
+	// SafeModeExtensionsConfig is the configured safe-mode list.
+	SafeModeExtensionsConfig []string `json:"safeModeExtensionsConfig"`
+	// AnnouncementsDisabled reports whether announcements are off.
+	AnnouncementsDisabled bool `json:"announcementsDisabled"`
+	// FontAwesomeByConfig reports whether the icon source is fixed by the
+	// configuration.
+	FontAwesomeByConfig bool `json:"fontawesomeByConfig"`
+	// FontAwesomeConfig is the configured icon source.
+	FontAwesomeConfig map[string]any `json:"fontawesomeConfig"`
+	// DebugEnabled reports whether the instance runs in debug mode.
+	DebugEnabled bool `json:"debugEnabled"`
+	// ThemeImages are the images the theme owns.
+	ThemeImages map[string]any `json:"themeImages"`
+	// SortMaps are the sort options each resource offers.
+	SortMaps map[string]any `json:"sortMaps"`
 }
 
 // BootSession is the session part of the boot payload.
@@ -226,6 +343,13 @@ type shellData struct {
 	Styles []string
 	// Debug reports whether the debug mode is on.
 	Debug bool
+	// Admin reports whether the shell is for the admin application.
+	//
+	// The admin app is the same SPA with a different entry bundle, but it
+	// mounts a navigation column into #admin-navigation and expects the
+	// content to sit beside it. Rendering that div for the forum app would
+	// leave an empty column in the layout.
+	Admin bool
 }
 
 // shellTemplate is the boot shell.
@@ -268,7 +392,8 @@ var shellTemplate = template.Must(template.New("shell").Parse(`<!doctype html>
         </div>
         <main class="App-content">
             <div id="notices"></div>
-            <div id="content"></div>
+            {{ if .Admin }}<div class="container"><div id="admin-navigation" class="App-nav sideNav"></div></div>{{ end }}
+            <div id="content"{{ if .Admin }} class="sideNavOffset"{{ end }}></div>
             <div class="App-composer">
                 <div class="container"><div id="composer"></div></div>
             </div>
@@ -305,7 +430,7 @@ var shellTemplate = template.Must(template.New("shell").Parse(`<!doctype html>
 `))
 
 // Render renders the boot shell.
-func Render(payload BootPayload, scripts, styles []string, revisions map[string]string) ([]byte, error) {
+func Render(payload BootPayload, scripts, styles []string, revisions map[string]string, admin bool) ([]byte, error) {
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return nil, errors.Wrap(err, "forum: could not encode the boot payload")
@@ -322,6 +447,7 @@ func Render(payload BootPayload, scripts, styles []string, revisions map[string]
 		Revisions: template.JS(revisionJSON),
 		Scripts:   scripts,
 		Styles:    styles,
+		Admin:     admin,
 	}
 
 	var out strings.Builder

@@ -40,6 +40,17 @@ func (s *Server) Mount(r *router.Router[*core.RequestEvent]) {
 	r.GET(api+"/users", s.listUsersHandler)
 	r.GET(api+"/users/{id}", s.showUserHandler)
 	r.PATCH(api+"/users/{id}", s.updateUserHandler)
+	// The reset is registered for POST as well as DELETE, because the
+	// frontend does not send a DELETE: it turns every method other than
+	// GET and POST into a POST with an `X-HTTP-Method-Override` header
+	// (see the core's `Application.request`). The handler resolves the
+	// effective method itself.
+	//
+	// The route carries an explicit method on purpose. A method-less
+	// pattern conflicts with the SPA's method-less catch-all in
+	// http.ServeMux, and that panic takes the process down.
+	r.DELETE(api+"/users/{id}/notification-preferences", s.resetNotificationPreferencesHandler)
+	r.POST(api+"/users/{id}/notification-preferences", s.resetNotificationPreferencesHandler)
 
 	// --- groups --------------------------------------------------------
 	r.GET(api+"/groups", s.listGroupsHandler)
@@ -53,4 +64,10 @@ func (s *Server) Mount(r *router.Router[*core.RequestEvent]) {
 	// --- settings ------------------------------------------------------
 	r.GET(api+"/settings", s.listSettingsHandler)
 	r.POST(api+"/settings", s.saveSettingsHandler)
+
+	// --- mail ----------------------------------------------------------
+	// The admin application's mail page fetches this on mount, so the
+	// route has to exist: a 404 leaves `response.data` undefined and the
+	// page throws on it.
+	r.GET(api+"/mail/settings", s.showMailSettingsHandler)
 }
