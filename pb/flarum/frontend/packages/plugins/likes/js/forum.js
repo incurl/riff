@@ -5,6 +5,15 @@
 // needs no extra fetch to render. Toggling posts to the plugin's own
 // route, and the post is then re-read so the count and the flag come
 // from the server rather than from a local guess.
+//
+// NOTHING may touch `app.forum` or `app.session` in the extender: the
+// shell runs `app.load(payload)`, then `app.bootExtensions(...)`, and
+// only then `app.boot()` — and `app.boot()` is what assigns them.
+// `app.request` reads `this.session.csrfToken`, so a request fired
+// from an extender would throw on an undefined session.
+//
+// The extender only registers a hook, and the requests happen later, on
+// a click — long after the app is booted.
 import app from 'flarum/forum/app';
 import { extend as extendMethod } from 'flarum/common/extend';
 import classList from 'flarum/common/utils/classList';

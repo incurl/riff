@@ -44,6 +44,29 @@ avoid the collision. This was caught only by loading the built bundles
 in node against stubbed `flarum` internals and driving the hooks; a
 successful `webpack` compile says nothing about it.
 
+**An extender may not touch `app.forum`, `app.session` or
+`app.store`.** The boot shell runs `app.load(payload)`, then
+`app.bootExtensions(flarum.extensions)`, and only then `app.boot()` —
+and `app.boot()` is what assigns `app.forum` and `app.session`. So an
+extender that reads `app.forum.attribute('apiUrl')` throws "Cannot read
+properties of undefined (reading 'attribute')" at boot, and an extender
+that calls `app.request` throws on `this.session.csrfToken`, which
+`transformRequestOptions` reads for every request.
+
+The fix is to defer the work to `app.beforeMount(callback)`, which runs
+inside `app.boot()` after the forum and the session exist. The Likes
+bundle needs nothing at boot (it only registers a hook and requests on
+a click); the Tags bundle loads its list in `beforeMount`.
+
+**The store only accepts registered resource types.** `Store.pushObject`
+throws "Pushing object of type `tags` not allowed, as type not yet
+registered in the store" for any type that is not in the model
+registry, and the registry holds only the core types (forums, users,
+discussions, posts, groups, notifications, access-tokens). The Tags
+bundle therefore keeps its loaded tags in its own map instead of pushing
+them into the store. The Likes bundle does push — but only `posts`,
+which is registered.
+
 **The plugin packages are deliberately NOT npm workspaces.** Adding them
 to the workspace globs would rewrite `package-lock.json` and re-resolve
 the whole tree; `scripts/build_flarum_spa.sh` instead drives the webpack

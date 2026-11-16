@@ -107,6 +107,11 @@ Three front-end deviations are deliberate:
 - **No locale files.** The port has no extension-locale pipeline, and
   the translator renders a missing key as the key itself, so the
   extension strings are literal English rather than `trans()` calls.
+- **An extender cannot touch `app.forum` or `app.session`.** The boot
+  shell runs `app.load(payload)`, then `app.bootExtensions(...)`, and
+  only then `app.boot()` — and `app.boot()` is what assigns them. An
+  extender that reads `app.forum` throws at boot, so the bundles defer
+  every request to `app.beforeMount`.
 
 ## 7. The permission model is Flarum's, but the storage is not
 
