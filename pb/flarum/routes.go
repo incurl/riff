@@ -3,6 +3,7 @@ package flarum
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -118,8 +119,8 @@ func (m *Module) bundles() []frontend.Bundle {
 //
 // It is the frontend package's BootRenderer implementation: it builds
 // the payload the app boots with and lists the bundles to load.
-func (m *Module) RenderBootShell(admin bool) ([]byte, error) {
-	payload, err := m.bootPayload(admin)
+func (m *Module) RenderBootShell(e *core.RequestEvent, admin bool) ([]byte, error) {
+	payload, err := m.bootPayload(e)
 	if err != nil {
 		return nil, err
 	}
@@ -203,7 +204,19 @@ func (m *Module) styleURLs(admin bool) []string {
 // The resources are the forum document and, when the caller is signed
 // in, the caller. The frontend reads them out of the payload and pushes
 // them into its store.
-func (m *Module) bootPayload(_ bool) (frontend.BootPayload, error) {
+// bootPayload builds the payload the SPA boots with.
+//
+// The session part is what makes the login work: the frontend reads
+// `session.userId` and `session.csrfToken` (see the core's
+// Application.load) and looks the caller up in the store by that id.
+// Without it the SPA always boots anonymous, even with a valid session
+// cookie — the login would succeed and the page would still show as
+// signed out.
+//
+// The caller is resolved through the same session resolver the API
+// uses, so a bearer token, the PocketBase auth middleware and the
+// session cookie are all accepted.
+func (m *Module) bootPayload(e *core.RequestEvent) (frontend.BootPayload, error) {
 	payload := frontend.BootPayload{
 		Resources:      []any{},
 		Session:        frontend.BootSession{},
@@ -217,6 +230,28 @@ func (m *Module) bootPayload(_ bool) (frontend.BootPayload, error) {
 		return payload, err
 	}
 	payload.Resources = append(payload.Resources, document)
+
+	// The caller. A failure to resolve is not fatal: the page still
+	// boots, anonymously.
+	actor, resolveErr := m.sessions.Resolve(e)
+	if resolveErr != nil {
+		m.logger.Debug("forum: the boot payload could not resolve the caller",
+			slog.String("error", resolveErr.Error()))
+		return payload, nil
+	}
+	if actor.User == nil {
+		return payload, nil
+	}
+
+	payload.Session.UserID = actor.User.ID
+	payload.Session.CSRFToken = actor.CSRFToken
+
+	// The caller is also a resource in the payload, because the frontend
+	// reads the user from the store — `store.getById('users', userId)` —
+	// and a relationship's identifier alone carries no attributes. The
+	// resource goes in beside the forum document, exactly as upstream's
+	// API document carries the actor.
+	payload.Resources = append(payload.Resources, api.UserResource(actor.User))
 
 	return payload, nil
 }
@@ -325,10 +360,47 @@ func (m *Module) loginHandler(e *core.RequestEvent) error {
 }
 
 // logoutHandler serves POST {basePath}/logout.
+//
+// The frontend logs out with a FORM submission (see the core's
+// `Session.logout`, which builds a form and submits it), so the
+// response is a REDIRECT to the forum, not a JSON body: the browser
+// navigates to whatever the handler answers, and a JSON body would
+// leave the reader staring at `{"message":"Logged out."}`.
+//
+// A `return` query parameter names where to go afterwards. It is
+// restricted to a path inside the forum: an absolute URL would make
+// the logout an open redirect.
 func (m *Module) logoutHandler(e *core.RequestEvent) error {
 	m.sessions.ClearSessionCookie(e)
-	e.Response.Header().Set("Content-Type", api.ContentType)
-	return e.JSON(http.StatusOK, map[string]any{"message": "Logged out."})
+
+	return e.Redirect(http.StatusFound, m.logoutReturnURL(e))
+}
+
+// logoutReturnURL resolves the `return` query parameter.
+//
+// Only a path within the forum is honoured, so the logout cannot be
+// turned into an open redirect; anything else falls back to the forum
+// root.
+func (m *Module) logoutReturnURL(e *core.RequestEvent) string {
+	root := m.opts.BasePath + "/"
+
+	target := strings.TrimSpace(e.Request.URL.Query().Get("return"))
+	if target == "" {
+		return root
+	}
+
+	// A path, not a URL: an absolute one (or a scheme-relative one)
+	// would send the reader off the site.
+	if !strings.HasPrefix(target, "/") || strings.HasPrefix(target, "//") {
+		return root
+	}
+
+	// Outside the forum's own subtree is not ours to redirect to.
+	if !strings.HasPrefix(target, root) {
+		return root
+	}
+
+	return target
 }
 
 // unusedContext keeps the context import honest.

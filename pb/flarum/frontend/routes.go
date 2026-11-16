@@ -41,7 +41,11 @@ type Bundle struct {
 // the frontend package depending on it.
 type BootRenderer interface {
 	// RenderBootShell renders the shell for the forum app.
-	RenderBootShell(admin bool) ([]byte, error)
+	//
+	// The request event is passed because the boot payload carries the
+	// session: the caller is resolved from it, so the SPA can boot
+	// signed in rather than anonymous.
+	RenderBootShell(e *core.RequestEvent, admin bool) ([]byte, error)
 }
 
 // ServerOptions configures the frontend server.
@@ -192,7 +196,7 @@ func (s *Server) spaHandler(e *core.RequestEvent) error {
 
 	admin := strings.HasPrefix(e.Request.URL.Path, s.basePath+"/admin")
 
-	body, err := s.boot.RenderBootShell(admin)
+	body, err := s.boot.RenderBootShell(e, admin)
 	if err != nil {
 		return e.InternalServerError("The forum could not be loaded.", nil)
 	}

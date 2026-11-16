@@ -212,6 +212,16 @@ func (r *Resolver) SetSessionCookie(e *core.RequestEvent, token string, csrf str
 }
 
 // ClearSessionCookie removes the session cookies.
+//
+// The auth token itself is NOT revoked: PocketBase's auth tokens are
+// stateless JWTs (there is no server-side token store to delete a row
+// from), so a token that was captured stays valid until it expires —
+// the `users` collection's authToken duration, five days by default.
+//
+// That is PocketBase's model, not the forum's: the wiki's logout has the
+// same shape, and the host's revocable credential is the personal access
+// token, not the session cookie. A caller that needs an immediately
+// revocable credential should use a PAT.
 func (r *Resolver) ClearSessionCookie(e *core.RequestEvent) {
 	secure := r.secure || isSecureRequest(e.Request)
 	for _, name := range []string{AccessCookieName, CSRFCookieName} {

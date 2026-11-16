@@ -39,12 +39,22 @@ func timestamp(t time.Time) string {
 	return t.UTC().Format(time.RFC3339)
 }
 
-// userResource renders a user as a JSON:API resource.
+// UserResource renders a user as a JSON:API resource.
 //
 // The attribute names match the frontend's User model exactly: the
 // frontend reads `username`, `displayName`, `avatarUrl`, `groups` and the
 // `can*` flags by name.
-func userResource(user *domain.User, groups []string) Resource {
+//
+// It is exported so the module can put the caller into the boot
+// payload: the frontend reads the user from the store, and a
+// relationship's identifier alone carries no attributes.
+func UserResource(user *domain.User) Resource {
+	return userResourceWithGroups(user, user.Groups)
+}
+
+// userResourceWithGroups renders a user as a JSON:API resource with an
+// explicit group list.
+func userResourceWithGroups(user *domain.User, groups []string) Resource {
 	if groups == nil {
 		groups = user.Groups
 	}

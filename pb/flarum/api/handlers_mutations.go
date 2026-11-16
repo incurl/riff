@@ -393,7 +393,7 @@ func (s *Server) updateUserHandler(e *core.RequestEvent) error {
 	if err != nil {
 		return fail(e, errInternal("The profile could not be saved.", err))
 	}
-	return s.writeDocument(e, Document{Data: userResource(user, user.Groups)})
+	return s.writeDocument(e, Document{Data: userResourceWithGroups(user, user.Groups)})
 }
 
 // readNotificationHandler serves PATCH /api/notifications/{id}.

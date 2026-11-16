@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/pocketbase/pocketbase/core"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/incurl/riff/internal/testutil"
 	"github.com/incurl/riff/pb/flarum/repository"
+	_ "github.com/incurl/riff/pb/migrations"
 )
 
 // newTestApp boots a PocketBase app for a forum test.
@@ -39,6 +41,19 @@ func newTestApp(t *testing.T) core.App {
 	return app
 }
 
+// The forum's test app needs the HOST's migrations too, not just the
+// forum module's.
+//
+// The forum reads the shared `users` collection as its account source,
+// and the host's migrations are what add the `username` field to it
+// (pb/migrations/1700000001_extend_users.go). Without them the collection
+// has no `username`, and a login by username fails with "invalid filter
+// expression: unknown field \"username\"" — a failure that has nothing
+// to do with the code under test and that hid the real one.
+//
+// The host migrations are imported for their side effect: each file
+// calls migrations.Register in its init(), exactly as main.go does.
+
 // newTestRouter builds a router over an app.
 //
 // It mirrors what the module does at OnServe time, so a test drives the
@@ -56,7 +71,25 @@ func newTestRouter(t *testing.T, app core.App) *router.Router[*core.RequestEvent
 //
 // The record lands in the SHARED users collection, which is what the
 // forum reads as its account source.
+//
+// The username is unique (the host's migration adds the unique index on
+// `username`), so the email always carries a random suffix while the
+// username keeps the requested name — a test that logs in as "writer"
+// needs that name to be exactly "writer". A test that needs a second
+// account with the same name uses testUserNamed.
 func testUser(t *testing.T, app core.App, username string) *core.Record {
+	t.Helper()
+
+	return testUserNamed(t, app, username, username)
+}
+
+// testUserNamed creates a `users` record with a distinct username.
+//
+// It is for the tests that need several accounts: the username is
+// unique, so each one carries a distinct value. The display name is not
+// stored — the forum derives it from the username — so it is accepted
+// only to document the intent at the call site.
+func testUserNamed(t *testing.T, app core.App, username, _ string) *core.Record {
 	t.Helper()
 
 	users, err := app.FindCollectionByNameOrId("users")
@@ -65,7 +98,8 @@ func testUser(t *testing.T, app core.App, username string) *core.Record {
 	record := core.NewRecord(users)
 	// The email is unique, so a second user with the same name needs a
 	// distinct address.
-	record.Set("email", username+"-"+randomSuffix(t)+"@example.com")
+	suffix := randomSuffix(t)
+	record.Set("email", username+"-"+suffix+"@example.com")
 	record.Set("username", username)
 	record.Set("password", "password12345")
 	require.NoError(t, app.Save(record))
@@ -95,7 +129,10 @@ func seedDiscussion(t *testing.T, app core.App, title, content string) (string, 
 	t.Helper()
 
 	repo := repository.New(app, repository.NewRegistry(repository.DefaultPrefix))
-	user := testUser(t, app, "author")
+	// A distinct username per discussion: the username is unique, and a
+	// test may seed several discussions. The pattern is
+	// `^[a-z0-9_]{3,30}$`, so the suffix is lowercased.
+	user := testUserNamed(t, app, "author_"+strings.ToLower(randomSuffix(t)[:8]), "author")
 
 	discussionID, postID, err := repo.CreateDiscussionWithPost(user.Id, title, "slug-"+title, content, content)
 	require.NoError(t, err, "the discussion should be created")

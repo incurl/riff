@@ -176,9 +176,19 @@ type BootPayload struct {
 }
 
 // BootSession is the session part of the boot payload.
+//
+// The frontend reads it as `session.userId` and `session.csrfToken`
+// (see the core's Application.load), and looks the caller up with
+// `store.getById('users', String(userId))`.
 type BootSession struct {
-	// UserID is the caller's id, 0 for an anonymous caller.
-	UserID int `json:"userId"`
+	// UserID is the caller's id, empty for an anonymous caller.
+	//
+	// It is a STRING, not a number: the id is the PocketBase record id
+	// (a 15-character random string), and the frontend looks the record
+	// up by that exact id. A numeric field could not carry it, and a
+	// truncated one would silently fail to find the user — leaving the
+	// SPA booted as anonymous even though the cookie was valid.
+	UserID string `json:"userId"`
 	// CSRFToken is the caller's CSRF token.
 	CSRFToken string `json:"csrfToken"`
 }

@@ -215,7 +215,7 @@ func (s *Server) listUsersHandler(e *core.RequestEvent) error {
 
 	resources := make([]Resource, 0, len(users))
 	for _, user := range users {
-		resources = append(resources, userResource(user, user.Groups))
+		resources = append(resources, userResourceWithGroups(user, user.Groups))
 	}
 
 	return s.writeDocument(e, Document{Data: resources})
@@ -228,7 +228,7 @@ func (s *Server) showUserHandler(e *core.RequestEvent) error {
 	if err != nil {
 		return fail(e, notFoundError("That user does not exist."))
 	}
-	return s.writeDocument(e, Document{Data: userResource(user, user.Groups)})
+	return s.writeDocument(e, Document{Data: userResourceWithGroups(user, user.Groups)})
 }
 
 // listGroupsHandler serves GET /api/groups.
@@ -284,7 +284,7 @@ func (s *Server) showForumHandler(e *core.RequestEvent) error {
 
 	actorResource := any(nil)
 	if actor.User != nil {
-		actorResource = userResource(actor.User, actor.User.Groups)
+		actorResource = userResourceWithGroups(actor.User, actor.User.Groups)
 	}
 
 	attributes := map[string]any{
