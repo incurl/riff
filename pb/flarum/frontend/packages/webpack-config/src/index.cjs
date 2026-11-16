@@ -124,6 +124,23 @@ module.exports = function () {
       chunkLoadingGlobal: `webpackChunk_${extensionId(require(path.resolve(process.cwd(), '../composer.json')).name).replace(/[^\w$]/g, '_')}`,
       devtoolNamespace: require(path.resolve(process.cwd(), 'package.json')).name,
       clean: true,
+
+      // The async chunks go under `js/<namespace>/`, which is where the
+      // frontend loads them from.
+      //
+      // The runtime builds a chunk's url as
+      // `${jsChunksBaseUrl}/${namespace}/${urlPath}.js`, and
+      // `jsChunksBaseUrl` is the assets root plus `/js` (see
+      // ExportRegistry's versionedChunkUrl, which is upstream's code
+      // unchanged). So the file has to be at
+      // `assets/js/core/forum/components/PostStream.js` for core, and
+      // `assets/js/<extension>/...` for an extension.
+      //
+      // Upstream gets this layout from its PHP asset compiler, which
+      // moves the flat webpack output into `js/<extensionId>/` after the
+      // build. This port has no such compiler, so webpack writes the
+      // layout directly.
+      chunkFilename: path.join('js', extensionId(require(path.resolve(process.cwd(), '../composer.json')).name), '[name].js'),
     },
 
     externals: [
