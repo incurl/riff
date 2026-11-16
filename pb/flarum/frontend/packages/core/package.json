@@ -47,6 +47,7 @@
   "scripts": {
     "dev": "webpack --mode development --watch",
     "build": "webpack --mode production && npm run build-css && npm run build-locale && npm run copy-xslt-polyfill",
+    "test": "jest --config jest.config.local.cjs",
     "format": "prettier --write src",
     "format-check": "prettier --check src",
     "clean-typings": "npx rimraf dist-typings && mkdir dist-typings",

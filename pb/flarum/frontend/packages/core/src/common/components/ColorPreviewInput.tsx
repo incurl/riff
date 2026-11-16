@@ -35,6 +35,20 @@ export default class ColorPreviewInput<
       }
     };
 
+    // The preview is an <input type="color">, and that element's value
+    // sanitization algorithm is "value = a valid CSS color". An EMPTY
+    // value is not a valid CSS color, so assigning one throws:
+    //
+    //   The specified value "" does not conform to the required format.
+    //   The value must be a valid CSS color.
+    //
+    // An empty colour is a legitimate state here — it means "no colour
+    // set" — and the TEXT input keeps it. The preview swatch cannot, so
+    // it falls back to a neutral grey: the swatch shows what picking a
+    // colour would do, not the (absent) saved value.
+    const previewAttrs = { ...attrs };
+    previewAttrs.value = attrs.value && /^#[a-f0-9]{6}$/i.test(attrs.value) ? attrs.value : '#cccccc';
+
     return (
       <div className="ColorInput">
         <input className={classList('FormControl', className)} id={id} {...attrs} />
@@ -43,7 +57,7 @@ export default class ColorPreviewInput<
           <Icon name={'fas fa-exclamation-circle'} />
         </span>
 
-        <input className="ColorInput-preview" {...attrs} type="color" />
+        <input className="ColorInput-preview" {...previewAttrs} type="color" />
       </div>
     );
   }

@@ -5,6 +5,39 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## The colour preview swatch cannot carry an empty value (2026-11-16)
+
+The admin's Appearance page has four `color-preview` settings. The
+admin app reads a setting with `app.data.settings[key] ?? ''`, and
+riff's `forum_settings` collection holds only the settings that were
+explicitly saved — so an unset setting is an EMPTY STRING.
+
+`ColorPreviewInput` renders that value on TWO inputs: a text input
+(the field the user types in) and a preview swatch, which is an
+`<input type="color">`. That element's value sanitization algorithm is
+"value = a valid CSS color", and an empty string is not one, so
+assigning it throws:
+
+    The specified value "" does not conform to the required format.
+    The value must be a valid CSS color.
+
+Mithril assigns attributes as DOM properties (`vnode.dom[key] =
+value`), so the value reaches the browser's validator. The throw
+happens during a REDRAW — `saveSettings` calls `app.alerts.clear()`,
+which redraws — so the error surfaces on the save rather than on the
+control that caused it, and the stack points at the redraw.
+
+The swatch now falls back to a neutral grey when the value is empty.
+The TEXT input still carries the empty value: clearing the field is a
+valid "no colour" state and coercing it to a colour would silently
+change the setting.
+
+**jsdom cannot catch this.** It silently coerces an invalid colour
+input value to `#000000` instead of throwing the way a browser does,
+so a test that reads `input.value` back passes against the broken
+component. The test therefore spies on the value SETTER and asserts
+what was assigned, which is what the browser validates.
+
 ## The forum API's trailing-slash route was a subtree match (2026-11-16)
 
 The forum document was registered at `GET /forum/api/` **with** a
