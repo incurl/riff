@@ -15,6 +15,7 @@ import (
 	"github.com/incurl/riff/pb/flarum/domain"
 	"github.com/incurl/riff/pb/flarum/frontend"
 	"github.com/incurl/riff/pb/flarum/plugin"
+	"github.com/incurl/riff/pb/flarum/plugins/uploads"
 	"github.com/incurl/riff/pb/flarum/repository"
 	"github.com/incurl/riff/pb/flarum/session"
 )
@@ -41,6 +42,26 @@ func (m *Module) mount(r *router.Router[*core.RequestEvent]) {
 	// which this module does not own (and a reverse proxy in front of a
 	// sub-path install puts the static site there).
 	r.GET(m.opts.BasePath+"/avatars/{id}", m.avatarHandler)
+
+	// --- the uploaded files ---------------------------------------------
+	// The Uploads plugin's bytes are streamed through this module for
+	// the same reason the avatars are: PocketBase's native file URL
+	// lives at the root of the listener, which the forum does not own.
+	//
+	// The route lives in the module rather than in the plugin because
+	// the module owns the base path: a plugin route is mounted beneath
+	// the module root, but this one has to sit NEXT to the avatars
+	// rather than under `/api`.
+	//
+	// The handler is wrapped so the API server travels with the
+	// request: the plugin's handler resolves the caller through it,
+	// exactly as the core's own handlers do. A plugin route gets the
+	// wrapper for free (`mountPluginRoute`); this one is registered by
+	// the module, so it needs the wrapper here.
+	r.GET(m.opts.BasePath+"/files/{id}", func(e *core.RequestEvent) error {
+		api.WithServer(e, m.api)
+		return uploads.ServeFileHandler(e)
+	})
 
 	// --- the frontend --------------------------------------------------
 	frontendServer := frontend.NewServer(frontend.ServerOptions{

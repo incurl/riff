@@ -225,7 +225,7 @@ func TestForum_ExtensionManifestIsServed(t *testing.T) {
 		Extensions []map[string]any `json:"extensions"`
 	}
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &manifest))
-	require.Len(t, manifest.Extensions, 2, "the Tags and Likes plugins must be listed")
+	require.Len(t, manifest.Extensions, 3, "the Tags, Likes and Uploads plugins must be listed")
 
 	ids := []string{}
 	for _, extension := range manifest.Extensions {
@@ -233,6 +233,7 @@ func TestForum_ExtensionManifestIsServed(t *testing.T) {
 	}
 	require.Contains(t, ids, "riff/tags")
 	require.Contains(t, ids, "riff/likes")
+	require.Contains(t, ids, "riff/uploads")
 }
 
 // TestForum_PluginCollectionsAreCreated pins that the plugins' own
@@ -240,7 +241,7 @@ func TestForum_ExtensionManifestIsServed(t *testing.T) {
 func TestForum_PluginCollectionsAreCreated(t *testing.T) {
 	app, _ := newTestForum(t)
 
-	for _, name := range []string{"forum_tags", "forum_likes"} {
+	for _, name := range []string{"forum_tags", "forum_likes", "forum_files"} {
 		_, err := app.FindCollectionByNameOrId(name)
 		require.NoErrorf(t, err, "the %q collection should exist", name)
 	}

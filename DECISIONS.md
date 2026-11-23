@@ -5,6 +5,61 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## Post attachments are a PLUGIN, because upstream's core has none (2026-11-23)
+
+Upstream Flarum v2.0.0's **core has no attachment support at all**.
+The `post_attachments` table and the `Post->upload()` relationship were
+removed from the core, and the vendored frontend carries no attachment
+code either (`grep -rln 'attachment' framework/core/js/src/` returns
+nothing). Attachments live in the `fof/upload` extension — the
+de-facto standard for Flarum 2.x, ~239k installs, MIT licensed, and
+the successor to `flagrow/upload`.
+
+So the forum implements them as a **first-party plugin**
+(`pb/flarum/plugins/uploads/`), mirroring that extension's contract
+rather than inventing one:
+
+- the resource type is **`files`** (`FileResource::type()`);
+- a file carries `url`, `thumbnailUrl`, `size`, `humanSize`,
+  `imageWidth`, `imageHeight`, `hidden`, `baseName` and `type`;
+- a file hangs off a post through the post's **`files`**
+  relationship;
+- the collection is `forum_files`, with the uploader in `actor` and the
+  post in `post`.
+
+Three decisions are load-bearing:
+
+- **THE BYTES GO THROUGH POCKETBASE'S OWN FILE FIELD.** The `blob` is
+  a `FileField`, and the upload sets it to a `*filesystem.File` — the
+  form the framework expects. The field then stores only the file's
+  NAME and the framework writes the bytes under the record's own files
+  path. Writing the bytes by hand leaves the field empty and the
+  record pointing at a file that does not exist: the download answers
+  404 while the upload answered 201.
+
+- **THE BYTES ARE SERVED BY THE FORUM'S OWN ROUTE**, at
+  `{basePath}/files/{id}` — never at PocketBase's native
+  `/api/files/...` URL, which lives at the root of the listener the
+  forum does not own (the same reason the avatar route exists). The
+  route is registered by the MODULE, not the plugin, because the module
+  owns the base path; and it is wrapped with `api.WithServer`, because
+  a plugin route gets that wrapper for free and this one does not.
+
+- **THE MEDIA TYPE COMES FROM THE FILE'S NAME, NOT THE REQUEST.**
+  The browser's `Content-Type` is whatever the client felt like
+  sending. The type is derived from the extension, and only the
+  inline-safe types are served inline: everything else is served with
+  `Content-Disposition: attachment`, using the same allowlist the memo
+  attachment surface applies (`pb/api/file_serve.go`). SVG is
+  deliberately absent — an SVG is a document, and a document served from
+  the forum's origin can carry script.
+
+The visibility rule is the POST's own: a file is as readable as the
+post it is attached to, and an UNATTACHED file (uploaded before the
+composer knows the post's id) belongs to its uploader alone. A denial
+answers 404, not 403, so the response never confirms that a file
+exists.
+
 ## The forum's admin surface speaks upstream's command wire format, not JSON:API (2026-11-23)
 
 The forum's public API is JSON:API, but its ADMIN surface is not, and

@@ -1,0 +1,52 @@
+/* The attachments listed under a post's body. */
+
+.UploadsList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.UploadsList-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.15rem 0.5rem;
+  border: 1px solid var(--control-bg, rgba(0, 0, 0, 0.1));
+  border-radius: var(--border-radius, 4px);
+  font-size: 0.85em;
+  line-height: 1.4;
+}
+
+/* A file whose details have not loaded yet: the row keeps its place so
+   the post does not jump when the details arrive. */
+.UploadsList-item--loading {
+  min-width: 4rem;
+  opacity: 0.5;
+}
+
+.UploadsList-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: inherit;
+  text-decoration: none;
+}
+
+.UploadsList-link:hover {
+  text-decoration: underline;
+}
+
+.UploadsList-name {
+  max-width: 20rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.UploadsList-size {
+  color: var(--muted-color, #777);
+  font-size: 0.9em;
+}

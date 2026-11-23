@@ -22,8 +22,8 @@ func serverContext(ctx context.Context, server *Server) context.Context {
 	return context.WithValue(ctx, serverKey{}, server)
 }
 
-// serverFrom returns the server carried by a context, or nil.
-func serverFrom(ctx context.Context) *Server {
+// serverFromContext returns the server carried by a context, or nil.
+func serverFromContext(ctx context.Context) *Server {
 	server, ok := ctx.Value(serverKey{}).(*Server)
 	if !ok {
 		return nil
@@ -43,16 +43,52 @@ func WithServer(e *core.RequestEvent, server *Server) {
 	e.Request = e.Request.WithContext(serverContext(e.Request.Context(), server))
 }
 
+// ServerFrom returns the API server a request carries, or nil.
+//
+// It is exported for the plugins: a plugin that has to build a URL
+// under the forum's mount path needs the server's base path, and the
+// request's own path does not carry it (the route is registered at an
+// absolute path, and a reverse proxy may rewrite it).
+func ServerFrom(e *core.RequestEvent) *Server {
+	if e == nil {
+		return nil
+	}
+	return serverFromContext(e.Request.Context())
+}
+
 // CurrentActor resolves the request's caller.
 //
 // It returns an error when no server is attached to the request, which
 // means the route was mounted without the module's wrapper.
 func CurrentActor(e *core.RequestEvent) (session.Actor, error) {
-	server := serverFrom(e.Request.Context())
+	server := serverFromContext(e.Request.Context())
 	if server == nil {
 		return session.Actor{}, errUnauthenticated("The forum is not available.")
 	}
 	return server.actor(e), nil
+}
+
+// RequireAuth resolves the request's caller and insists the caller is
+// signed in.
+//
+// It is the plugin-facing form of the core's `requireAuth`. The
+// difference from [CurrentActor] matters: an ANONYMOUS caller is a
+// valid actor for a read, so `CurrentActor` succeeds for one, while a
+// write needs a signed-in caller and must answer 401 rather than let
+// the request reach the CSRF check.
+//
+// The order is the core's: the actor check first, then the CSRF
+// check, then the body. An unauthenticated caller therefore learns
+// nothing about the request's shape.
+func RequireAuth(e *core.RequestEvent) (session.Actor, error) {
+	actor, err := CurrentActor(e)
+	if err != nil {
+		return actor, err
+	}
+	if !actor.IsAuthenticated() {
+		return actor, errUnauthenticated("You must be signed in to do that.")
+	}
+	return actor, nil
 }
 
 // Can reports whether the caller may perform the action.
@@ -60,7 +96,7 @@ func CurrentActor(e *core.RequestEvent) (session.Actor, error) {
 // It is the plugin-facing form of the permission check: a plugin asks
 // the forum's permission service rather than implementing its own.
 func Can(e *core.RequestEvent, action, subjectType, subjectID string) (bool, error) {
-	server := serverFrom(e.Request.Context())
+	server := serverFromContext(e.Request.Context())
 	if server == nil {
 		return false, errUnauthenticated("The forum is not available.")
 	}
@@ -78,7 +114,7 @@ func VerifyCSRF(e *core.RequestEvent) error {
 //
 // It is the plugin-facing form of upstream's `PostPolicy::edit()`.
 func CanEditPost(e *core.RequestEvent, postID string) (bool, error) {
-	server := serverFrom(e.Request.Context())
+	server := serverFromContext(e.Request.Context())
 	if server == nil {
 		return false, errUnauthenticated("The forum is not available.")
 	}
@@ -93,7 +129,7 @@ func CanEditPost(e *core.RequestEvent, postID string) (bool, error) {
 // defines `edit` and `hide` but no `delete` — so this is the author
 // rule plus the moderator's authority.
 func CanDeletePost(e *core.RequestEvent, postID string) (bool, error) {
-	server := serverFrom(e.Request.Context())
+	server := serverFromContext(e.Request.Context())
 	if server == nil {
 		return false, errUnauthenticated("The forum is not available.")
 	}
@@ -107,7 +143,7 @@ func CanDeletePost(e *core.RequestEvent, postID string) (bool, error) {
 // It is the plugin-facing form of upstream's
 // `DiscussionPolicy::rename()`.
 func CanRenameDiscussion(e *core.RequestEvent, discussionID string) (bool, error) {
-	server := serverFrom(e.Request.Context())
+	server := serverFromContext(e.Request.Context())
 	if server == nil {
 		return false, errUnauthenticated("The forum is not available.")
 	}
@@ -121,7 +157,7 @@ func CanRenameDiscussion(e *core.RequestEvent, discussionID string) (bool, error
 // It is the plugin-facing form of the tags extension's
 // `Access\\DiscussionPolicy::tag()`.
 func CanTagDiscussion(e *core.RequestEvent, discussionID string) (bool, error) {
-	server := serverFrom(e.Request.Context())
+	server := serverFromContext(e.Request.Context())
 	if server == nil {
 		return false, errUnauthenticated("The forum is not available.")
 	}

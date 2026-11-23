@@ -263,10 +263,23 @@ The rules are therefore upstream's:
 Two differences from upstream remain, both deliberate:
 
 - the permission KEY names differ (`editPost` here, `discussion
-  .editPosts` upstream), because the forum's keys are flat;
+  .editPosts` upstream), because the forum's keys are flat. The ADMIN
+  surface translates between the two dialects
+  (`pb/flarum/domain/permission_keys.go`): the admin application is
+  upstream's own frontend and speaks upstream's names, while the
+  forum's handlers and seeded rows use the flat names. Without the
+  translation the permission grid writes keys no handler reads, so
+  granting a permission would change nothing;
 - the settings table starts EMPTY, where upstream writes its defaults
   at install. The readers fall back to upstream's installed values, so
   the policies behave the same.
+
+The admin surface's WIRE FORMAT is upstream's, and it is not JSON:API:
+`POST /settings` takes the settings map itself and answers an empty
+204, `DELETE /settings` takes `{keys, extensionId}`, `POST /permission`
+takes `{permission, groupIds}`, and `POST /groups/order` takes
+`{order}`. There is no `GET /settings`: upstream has none, and the
+settings reach the admin application through the boot payload.
 
 ## 12. The access-token list holds the current session only
 
@@ -308,7 +321,45 @@ request helper throws on a non-2xx, so a 200 with an HTML body is the
 worst outcome: the caller tries to parse a page of markup as data.
 Every forum API path the frontend calls has to exist.
 
-## 14. Notifications are limited
+## 14. Attachments are a first-party plugin, because upstream's core has none
+
+Upstream Flarum v2.0.0's **core has no attachment support at all**:
+the `post_attachments` table and the `Post->upload()` relationship
+were removed from the core, and the core frontend carries no attachment
+code either. Attachments live in the `fof/upload` extension — the
+de-facto standard for Flarum 2.x and the successor to
+`flagrow/upload`.
+
+The forum implements them as the first-party **Uploads plugin**
+(`pb/flarum/plugins/uploads/`), mirroring that extension's contract:
+the resource type is `files`, a file carries `url`, `size`,
+`humanSize`, `imageWidth`, `imageHeight`, `hidden`, `baseName` and
+`type`, and a file hangs off a post through the post's `files`
+relationship.
+
+Three differences from the extension, all deliberate:
+
+- **THE BYTES ARE SERVED BY THE FORUM'S OWN ROUTE** at
+  `{basePath}/files/{id}`. Upstream's `fof/upload` serves the bytes
+  from its own storage at a URL the extension owns; this port keeps
+  the bytes in PocketBase's filesystem (so the existing storage
+  bridge and its S3 support apply) and streams them through the forum,
+  because PocketBase's native file URL lives at the root of the
+  listener the forum does not own.
+- **THERE IS NO THUMBNAIL.** Upstream's extension generates a WebP
+  thumbnail at upload time and stores `thumbnail_url`; the port stores
+  the image's dimensions instead, which is what the frontend needs to
+  lay the image out before it loads. The memo attachment surface
+  already generates thumbnails on demand (`?thumbnail=true`), and the
+  forum's file route could adopt the same mechanism — but it does not
+  yet.
+- **THERE IS NO WATERMARKING, RESIZING OR ADAPTER LAYER.** Upstream's
+  extension has a storage-adapter abstraction (local, S3, Qiniu, …)
+  and an image pipeline. This port relies on PocketBase's own
+  filesystem and its storage bridge, and stores the file as it was
+  uploaded.
+
+## 15. Notifications are limited
 
 Upstream's notification system is a per-extension blueprint registry
 with a large catalogue of notification types. The forum's
@@ -316,7 +367,7 @@ with a large catalogue of notification types. The forum's
 first-party plugins produce (`postLiked`, `discussionTagged`,
 `mentionedInPost`, `commentOnPost`).
 
-## 15. The deferred items
+## 16. The deferred items
 
 The following are **roadmap**, not v1:
 
@@ -326,7 +377,7 @@ The following are **roadmap**, not v1:
 - the remaining upstream extensions (mentions, subscriptions, sticky,
   lock, suspend, and the rest).
 
-## 16. The frontend build needs npm's legacy peer resolver
+## 17. The frontend build needs npm's legacy peer resolver
 
 The upstream monorepo is a Yarn workspace with hoisting assumptions
 that npm's strict resolver rejects. The build therefore runs with
