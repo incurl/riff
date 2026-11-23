@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/incurl/riff/pb/flarum/api"
+	"github.com/incurl/riff/pb/flarum/repository"
 )
 
 // seedTag creates a tag through the plugin's own collection.
@@ -371,7 +372,9 @@ func TestTags_AnotherMemberCannotTagADiscussion(t *testing.T) {
 		sessionCookies(intruderToken, "csrf-token"))
 	require.Equal(t, http.StatusForbidden, recorder.Code, recorder.Body.String())
 
-	// The author may attach one.
+	// The author may attach one — once the setting permits it.
+	setForumSetting(t, app, "allow_tag_change", "-1")
+
 	recorder = do(t, handler, http.MethodPost, "/forum/api/discussions/"+discussionID+"/tags",
 		body, sessionCookies(authorToken, "csrf-token"))
 	require.Equal(t, http.StatusCreated, recorder.Code, recorder.Body.String())
@@ -381,4 +384,66 @@ func TestTags_AnotherMemberCannotTagADiscussion(t *testing.T) {
 		"/forum/api/discussions/"+discussionID+"/tags/"+tag.Id, "",
 		sessionCookies(authorToken, "csrf-token"))
 	require.Equal(t, http.StatusNoContent, recorder.Code, recorder.Body.String())
+}
+
+// TestTags_TheAuthorMayNotTagUntilTheSettingPermits pins upstream's
+// default for the tag policy.
+//
+// Upstream's tags extension has the setting OFF until an
+// administrator picks an option: "Until an option is saved, authors
+// can't change their tags" (the upstream Permissions page). The
+// policy permits three shapes — "-1" (always), "reply" (while the
+// discussion has one participant) and a number of minutes — and nothing
+// else.
+func TestTags_TheAuthorMayNotTagUntilTheSettingPermits(t *testing.T) {
+	app, handler := newTestForum(t)
+	tag := seedTag(t, app, "Announcements", "announcements")
+
+	author := testUser(t, app, "tag_policy_author")
+	authorToken, err := author.NewAuthToken()
+	require.NoError(t, err)
+
+	recorder := do(t, handler, http.MethodPost, "/forum/api/discussions",
+		`{"data":{"type":"discussions","attributes":{"title":"Mine","content":"body"}}}`,
+		sessionCookies(authorToken, "csrf-token"))
+	require.Equal(t, http.StatusCreated, recorder.Code, recorder.Body.String())
+
+	var created struct {
+		Data struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &created))
+	discussionID := created.Data.ID
+
+	body := `{"data":{"attributes":{"tag":"announcements"}}}`
+
+	// The default is "Never", so even the AUTHOR may not tag.
+	recorder = do(t, handler, http.MethodPost, "/forum/api/discussions/"+discussionID+"/tags",
+		body, sessionCookies(authorToken, "csrf-token"))
+	require.Equal(t, http.StatusForbidden, recorder.Code, recorder.Body.String())
+
+	// A number of minutes permits it while the discussion is that
+	// young.
+	setForumSetting(t, app, "allow_tag_change", "10")
+
+	recorder = do(t, handler, http.MethodPost, "/forum/api/discussions/"+discussionID+"/tags",
+		body, sessionCookies(authorToken, "csrf-token"))
+	require.Equal(t, http.StatusCreated, recorder.Code, recorder.Body.String())
+
+	// "reply" permits it while nobody has answered.
+	setForumSetting(t, app, "allow_tag_change", "reply")
+
+	recorder = do(t, handler, http.MethodDelete,
+		"/forum/api/discussions/"+discussionID+"/tags/"+tag.Id, "",
+		sessionCookies(authorToken, "csrf-token"))
+	require.Equal(t, http.StatusNoContent, recorder.Code, recorder.Body.String())
+}
+
+// setForumSetting writes a forum setting through the repository.
+func setForumSetting(t *testing.T, app core.App, key, value string) {
+	t.Helper()
+
+	repo := repository.New(app, repository.NewRegistry(repository.DefaultPrefix))
+	require.NoError(t, repo.SaveSetting(key, value, ""))
 }

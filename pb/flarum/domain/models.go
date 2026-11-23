@@ -281,11 +281,25 @@ const (
 	GroupMemberID = "forumgroupmembr"
 	// GroupAdminID is the group of forum administrators.
 	GroupAdminID = "forumgroupadmin"
+	// GroupModeratorID is the group of forum moderators.
+	//
+	// Upstream Flarum has a moderator group, and the default
+	// permissions put the MODERATION powers in it: renaming a
+	// discussion, deleting one, editing and hiding any post. The
+	// member group holds only the powers every member has (starting a
+	// discussion, replying, searching users).
+	//
+	// The distinction is what keeps a group-scoped permission from
+	// meaning "everybody": a row for the member group is inherited by
+	// every signed-in caller, so a moderation row there would grant
+	// the moderation power to all of them.
+	GroupModeratorID = "forumgroupmoder"
 )
 
 // GroupNames are the display names of the built-in groups.
 var GroupNames = map[string][2]string{
-	GroupGuestID:  {"Guest", "Guests"},
-	GroupMemberID: {"Member", "Members"},
-	GroupAdminID:  {"Admin", "Admins"},
+	GroupGuestID:     {"Guest", "Guests"},
+	GroupMemberID:    {"Member", "Members"},
+	GroupAdminID:     {"Admin", "Admins"},
+	GroupModeratorID: {"Moderator", "Moderators"},
 }

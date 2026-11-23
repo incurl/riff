@@ -157,6 +157,10 @@ func TestForum_EditRerendersTheBody(t *testing.T) {
 	require.Len(t, document.Included, 1)
 	postID := document.Included[0].ID
 
+	// The author may edit their own post only while the
+	// `allow_post_editing` setting permits it — upstream's default is
+	// "reply", which holds here because the post is the last one in
+	// the discussion.
 	edited := do(t, handler, http.MethodPatch, "/forum/api/posts/"+postID,
 		`{"data":{"type":"posts","id":"`+postID+`","attributes":{"content":"## Retitled\n\na **bold** edit"}}}`,
 		cookies)

@@ -40,6 +40,7 @@ var builtInGroups = []struct {
 }{
 	{domain.GroupGuestID, -2},
 	{domain.GroupMemberID, -1},
+	{domain.GroupModeratorID, -1},
 	{domain.GroupAdminID, 0},
 }
 
@@ -71,10 +72,30 @@ func seedGroups(app core.App, registry *repository.Registry) error {
 	return nil
 }
 
-// defaultPermissions are the permissions a member holds.
+// defaultPermissions are the permissions each built-in group holds.
 //
-// The guest group gets only the read-only capabilities: a forum is
-// readable by anyone, but an anonymous caller may not post.
+// The rows mirror upstream Flarum's default group permissions
+// (framework/core/migrations/2018_07_21_000100_seed_default_group_permissions.php):
+//
+//   - the guest group gets only the read-only capability — a forum is
+//     readable by anyone, but an anonymous caller may not post;
+//   - the member group gets the powers every member has: starting a
+//     discussion, replying, searching users, and liking;
+//   - the MODERATOR group gets the moderation powers: renaming,
+//     deleting and hiding a discussion, and editing or hiding any
+//     post.
+//
+// The moderation powers belong to the moderator group and NOT to the
+// member group, and that is load-bearing: a permission row for the
+// member group is inherited by EVERY signed-in caller, so a row there
+// would grant the moderation power to all of them. Upstream's
+// policies make the same distinction: the author of a post may edit
+// their own, and anyone else needs the moderator's permission.
+//
+// `editPost` and `deletePost` are deliberately NOT seeded for the
+// member group: upstream grants them through the post's POLICY (the
+// author) and through `discussion.editPosts` (the moderators), and a
+// member-group row would mean "every member may edit every post".
 var defaultPermissions = map[string][]string{
 	domain.GroupGuestID: {
 		domain.PermissionViewForum,
@@ -83,23 +104,55 @@ var defaultPermissions = map[string][]string{
 		domain.PermissionViewForum,
 		domain.PermissionStartDiscussion,
 		domain.PermissionReply,
+		domain.PermissionLikePost,
+		domain.PermissionSearchUsers,
+	},
+	domain.GroupModeratorID: {
+		domain.PermissionViewForum,
+		domain.PermissionStartDiscussion,
+		domain.PermissionReply,
+		domain.PermissionLikePost,
+		domain.PermissionSearchUsers,
+		domain.PermissionEditDiscussion,
+		domain.PermissionDeleteDiscussion,
+		domain.PermissionHideDiscussion,
 		domain.PermissionEditPost,
 		domain.PermissionDeletePost,
 		domain.PermissionHidePost,
-		domain.PermissionLikePost,
-		domain.PermissionSearchUsers,
 	},
 }
 
 // seedPermissions writes the default permission rows.
 //
 // The rows are written per group id, and the implicit groups (guest,
-// member) use their well-known ids rather than a collection row: the
-// permission service resolves them by name.
+// member, moderator) use their well-known ids rather than a collection
+// row: the permission service resolves them by name.
 func seedPermissions(app core.App, registry *repository.Registry) error {
 	collection, err := app.FindCollectionByNameOrId(registry.Physical("permissions"))
 	if err != nil {
 		return err
+	}
+
+	// The moderation powers used to be seeded for the MEMBER group,
+	// which meant every signed-in caller inherited them: any member
+	// could edit or delete any post. Upstream puts them in the
+	// moderator group, and the member-group rows are removed so an
+	// instance seeded by an older build does not keep them.
+	//
+	// Only the rows this seed itself wrote are removed — an operator's
+	// own row for a built-in group is left alone, because there is no
+	// way to tell it apart from one of ours by name alone.
+	for _, permission := range memberGroupModerationPermissions {
+		existing, err := app.FindFirstRecordByFilter(collection,
+			"group = {:group} && permission = {:permission} && scope = ''",
+			map[string]any{"group": domain.GroupMemberID, "permission": permission})
+		if err != nil || existing == nil {
+			continue
+		}
+
+		if err := app.Delete(existing); err != nil {
+			return errors.Wrapf(err, "forum: could not remove the %q permission from the member group", permission)
+		}
 	}
 
 	for groupID, permissions := range defaultPermissions {
@@ -122,4 +175,16 @@ func seedPermissions(app core.App, registry *repository.Registry) error {
 		}
 	}
 	return nil
+}
+
+// memberGroupModerationPermissions are the moderation powers that must
+// NOT be in the member group.
+//
+// A member-group row is inherited by every signed-in caller, so a row
+// here grants the moderation power to all of them. Upstream's default
+// group permissions keep these in the moderator group.
+var memberGroupModerationPermissions = []string{
+	domain.PermissionEditPost,
+	domain.PermissionDeletePost,
+	domain.PermissionHidePost,
 }

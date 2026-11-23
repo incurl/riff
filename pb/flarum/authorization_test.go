@@ -9,6 +9,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/incurl/riff/pb/flarum/domain"
+	"github.com/incurl/riff/pb/flarum/repository"
 	"github.com/incurl/riff/pb/flarum/session"
 )
 
@@ -61,7 +63,12 @@ func TestForum_AnotherMemberCannotEditAPost(t *testing.T) {
 		sessionCookies(intruderToken, "csrf-token"))
 	require.Equal(t, http.StatusForbidden, recorder.Code, recorder.Body.String())
 
-	// The author may.
+	// The author may, while the `allow_post_editing` setting permits
+	// it. Upstream's `PostPolicy::edit()` gates the author's edit on
+	// that setting, and its default is "reply" — while the post is the
+	// last one, so the author may fix a typo until somebody answers.
+	setForumSetting(t, app, "allow_post_editing", "-1")
+
 	recorder = do(t, handler, http.MethodPatch, "/forum/api/posts/"+postID,
 		`{"data":{"type":"posts","attributes":{"content":"edited by the author"}}}`,
 		sessionCookies(authorToken, "csrf-token"))
@@ -127,8 +134,50 @@ func TestForum_AnotherMemberCannotRenameADiscussion(t *testing.T) {
 		sessionCookies(intruderToken, "csrf-token"))
 	require.Equal(t, http.StatusForbidden, recorder.Code, recorder.Body.String())
 
+	// The author may, while the `allow_renaming` setting permits it.
+	// Upstream's `DiscussionPolicy::rename()` gates the author's rename
+	// on that setting.
+	setForumSetting(t, app, "allow_renaming", "-1")
+
 	recorder = do(t, handler, http.MethodPatch, "/forum/api/discussions/"+discussionID,
 		`{"data":{"type":"discussions","attributes":{"title":"Renamed by the author"}}}`,
+		sessionCookies(authorToken, "csrf-token"))
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+}
+
+// TestForum_TheAuthorMayNotRenameAfterTheWindow pins upstream's
+// time window.
+//
+// Upstream's `DiscussionPolicy::rename()` lets the author rename their
+// own discussion only while the `allow_renaming` setting permits it,
+// and the setting has a time-window shape: a number of minutes after
+// the discussion was created.
+func TestForum_TheAuthorMayNotRenameAfterTheWindow(t *testing.T) {
+	app, handler := newTestForum(t)
+
+	author := testUser(t, app, "window_author")
+	authorToken, err := author.NewAuthToken()
+	require.NoError(t, err)
+
+	recorder := do(t, handler, http.MethodPost, "/forum/api/discussions",
+		`{"data":{"type":"discussions","attributes":{"title":"Original","content":"body"}}}`,
+		sessionCookies(authorToken, "csrf-token"))
+	require.Equal(t, http.StatusCreated, recorder.Code, recorder.Body.String())
+	discussionID := resourceIDOf(t, recorder)
+
+	// A window of zero minutes has already elapsed.
+	setForumSetting(t, app, "allow_renaming", "0")
+
+	recorder = do(t, handler, http.MethodPatch, "/forum/api/discussions/"+discussionID,
+		`{"data":{"type":"discussions","attributes":{"title":"Renamed"}}}`,
+		sessionCookies(authorToken, "csrf-token"))
+	require.Equal(t, http.StatusForbidden, recorder.Code, recorder.Body.String())
+
+	// An open window permits it.
+	setForumSetting(t, app, "allow_renaming", "-1")
+
+	recorder = do(t, handler, http.MethodPatch, "/forum/api/discussions/"+discussionID,
+		`{"data":{"type":"discussions","attributes":{"title":"Renamed"}}}`,
 		sessionCookies(authorToken, "csrf-token"))
 	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
 }
@@ -190,4 +239,85 @@ func timeSince(start time.Time) time.Duration { return time.Since(start) }
 // sessionLoginRequest builds the login request the resolver takes.
 func sessionLoginRequest(identification, password string) session.LoginRequest {
 	return session.LoginRequest{Identification: identification, Password: password}
+}
+
+// TestForum_AModeratorMayChangeAnotherMembersPost pins upstream's
+// moderator model.
+//
+// Upstream's default group permissions put the moderation powers —
+// renaming a discussion, deleting one, editing or hiding any post —
+// in the MODERATOR group, and the member group holds only the powers
+// every member has. A row for the member group is inherited by every
+// signed-in caller, so a moderation row there would grant the power to
+// all of them.
+//
+// This is the other half of the author rule: the author may change
+// their own, and a moderator may change anyone's.
+func TestForum_AModeratorMayChangeAnotherMembersPost(t *testing.T) {
+	app, handler := newTestForum(t)
+
+	author := testUser(t, app, "mod_author")
+	moderator := testUser(t, app, "mod_moderator")
+
+	authorToken, err := author.NewAuthToken()
+	require.NoError(t, err)
+	moderatorToken, err := moderator.NewAuthToken()
+	require.NoError(t, err)
+
+	recorder := do(t, handler, http.MethodPost, "/forum/api/discussions",
+		`{"data":{"type":"discussions","attributes":{"title":"Moderated","content":"body"}}}`,
+		sessionCookies(authorToken, "csrf-token"))
+	require.Equal(t, http.StatusCreated, recorder.Code, recorder.Body.String())
+	discussionID := resourceIDOf(t, recorder)
+
+	recorder = do(t, handler, http.MethodPost, "/forum/api/posts",
+		`{"data":{"type":"posts","attributes":{"content":"mine","discussion":"`+discussionID+`"}}}`,
+		sessionCookies(authorToken, "csrf-token"))
+	require.Equal(t, http.StatusCreated, recorder.Code, recorder.Body.String())
+	postID := resourceIDOf(t, recorder)
+
+	// The moderator is in the moderator group.
+	repo := repository.New(app, repository.NewRegistry(repository.DefaultPrefix))
+	require.NoError(t, repo.AddUserToGroup(moderator.Id, domain.GroupModeratorID))
+
+	// The moderator may edit the author's post.
+	recorder = do(t, handler, http.MethodPatch, "/forum/api/posts/"+postID,
+		`{"data":{"type":"posts","attributes":{"content":"moderated"}}}`,
+		sessionCookies(moderatorToken, "csrf-token"))
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	// And the author's own post is untouched by the member rule: a
+	// plain member still may not.
+	intruder := testUser(t, app, "mod_intruder")
+	intruderToken, err := intruder.NewAuthToken()
+	require.NoError(t, err)
+
+	recorder = do(t, handler, http.MethodPatch, "/forum/api/posts/"+postID,
+		`{"data":{"type":"posts","attributes":{"content":"tampered"}}}`,
+		sessionCookies(intruderToken, "csrf-token"))
+	require.Equal(t, http.StatusForbidden, recorder.Code, recorder.Body.String())
+}
+
+// TestForum_TheMemberGroupHoldsNoModerationPowers pins the seed.
+//
+// Upstream's default group permissions give the member group only
+// `startDiscussion`, `discussion.reply` and `searchUsers`. The
+// moderation powers live in the moderator group.
+//
+// A row for the member group is inherited by EVERY signed-in caller, so
+// a moderation row there is the vulnerability this test guards.
+func TestForum_TheMemberGroupHoldsNoModerationPowers(t *testing.T) {
+	app, _ := newTestForum(t)
+
+	repo := repository.New(app, repository.NewRegistry(repository.DefaultPrefix))
+
+	for _, permission := range []string{
+		domain.PermissionEditPost,
+		domain.PermissionDeletePost,
+		domain.PermissionHidePost,
+	} {
+		rows, err := repo.PermissionRowsFor([]string{domain.GroupMemberID}, permission)
+		require.NoError(t, err)
+		require.Empty(t, rows, "the member group must not hold %q", permission)
+	}
 }

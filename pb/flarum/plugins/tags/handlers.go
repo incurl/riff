@@ -58,9 +58,14 @@ func addTagHandler(e *core.RequestEvent) error {
 	}
 
 	// Attaching a tag CHANGES the discussion, so the caller must be
-	// allowed to edit it. Without this check every signed-in member
-	// could tag any discussion in the forum.
-	allowed, err := api.CanEditDiscussion(e, discussionID)
+	// allowed to change its tags. Upstream's authority for this is
+	// the tags extension's `Access\\DiscussionPolicy::tag()`: the
+	// AUTHOR of the discussion, and only while the
+	// `allow_tag_change` setting permits it.
+	//
+	// Without this check every signed-in member could tag any
+	// discussion in the forum.
+	allowed, err := api.CanTagDiscussion(e, discussionID)
 	if err != nil {
 		return api.WriteError(e, http.StatusInternalServerError, api.CodeInternal, "The tag could not be attached.")
 	}
@@ -119,8 +124,8 @@ func removeTagHandler(e *core.RequestEvent) error {
 	tagID := e.Request.PathValue("tagId")
 
 	// Detaching a tag changes the discussion too, so it carries the
-	// same edit permission check as attaching one.
-	allowed, err := api.CanEditDiscussion(e, discussionID)
+	// same policy check as attaching one.
+	allowed, err := api.CanTagDiscussion(e, discussionID)
 	if err != nil {
 		return api.WriteError(e, http.StatusInternalServerError, api.CodeInternal, "The tag could not be removed.")
 	}

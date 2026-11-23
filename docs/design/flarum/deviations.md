@@ -239,21 +239,34 @@ screen's backend.
 
 ## 11. The permission rows cannot express ownership
 
-Upstream Flarum's policies take the actor AND the subject, so
-"startDiscussion" is checked against a discussion the actor owns, and
-"editPost" against a post the actor wrote. Upstream's permission rows
-are scoped by group, and the POLICY is what ties a row to the subject.
+Upstream Flarum's policies take the actor AND the subject, and the
+POLICY is what ties a group row to a subject: `Gate::allows()` asks
+the policies first and falls back to `isAdmin() || hasPermission()`
+only when no policy covered the question.
 
-This port keeps the rows and the shape, but the policy layer is
-thinner: a handler that changes something the caller owns has to ask
-the ownership question itself, because the permission service only
-answers "may this GROUP do this", and the implicit member group holds
-the `editPost`/`deletePost` rows that every signed-in caller inherits.
+This port keeps the rows and the policy shape, and the policies are
+ported one for one — the core's `DiscussionPolicy::rename()` and
+`PostPolicy::edit()`, and the tags extension's
+`DiscussionPolicy::tag()`, each with its `allow_*` setting. What the
+permission service alone cannot express is the OWNERSHIP half ("your
+own post"), so the handlers ask the policy question themselves.
 
-So the rule is: the author may always change their own post or
-discussion, and anyone else needs a moderator grant or the
-administrator's authority. The moderators are the accounts in an
-explicit group that holds the permission row.
+The rules are therefore upstream's:
+
+| action | the author | anyone else |
+| --- | --- | --- |
+| edit a post | while `allow_post_editing` permits | `discussion.editPosts` (the moderator group) |
+| rename a discussion | while `allow_renaming` permits | `discussion.rename` (the moderator group) |
+| change a discussion's tags | while `allow_tag_change` permits | nobody — the `tag` ability is a policy, not a group permission |
+| delete a post or discussion | always | the moderator group |
+
+Two differences from upstream remain, both deliberate:
+
+- the permission KEY names differ (`editPost` here, `discussion
+  .editPosts` upstream), because the forum's keys are flat;
+- the settings table starts EMPTY, where upstream writes its defaults
+  at install. The readers fall back to upstream's installed values, so
+  the policies behave the same.
 
 ## 12. The access-token list holds the current session only
 

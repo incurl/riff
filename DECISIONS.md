@@ -5,6 +5,54 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## The forum's permission model follows upstream's, policy by policy (2026-11-16)
+
+The forum's authorization is a port of upstream Flarum's, and the port
+is only faithful if it copies the POLICY layer and not just the
+permission rows. Upstream's authority is three files:
+
+- `User/Access/Gate.php` — the group permission is a FALLBACK: a
+  policy that returns a result decides, and only when no policy
+  covered the question does `isAdmin() || hasPermission()` answer.
+- `Discussion/Access/DiscussionPolicy.php` and
+  `Post/Access/PostPolicy.php` — the policies. `can()` is the
+  group-scoped permission; `rename()`, `hide()` and `edit()` are the
+  OWNERSHIP rules, and they are consulted FIRST.
+- the tags extension's `Access/DiscussionPolicy.php` — the `tag`
+  ability, which is a policy and not a group permission at all.
+
+So upstream's answer to "may this actor edit this post" is: the author,
+while the `allow_post_editing` setting permits it, or a holder of
+`discussion.editPosts` (the MODERATOR group). The group permission
+alone is not the answer, and the `allow_*` settings are not
+decoration — they are the author's half of the rule.
+
+Three consequences the port now follows:
+
+- **THE MODERATION POWERS LIVE IN THE MODERATOR GROUP.** Upstream's
+  default group permissions give the member group only
+  `startDiscussion`, `discussion.reply` and `searchUsers`, and put
+  `discussion.editPosts`, `discussion.hidePosts`, `discussion.rename`
+  and `discussion.hide` in the moderator group. The forum now has a
+  moderator group and seeds it that way. The member group must NOT
+  hold them: a member-group row is inherited by every signed-in
+  caller, so a moderation row there grants the moderation power to all
+  of them.
+
+- **THE `allow_*` SETTINGS GATE THE AUTHOR.** `allow_renaming`,
+  `allow_post_editing`, `allow_hide_own_posts` and `allow_tag_change`
+  have upstream's shapes — "-1" (always), "reply" (until somebody
+  answers) and a number of minutes — and an unset setting permits
+  nothing. The forum's settings table starts EMPTY, so the readers
+  fall back to upstream's installed defaults ("10", "reply", "reply",
+  "0"); without the fallback an absent setting would deny the author
+  outright, where upstream allows both.
+
+- **THE UI FLAGS AND THE ENDPOINTS AGREE.** Upstream computes
+  `canRename`, `canDelete` and `canTag` with the same `can()` call the
+  write path uses, so a control is never offered for an action the
+  API refuses. The forum's flags now come from the same policies.
+
 ## The forum's permissions are group-scoped, so ownership is checked separately (2026-11-16)
 
 The forum's permission rows are GROUP-scoped: a row says "the member

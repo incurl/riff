@@ -92,12 +92,33 @@ func (s *Server) discussionResource(e *core.RequestEvent, discussion *domain.Dis
 		canReply = false
 	}
 
+	// The UI flags have to come from the SAME check the write path
+	// makes, or the two disagree: upstream computes `canRename` and
+	// `canDelete` with the same `can()` call the write path uses.
+	//
+	// The owner-aware check is the one that matters, because the
+	// group permission alone says "no" for the author (the author
+	// holds no `editDiscussion` row) and "yes" for a moderator.
+	// The UI flags have to come from the SAME check the write path
+	// makes, or the two disagree: upstream computes `canRename` and
+	// `canDelete` with the same `can()` call the write path uses.
+	canRename, err := s.canRenameDiscussion(e, discussion.ID)
+	if err != nil {
+		canRename = false
+	}
+
+	canTag, err := s.canTagDiscussion(e, discussion.ID)
+	if err != nil {
+		canTag = false
+	}
+
 	return discussionResource(
 		discussion,
 		canReply,
-		s.can(e, domain.PermissionEditDiscussion, TypeDiscussion, discussion.ID),
+		canRename,
 		s.can(e, domain.PermissionHideDiscussion, TypeDiscussion, discussion.ID),
-		s.can(e, domain.PermissionDeleteDiscussion, TypeDiscussion, discussion.ID),
+		s.canDeleteDiscussion(e, discussion),
+		canTag,
 		tagIDs,
 	), nil
 }
@@ -182,10 +203,20 @@ func (s *Server) postResource(e *core.RequestEvent, post *domain.Post) (Resource
 		extra[source.Name] = value
 	}
 
+	// The same owner-aware check the write path uses, so the flags and
+	// the endpoint always agree.
+	canEdit, canDelete := false, false
+	if allowed, err := s.canEditPostAsAuthor(e, post.ID); err == nil {
+		canEdit = allowed
+	}
+	if allowed, err := s.canDeletePost(e, post.ID); err == nil {
+		canDelete = allowed
+	}
+
 	resource := postResource(
 		post,
-		s.can(e, domain.PermissionEditPost, TypePost, post.ID),
-		s.can(e, domain.PermissionDeletePost, TypePost, post.ID),
+		canEdit,
+		canDelete,
 		s.can(e, domain.PermissionHidePost, TypePost, post.ID),
 		extra,
 	)

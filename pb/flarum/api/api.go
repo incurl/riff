@@ -2,13 +2,16 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/pkg/errors"
 	"github.com/pocketbase/pocketbase/core"
+	"github.com/pocketbase/pocketbase/tools/types"
 
 	flarumcore "github.com/incurl/riff/pb/flarum/core"
 	"github.com/incurl/riff/pb/flarum/domain"
@@ -208,41 +211,18 @@ func (s *Server) can(e *core.RequestEvent, action, subjectType, subjectID string
 	return allowed
 }
 
-// canEditPost reports whether the caller may change a post.
-//
-// The AUTHOR may always edit their own post.
-//
-// For anyone else the answer is the permission service's, and the
-// permission rows are GROUP-scoped: they can say "the member group may
-// edit posts", but they cannot say "the member group may edit THEIR
-// OWN posts". A group-scoped grant is therefore a MODERATOR grant —
-// it has to come from a group that is not the implicit member group,
-// because the implicit member group holds the row for every signed-in
-// caller.
-//
-// Without this distinction every member could rewrite every post in
-// the forum: the permission check alone answered "yes" for any member
-// and any post.
-func (s *Server) canEditPost(e *core.RequestEvent, post *domain.Post) (bool, error) {
-	actor := s.actor(e)
-	if !actor.IsAuthenticated() {
-		return false, nil
-	}
-
-	if post.UserID == actor.User.ID {
-		return true, nil
-	}
-
-	return s.canAsModerator(e, domain.PermissionEditPost, TypePost, post.ID)
-}
-
 // canDeletePost reports whether the caller may delete a post.
 //
 // The same author rule as [Server.canEditPost].
-func (s *Server) canDeletePost(e *core.RequestEvent, post *domain.Post) (bool, error) {
+func (s *Server) canDeletePost(e *core.RequestEvent, postID string) (bool, error) {
 	actor := s.actor(e)
 	if !actor.IsAuthenticated() {
 		return false, nil
+	}
+
+	post, err := s.repo.FindPost(postID)
+	if err != nil {
+		return false, err
 	}
 
 	if post.UserID == actor.User.ID {
@@ -252,11 +232,12 @@ func (s *Server) canDeletePost(e *core.RequestEvent, post *domain.Post) (bool, e
 	return s.canAsModerator(e, domain.PermissionDeletePost, TypePost, post.ID)
 }
 
-// canEditDiscussion reports whether the caller may change a discussion:
-// the account that started it, or a caller with a moderator grant.
+// canDeleteDiscussion reports whether the caller may delete a
+// discussion: the account that started it, or a caller with a moderator
+// grant.
 //
-// The author rule matches [Server.canEditPost].
-func (s *Server) canEditDiscussion(e *core.RequestEvent, discussion *domain.Discussion) bool {
+// The author rule matches [Server.canEditDiscussion].
+func (s *Server) canDeleteDiscussion(e *core.RequestEvent, discussion *domain.Discussion) bool {
 	actor := s.actor(e)
 	if !actor.IsAuthenticated() {
 		return false
@@ -266,10 +247,10 @@ func (s *Server) canEditDiscussion(e *core.RequestEvent, discussion *domain.Disc
 		return true
 	}
 
-	allowed, err := s.canAsModerator(e, domain.PermissionEditDiscussion, TypeDiscussion, discussion.ID)
+	allowed, err := s.canAsModerator(e, domain.PermissionDeleteDiscussion, TypeDiscussion, discussion.ID)
 	if err != nil {
 		s.logger.Error("forum: permission check failed",
-			slog.String("action", domain.PermissionEditDiscussion),
+			slog.String("action", domain.PermissionDeleteDiscussion),
 			slog.String("error", err.Error()),
 		)
 		return false
@@ -293,6 +274,310 @@ func (s *Server) canAsModerator(e *core.RequestEvent, action, subjectType, subje
 	}
 
 	return s.permissions.CanAsModerator(e.Request.Context(), actor, action, subjectType, subjectID)
+}
+
+// allowWithinWindow reports whether a policy window permits the
+// action, given the setting that governs it.
+//
+// It is upstream's shape, which the core's DiscussionPolicy::rename,
+// the core's PostPolicy::edit and the tags extension's
+// DiscussionPolicy::tag all share:
+//
+//   - "-1"    — always;
+//   - "reply" — the "until somebody answers" window, whose predicate
+//     differs per ability (see the callers);
+//   - a number — for that many minutes after the subject was created.
+//
+// An unset or unparsable setting permits nothing.
+func allowWithinWindow(setting string, createdAt time.Time, replyWindow bool) bool {
+	switch setting {
+	case "-1":
+		return true
+	case "reply":
+		return replyWindow
+	}
+
+	minutes, err := strconv.Atoi(strings.TrimSpace(setting))
+	if err != nil {
+		return false
+	}
+
+	return time.Since(createdAt) < time.Duration(minutes)*time.Minute
+}
+
+// CanRenameDiscussion reports whether the caller may rename a
+// discussion: the account that started it, while the
+// `allow_renaming` setting permits it.
+//
+// It mirrors upstream's `DiscussionPolicy::rename()`, which requires
+// the author AND the ability to reply AND the setting. The moderator
+// grant is separate: upstream's `discussion.rename` group permission
+// reaches the same action through `can()`.
+func (s *Server) canRenameDiscussion(e *core.RequestEvent, discussionID string) (bool, error) {
+	actor := s.actor(e)
+	if !actor.IsAuthenticated() {
+		return false, nil
+	}
+
+	discussion, err := s.repo.FindDiscussion(discussionID)
+	if err != nil {
+		return false, err
+	}
+
+	// The moderator's grant: upstream's `discussion.rename` group
+	// permission.
+	allowed, err := s.permissions.CanAsModerator(e.Request.Context(), s.domainActor(e),
+		domain.PermissionEditDiscussion, TypeDiscussion, discussionID)
+	if err != nil {
+		return false, err
+	}
+	if allowed {
+		return true, nil
+	}
+
+	// The author's own, while the setting permits it.
+	if discussion.UserID != actor.User.ID {
+		return false, nil
+	}
+
+	canReply, err := s.permissions.Can(e.Request.Context(), s.domainActor(e), domain.PermissionReply, TypeDiscussion, discussionID)
+	if err != nil {
+		return false, err
+	}
+	if !canReply {
+		return false, nil
+	}
+
+	setting, err := s.settingValue(allowRenamingSetting)
+	if err != nil {
+		return false, err
+	}
+
+	// "reply" means: while nobody has answered yet.
+	return allowWithinWindow(setting, discussion.CreatedAt, discussion.ParticipantCount <= 1), nil
+}
+
+// CanEditPostAsAuthor reports whether the caller may edit a post they
+// wrote, while the `allow_post_editing` setting permits it.
+//
+// It mirrors upstream's `PostPolicy::edit()`, which requires the
+// author AND the ability to reply AND the setting. The moderator's
+// grant is separate: upstream's `discussion.editPosts` group
+// permission.
+func (s *Server) canEditPostAsAuthor(e *core.RequestEvent, postID string) (bool, error) {
+	actor := s.actor(e)
+	if !actor.IsAuthenticated() {
+		return false, nil
+	}
+
+	post, err := s.repo.FindPost(postID)
+	if err != nil {
+		return false, err
+	}
+
+	// The moderator's grant.
+	allowed, err := s.permissions.CanAsModerator(e.Request.Context(), s.domainActor(e),
+		domain.PermissionEditPost, TypePost, postID)
+	if err != nil {
+		return false, err
+	}
+	if allowed {
+		return true, nil
+	}
+
+	// The author's own, while the setting permits it.
+	if post.UserID != actor.User.ID {
+		return false, nil
+	}
+
+	canReply, err := s.permissions.Can(e.Request.Context(), s.domainActor(e), domain.PermissionReply, TypeDiscussion, post.DiscussionID)
+	if err != nil {
+		return false, err
+	}
+	if !canReply {
+		return false, nil
+	}
+
+	setting, err := s.settingValue(allowPostEditingSetting)
+	if err != nil {
+		return false, err
+	}
+
+	// "reply" means: while the post is the last one, so the author may
+	// fix a typo until somebody answers.
+	discussion, err := s.repo.FindDiscussion(post.DiscussionID)
+	if err != nil {
+		return false, err
+	}
+
+	return allowWithinWindow(setting, post.CreatedAt, post.Number >= discussion.LastPostNumber), nil
+}
+
+// allowRenamingSetting and allowPostEditingSetting are the settings
+// that govern whether an author may rename a discussion or edit a
+// post.
+//
+// The names are upstream's.
+const (
+	allowRenamingSetting     = "allow_renaming"
+	allowPostEditingSetting  = "allow_post_editing"
+	allowHideOwnPostsSetting = "allow_hide_own_posts"
+)
+
+// CanTagDiscussion reports whether the caller may change a
+// discussion's tags.
+//
+// It mirrors upstream Flarum's tags extension, whose
+// `Access\\DiscussionPolicy::tag()` is the authority:
+//
+//   - the AUTHOR of the discussion, and
+//   - only while the `allow_tag_change` setting permits it.
+//
+// The setting has upstream's three shapes:
+//
+//   - "-1"    — always;
+//   - "reply" — while the discussion has one participant (so the
+//     author may tag their own topic before anyone answers);
+//   - a number — for that many minutes after the discussion was
+//     created.
+//
+// An UNSET setting permits nothing, which is upstream's default: the
+// permission is off until an administrator turns it on.
+//
+// The moderator grant is deliberately NOT part of this: upstream's
+// `tag` ability is a POLICY, not a group permission, so a moderator
+// group row does not widen it.
+func (s *Server) canTagDiscussion(e *core.RequestEvent, discussionID string) (bool, error) {
+	actor := s.actor(e)
+	if !actor.IsAuthenticated() {
+		return false, nil
+	}
+
+	discussion, err := s.repo.FindDiscussion(discussionID)
+	if err != nil {
+		return false, err
+	}
+
+	// Only the author may tag their own discussion.
+	if discussion.UserID != actor.User.ID {
+		return false, nil
+	}
+
+	// The author must also be able to reply, which is upstream's
+	// condition on the policy.
+	canReply, err := s.permissions.Can(e.Request.Context(), s.domainActor(e), domain.PermissionReply, TypeDiscussion, discussionID)
+	if err != nil {
+		return false, err
+	}
+	if !canReply {
+		return false, nil
+	}
+
+	allow, err := s.settingValue(allowTagChangeSetting)
+	if err != nil {
+		return false, err
+	}
+
+	switch allow {
+	case "-1":
+		return true, nil
+	case "reply":
+		return discussion.ParticipantCount <= 1, nil
+	}
+
+	// A number of minutes after the discussion was created.
+	minutes, err := strconv.Atoi(strings.TrimSpace(allow))
+	if err != nil {
+		// An unset or unparsable setting permits nothing, which is
+		// upstream's default: the permission is off until an
+		// administrator picks an option.
+		return false, nil //nolint:nilerr // an unparsable setting permits nothing
+	}
+
+	return time.Since(discussion.CreatedAt) < time.Duration(minutes)*time.Minute, nil
+}
+
+// allowTagChangeSetting is the setting that governs whether the
+// author of a discussion may change its tags.
+//
+// The name is upstream's.
+const allowTagChangeSetting = "allow_tag_change"
+
+// settingString reads a setting's value as a string.
+//
+// The settings column is a PocketBase JSONField, so the value comes
+// back as `types.JSONRaw` (a []byte of JSON). A JSON string decodes to
+// the string it holds; a JSON number decodes to its text form, because
+// the upstream settings are compared against "10" and "-1" as text.
+func settingString(value any) (string, bool) {
+	switch v := value.(type) {
+	case string:
+		return v, true
+	case types.JSONRaw:
+		return decodeJSONString([]byte(v))
+	case []byte:
+		return decodeJSONString(v)
+	default:
+		return "", false
+	}
+}
+
+// decodeJSONString decodes a JSON document that holds a string or a
+// number.
+func decodeJSONString(raw []byte) (string, bool) {
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		return text, true
+	}
+
+	var number json.Number
+	if err := json.Unmarshal(raw, &number); err == nil {
+		return number.String(), true
+	}
+
+	return "", false
+}
+
+// upstreamSettingDefaults are the settings upstream writes at install
+// (framework/core/src/Install/Steps/WriteSettings.php) that the
+// forum's POLICIES read.
+//
+// They are the fallback when the settings table has no row for the key,
+// because upstream writes those rows at install and this port starts
+// with an empty table. Without the fallback a policy would read an
+// absent setting as "unset", and an unset setting permits NOTHING — so
+// the author of a discussion could never rename it or edit their post,
+// where upstream allows both (its defaults are "10" and "reply").
+//
+// The values match upstream's: `allow_renaming` is "10" (ten minutes),
+// `allow_post_editing` and `allow_hide_own_posts` are "reply" (until
+// somebody answers), and the tags extension's `allow_tag_change` is
+// "0" ("Never", until an administrator picks an option).
+var upstreamSettingDefaults = map[string]string{
+	allowRenamingSetting:     "10",
+	allowPostEditingSetting:  "reply",
+	allowHideOwnPostsSetting: "reply",
+	allowTagChangeSetting:    "0",
+}
+
+// settingValue reads a setting, falling back to upstream's installed
+// default.
+func (s *Server) settingValue(key string) (string, error) {
+	fallback, ok := upstreamSettingDefaults[key]
+	if !ok {
+		fallback = ""
+	}
+
+	value, err := s.repo.SettingValue(key, fallback)
+	if err != nil {
+		return "", err
+	}
+
+	setting, ok := settingString(value)
+	if !ok {
+		return fallback, nil
+	}
+	return setting, nil
 }
 
 // requireAuth rejects an anonymous caller.

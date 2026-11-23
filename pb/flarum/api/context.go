@@ -72,97 +72,60 @@ func VerifyCSRF(e *core.RequestEvent) error {
 	return session.VerifyCSRF(e)
 }
 
-// CanEditPost reports whether the caller may change a post: the
-// account that wrote it, or a caller the permission service grants the
-// edit permission to.
+// CanEditPost reports whether the caller may edit a post: the account
+// that wrote it, while the `allow_post_editing` setting permits it, or
+// a moderator.
 //
-// The AUTHOR is allowed because the permission rows are GROUP-scoped:
-// `editPost` is seeded for the whole member group, so a
-// permission-only check would let every member edit every post in the
-// forum.
+// It is the plugin-facing form of upstream's `PostPolicy::edit()`.
 func CanEditPost(e *core.RequestEvent, postID string) (bool, error) {
 	server := serverFrom(e.Request.Context())
 	if server == nil {
 		return false, errUnauthenticated("The forum is not available.")
 	}
-
-	actor := server.actor(e)
-	if !actor.IsAuthenticated() {
-		return false, nil
-	}
-
-	post, err := server.repo.FindPost(postID)
-	if err != nil {
-		return false, err
-	}
-	if post.UserID == actor.User.ID {
-		return true, nil
-	}
-
-	return server.permissions.CanAsModerator(e.Request.Context(), server.domainActor(e),
-		domain.PermissionEditPost, TypePost, postID)
+	return server.canEditPostAsAuthor(e, postID)
 }
 
 // CanDeletePost reports whether the caller may delete a post: the
 // account that wrote it, or a caller the permission service grants the
 // delete permission to.
+//
+// Upstream has no group permission for post deletion — `PostPolicy`
+// defines `edit` and `hide` but no `delete` — so this is the author
+// rule plus the moderator's authority.
 func CanDeletePost(e *core.RequestEvent, postID string) (bool, error) {
 	server := serverFrom(e.Request.Context())
 	if server == nil {
 		return false, errUnauthenticated("The forum is not available.")
 	}
-
-	actor := server.actor(e)
-	if !actor.IsAuthenticated() {
-		return false, nil
-	}
-
-	post, err := server.repo.FindPost(postID)
-	if err != nil {
-		return false, err
-	}
-	if post.UserID == actor.User.ID {
-		return true, nil
-	}
-
-	return server.permissions.CanAsModerator(e.Request.Context(), server.domainActor(e),
-		domain.PermissionDeletePost, TypePost, postID)
+	return server.canDeletePost(e, postID)
 }
 
-// CanEditDiscussion reports whether the caller may change a
-// discussion: the account that started it, or a caller the permission
-// service grants the edit permission to.
+// CanRenameDiscussion reports whether the caller may rename a
+// discussion: the account that started it, while the `allow_renaming`
+// setting permits it, or a moderator.
 //
-// It is the plugin-facing form of the check the core's own update
-// handler makes. A plugin that changes a discussion (attaching a tag,
-// say) MUST ask this question first: without it every signed-in
-// member could change every discussion in the forum.
-//
-// The AUTHOR is allowed because the permission rows are GROUP-scoped:
-// `editDiscussion` is not seeded for the member group, so a
-// permission-only check would refuse the person who started the
-// discussion too.
-func CanEditDiscussion(e *core.RequestEvent, discussionID string) (bool, error) {
+// It is the plugin-facing form of upstream's
+// `DiscussionPolicy::rename()`.
+func CanRenameDiscussion(e *core.RequestEvent, discussionID string) (bool, error) {
 	server := serverFrom(e.Request.Context())
 	if server == nil {
 		return false, errUnauthenticated("The forum is not available.")
 	}
+	return server.canRenameDiscussion(e, discussionID)
+}
 
-	actor := server.actor(e)
-	if !actor.IsAuthenticated() {
-		return false, nil
+// CanTagDiscussion reports whether the caller may change a discussion's
+// tags: the account that started it, while the `allow_tag_change`
+// setting permits it.
+//
+// It is the plugin-facing form of the tags extension's
+// `Access\\DiscussionPolicy::tag()`.
+func CanTagDiscussion(e *core.RequestEvent, discussionID string) (bool, error) {
+	server := serverFrom(e.Request.Context())
+	if server == nil {
+		return false, errUnauthenticated("The forum is not available.")
 	}
-
-	discussion, err := server.repo.FindDiscussion(discussionID)
-	if err != nil {
-		return false, err
-	}
-	if discussion.UserID == actor.User.ID {
-		return true, nil
-	}
-
-	return server.permissions.CanAsModerator(e.Request.Context(), server.domainActor(e),
-		domain.PermissionEditDiscussion, TypeDiscussion, discussionID)
+	return server.canTagDiscussion(e, discussionID)
 }
 
 // WriteDocument writes a JSON:API document.

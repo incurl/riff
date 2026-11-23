@@ -358,9 +358,13 @@ func (m *Module) adminSettings() map[string]any {
 		// The defaults upstream writes at install. The keys the admin app
 		// reads are the ones that matter; the rest fill the settings
 		// forms with the same values upstream shows.
-		"allow_hide_own_posts":           "reply",
-		"allow_post_editing":             "reply",
-		"allow_renaming":                 "10",
+		"allow_hide_own_posts": "reply",
+		"allow_post_editing":   "reply",
+		"allow_renaming":       "10",
+		// Upstream's tags extension defaults this to "0" — "Never".
+		// Until an administrator picks an option, the author of a
+		// discussion may not change its tags.
+		"allow_tag_change":               "0",
 		"allow_sign_up":                  "1",
 		"avatar_driver":                  "default",
 		"custom_less":                    "",

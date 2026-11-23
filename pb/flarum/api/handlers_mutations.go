@@ -232,9 +232,13 @@ func (s *Server) updateDiscussionHandler(e *core.RequestEvent) error {
 
 	title := strings.TrimSpace(stringAttr(body.Data.Attributes, "title"))
 	if title != "" && title != discussion.Title {
-		// The author may always rename their own discussion; anyone
-		// else needs a moderator grant. See [Server.canAsModerator].
-		if !s.canEditDiscussion(e, discussion) {
+		// Upstream's `DiscussionPolicy::rename()`: the author, while the
+		// `allow_renaming` setting permits it, or a moderator.
+		allowed, err := s.canRenameDiscussion(e, discussion.ID)
+		if err != nil {
+			return fail(e, errInternal("The discussion could not be updated.", err))
+		}
+		if !allowed {
 			return fail(e, errForbidden("You are not allowed to rename that discussion."))
 		}
 		if err := s.repo.UpdateDiscussionTitle(discussion.ID, title, actor.User.ID); err != nil {
@@ -251,8 +255,7 @@ func (s *Server) updateDiscussionHandler(e *core.RequestEvent) error {
 
 // deleteDiscussionHandler serves DELETE /api/discussions/{id}.
 func (s *Server) deleteDiscussionHandler(e *core.RequestEvent) error {
-	actor, err := s.requireAuth(e)
-	if err != nil {
+	if _, err := s.requireAuth(e); err != nil {
 		return fail(e, err)
 	}
 
@@ -268,11 +271,7 @@ func (s *Server) deleteDiscussionHandler(e *core.RequestEvent) error {
 
 	// The author may always delete their own discussion; anyone else
 	// needs a moderator grant. See [Server.canAsModerator].
-	allowed, err := s.canAsModerator(e, domain.PermissionDeleteDiscussion, TypeDiscussion, discussion.ID)
-	if err != nil {
-		return fail(e, errInternal("The discussion could not be deleted.", err))
-	}
-	if !allowed && discussion.UserID != actor.User.ID {
+	if !s.canDeleteDiscussion(e, discussion) {
 		return fail(e, errForbidden("You are not allowed to delete that discussion."))
 	}
 
@@ -300,10 +299,9 @@ func (s *Server) updatePostHandler(e *core.RequestEvent) error {
 		return fail(e, notFoundError("That post does not exist."))
 	}
 
-	// The permission rows are GROUP-scoped, so `editPost` is held by
-	// every member. The check therefore has to name the author too:
-	// without it any member could rewrite any post in the forum.
-	allowed, err := s.canEditPost(e, post)
+	// Upstream's `PostPolicy::edit()`: the author, while the
+	// `allow_post_editing` setting permits it, or a moderator.
+	allowed, err := s.canEditPostAsAuthor(e, post.ID)
 	if err != nil {
 		return fail(e, errInternal("The post could not be updated.", err))
 	}
@@ -354,7 +352,7 @@ func (s *Server) deletePostHandler(e *core.RequestEvent) error {
 	// The same author rule as the edit: `deletePost` is held by every
 	// member, so the permission alone would let any member delete any
 	// post.
-	allowed, err := s.canDeletePost(e, post)
+	allowed, err := s.canDeletePost(e, post.ID)
 	if err != nil {
 		return fail(e, errInternal("The post could not be deleted.", err))
 	}

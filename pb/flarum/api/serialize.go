@@ -129,7 +129,7 @@ func groupResource(group *domain.Group) Resource {
 // The `can*` attributes carry the caller's own capabilities, which is
 // how the frontend decides whether to show the edit/hide/delete
 // controls.
-func discussionResource(discussion *domain.Discussion, canReply, canRename, canHide, canDelete bool, tagIDs []string) Resource {
+func discussionResource(discussion *domain.Discussion, canReply, canRename, canHide, canDelete, canTag bool, tagIDs []string) Resource {
 	attributes := map[string]any{
 		"title":            discussion.Title,
 		"slug":             discussion.Slug,
@@ -145,7 +145,12 @@ func discussionResource(discussion *domain.Discussion, canReply, canRename, canH
 		"canRename":        canRename,
 		"canHide":          canHide,
 		"canDelete":        canDelete,
-		"unreadCount":      0,
+		// Upstream's tags extension exposes the same flag
+		// (`Schema\Boolean::make('canTag')`), computed with the same
+		// policy the tag endpoint checks, so the control and the
+		// endpoint always agree.
+		"canTag":      canTag,
+		"unreadCount": 0,
 	}
 
 	relationships := map[string]Relationship{
