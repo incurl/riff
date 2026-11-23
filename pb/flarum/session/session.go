@@ -21,6 +21,7 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/pocketbase/pocketbase/core"
+	"golang.org/x/crypto/bcrypt"
 
 	"github.com/incurl/riff/pb/flarum/domain"
 )
@@ -357,7 +358,18 @@ func (r *Resolver) Login(_ *core.RequestEvent, req LoginRequest) (*domain.User, 
 
 	record, err := r.findByIdentifier(identification)
 	if err != nil {
-		return nil, "", err
+		// An unknown identifier must cost the same as a wrong
+		// password. Without this the bcrypt work is skipped for an
+		// account that does not exist, and the response TIME tells an
+		// attacker which identifiers are real: the login answers in
+		// about a millisecond for an unknown account and about fifty
+		// for a known one.
+		//
+		// The dummy hash is a real bcrypt digest at the same cost, so
+		// the comparison does the same work.
+		_ = bcrypt.CompareHashAndPassword(dummyPasswordHash, []byte(req.Password))
+
+		return nil, "", errors.New("forum: invalid credentials")
 	}
 
 	if !record.ValidatePassword(req.Password) {
@@ -375,6 +387,21 @@ func (r *Resolver) Login(_ *core.RequestEvent, req LoginRequest) (*domain.User, 
 	}
 	return user, token, nil
 }
+
+// dummyPasswordHash is a bcrypt digest of a value nobody knows.
+//
+// It exists so a login for an unknown identifier costs the same as a
+// login for a known one with a wrong password. See [Resolver.Login].
+var dummyPasswordHash = func() []byte {
+	// A fixed, meaningless secret: the digest is only ever compared
+	// against, never used to authenticate anything.
+	hash, err := bcrypt.GenerateFromPassword([]byte("riff-forum-dummy-password"), bcrypt.DefaultCost)
+	if err != nil {
+		// bcrypt only fails on a bad cost, and DefaultCost is valid.
+		panic("forum: could not generate the dummy password hash: " + err.Error())
+	}
+	return hash
+}()
 
 // findByIdentifier resolves a login identifier to an auth record.
 func (r *Resolver) findByIdentifier(identifier string) (*core.Record, error) {

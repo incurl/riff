@@ -5,6 +5,46 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## The forum's permissions are group-scoped, so ownership is checked separately (2026-11-16)
+
+The forum's permission rows are GROUP-scoped: a row says "the member
+group may edit posts", not "the member group may edit their own
+posts". `editPost` and `deletePost` are seeded for the member group,
+which **every signed-in caller belongs to**, so a permission check on
+its own answered "yes" for ANY member and ANY post: any member could
+rewrite any post in the forum, and any member could tag or untag any
+discussion.
+
+The fix is to separate the two questions:
+
+* the **AUTHOR** may always change their own post or discussion;
+* anyone else needs a grant from a group OTHER than the implicit
+  member group — a moderator grant — or the administrator's blanket
+  authority (`domain.PermissionService.CanAsModerator`).
+
+The distinction matters because a row for the implicit member group
+carries no information about the individual: every signed-in caller
+holds it. A row for an explicit moderator group does name a set of
+accounts.
+
+**The permission service cannot express "your own" at all**, so every
+handler that changes something the caller owns has to ask the question
+itself. The core's post edit/delete, the discussion rename and the
+tags plugin's attach/detach all do now. The plugin-facing helpers are
+`api.CanEditPost`, `api.CanEditDiscussion` and `api.CanDeletePost`.
+
+## The forum's login must not leak which accounts exist (2026-11-16)
+
+A login for an UNKNOWN identifier never reached the bcrypt comparison,
+so it answered in about a millisecond while a login for a known
+identifier took about fifty: the response TIME was a user-enumeration
+oracle, even though the response BODY was identical for both.
+
+The unknown path now compares the password against a dummy bcrypt
+digest at the same cost, so both paths do the same work. Measured
+before: 1.2ms for an unknown account against 47.5ms for a known one.
+After: 48.3ms against 48.0ms.
+
 ## The colour preview swatch cannot carry an empty value (2026-11-16)
 
 The admin's Appearance page has four `color-preview` settings. The

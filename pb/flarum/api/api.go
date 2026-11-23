@@ -208,6 +208,93 @@ func (s *Server) can(e *core.RequestEvent, action, subjectType, subjectID string
 	return allowed
 }
 
+// canEditPost reports whether the caller may change a post.
+//
+// The AUTHOR may always edit their own post.
+//
+// For anyone else the answer is the permission service's, and the
+// permission rows are GROUP-scoped: they can say "the member group may
+// edit posts", but they cannot say "the member group may edit THEIR
+// OWN posts". A group-scoped grant is therefore a MODERATOR grant —
+// it has to come from a group that is not the implicit member group,
+// because the implicit member group holds the row for every signed-in
+// caller.
+//
+// Without this distinction every member could rewrite every post in
+// the forum: the permission check alone answered "yes" for any member
+// and any post.
+func (s *Server) canEditPost(e *core.RequestEvent, post *domain.Post) (bool, error) {
+	actor := s.actor(e)
+	if !actor.IsAuthenticated() {
+		return false, nil
+	}
+
+	if post.UserID == actor.User.ID {
+		return true, nil
+	}
+
+	return s.canAsModerator(e, domain.PermissionEditPost, TypePost, post.ID)
+}
+
+// canDeletePost reports whether the caller may delete a post.
+//
+// The same author rule as [Server.canEditPost].
+func (s *Server) canDeletePost(e *core.RequestEvent, post *domain.Post) (bool, error) {
+	actor := s.actor(e)
+	if !actor.IsAuthenticated() {
+		return false, nil
+	}
+
+	if post.UserID == actor.User.ID {
+		return true, nil
+	}
+
+	return s.canAsModerator(e, domain.PermissionDeletePost, TypePost, post.ID)
+}
+
+// canEditDiscussion reports whether the caller may change a discussion:
+// the account that started it, or a caller with a moderator grant.
+//
+// The author rule matches [Server.canEditPost].
+func (s *Server) canEditDiscussion(e *core.RequestEvent, discussion *domain.Discussion) bool {
+	actor := s.actor(e)
+	if !actor.IsAuthenticated() {
+		return false
+	}
+
+	if discussion.UserID == actor.User.ID {
+		return true
+	}
+
+	allowed, err := s.canAsModerator(e, domain.PermissionEditDiscussion, TypeDiscussion, discussion.ID)
+	if err != nil {
+		s.logger.Error("forum: permission check failed",
+			slog.String("action", domain.PermissionEditDiscussion),
+			slog.String("error", err.Error()),
+		)
+		return false
+	}
+	return allowed
+}
+
+// canAsModerator reports whether the caller holds a permission that was
+// granted to a group OTHER than the implicit member group.
+//
+// The implicit member group is every signed-in caller, so a row for it
+// carries no information about the individual. A row for another group
+// (an explicit moderator group) does: it names a set of accounts.
+//
+// An administrator holds every permission outright, so they never need
+// a row.
+func (s *Server) canAsModerator(e *core.RequestEvent, action, subjectType, subjectID string) (bool, error) {
+	actor := s.domainActor(e)
+	if actor.IsAdmin {
+		return true, nil
+	}
+
+	return s.permissions.CanAsModerator(e.Request.Context(), actor, action, subjectType, subjectID)
+}
+
 // requireAuth rejects an anonymous caller.
 func (s *Server) requireAuth(e *core.RequestEvent) (session.Actor, error) {
 	actor := s.actor(e)

@@ -237,7 +237,25 @@ settings read/write endpoints and the extension manifest endpoint, and
 the admin SPA boots — but the forum does not yet implement every admin
 screen's backend.
 
-## 11. The access-token list holds the current session only
+## 11. The permission rows cannot express ownership
+
+Upstream Flarum's policies take the actor AND the subject, so
+"startDiscussion" is checked against a discussion the actor owns, and
+"editPost" against a post the actor wrote. Upstream's permission rows
+are scoped by group, and the POLICY is what ties a row to the subject.
+
+This port keeps the rows and the shape, but the policy layer is
+thinner: a handler that changes something the caller owns has to ask
+the ownership question itself, because the permission service only
+answers "may this GROUP do this", and the implicit member group holds
+the `editPost`/`deletePost` rows that every signed-in caller inherits.
+
+So the rule is: the author may always change their own post or
+discussion, and anyone else needs a moderator grant or the
+administrator's authority. The moderators are the accounts in an
+explicit group that holds the permission row.
+
+## 12. The access-token list holds the current session only
 
 Upstream lists every access token of the account: the session tokens
 and the developer tokens, with their title, device, last IP address and
@@ -255,7 +273,7 @@ the frontend joins the session and developer answers with
 single object is not iterable, so the destructuring fails with "e is
 not iterable".
 
-## 12. The API honours `X-HTTP-Method-Override`
+## 13. The API honours `X-HTTP-Method-Override`
 
 Upstream's frontend rewrites every method other than GET and POST into
 a POST with the intended method in the `X-HTTP-Method-Override` header,
@@ -277,7 +295,7 @@ request helper throws on a non-2xx, so a 200 with an HTML body is the
 worst outcome: the caller tries to parse a page of markup as data.
 Every forum API path the frontend calls has to exist.
 
-## 13. Notifications are limited
+## 14. Notifications are limited
 
 Upstream's notification system is a per-extension blueprint registry
 with a large catalogue of notification types. The forum's
@@ -285,7 +303,7 @@ with a large catalogue of notification types. The forum's
 first-party plugins produce (`postLiked`, `discussionTagged`,
 `mentionedInPost`, `commentOnPost`).
 
-## 14. The deferred items
+## 15. The deferred items
 
 The following are **roadmap**, not v1:
 
@@ -295,7 +313,7 @@ The following are **roadmap**, not v1:
 - the remaining upstream extensions (mentions, subscriptions, sticky,
   lock, suspend, and the rest).
 
-## 15. The frontend build needs npm's legacy peer resolver
+## 16. The frontend build needs npm's legacy peer resolver
 
 The upstream monorepo is a Yarn workspace with hoisting assumptions
 that npm's strict resolver rejects. The build therefore runs with

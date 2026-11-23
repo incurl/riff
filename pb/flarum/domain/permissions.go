@@ -12,6 +12,13 @@ import (
 type PermissionChecker interface {
 	// Can reports whether the actor may perform the action.
 	Can(ctx context.Context, actor Actor, action, subjectType, subjectID string) (bool, error)
+
+	// CanAsModerator reports whether the actor holds a permission that
+	// was granted to a group other than the implicit member group.
+	//
+	// See [PermissionService.CanAsModerator] for why the distinction
+	// matters.
+	CanAsModerator(ctx context.Context, actor Actor, action, subjectType, subjectID string) (bool, error)
 }
 
 // Actor is the caller a permission check runs for.
@@ -117,6 +124,62 @@ func (s *PermissionService) Can(ctx context.Context, actor Actor, action, subjec
 	allowed, err := s.lookup(actor, action, subjectID)
 	if err != nil {
 		return false, err
+	}
+
+	if s.bus != nil {
+		s.bus.DispatchAfter(ctx, Event{
+			Name:   "forum.permission.checked",
+			Actor:  actor.UserID,
+			Target: action,
+			Data: map[string]any{
+				"subjectType": subjectType,
+				"subjectID":   subjectID,
+				"allowed":     allowed,
+			},
+		})
+	}
+
+	return allowed, nil
+}
+
+// CanAsModerator reports whether the actor holds a permission that was
+// granted to a group OTHER than the implicit member group.
+//
+// The permission rows are GROUP-scoped: a row says "the member group
+// may edit posts", not "the member group may edit their own posts". A
+// row for the implicit member group therefore carries no information
+// about the individual — every signed-in caller holds it — so a check
+// that relies on it alone would let any member perform the action on
+// any subject.
+//
+// A row for another group (an explicit moderator group) does name a
+// set of accounts, so it can carry the moderator's authority. An
+// administrator holds every permission outright and never needs a row.
+//
+// This is the rule for the actions whose subject the caller owns: the
+// author may always edit their own post, and anyone else needs a
+// moderator grant.
+func (s *PermissionService) CanAsModerator(ctx context.Context, actor Actor, action, subjectType, subjectID string) (bool, error) {
+	if actor.IsAdmin {
+		return true, nil
+	}
+
+	// The rows the caller's EXPLICIT groups hold. The implicit member
+	// group is deliberately not among them.
+	rows, err := s.store.PermissionRowsFor(actor.GroupIDs, action)
+	if err != nil {
+		return false, err
+	}
+
+	allowed := false
+	for _, row := range rows {
+		if !row.Allowed {
+			continue
+		}
+		if row.Scope == "" || row.Scope == subjectID {
+			allowed = true
+			break
+		}
 	}
 
 	if s.bus != nil {

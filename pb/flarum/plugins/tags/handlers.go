@@ -57,6 +57,17 @@ func addTagHandler(e *core.RequestEvent) error {
 		return api.WriteError(e, http.StatusUnprocessableEntity, api.CodeValidationFailed, "A discussion is required.")
 	}
 
+	// Attaching a tag CHANGES the discussion, so the caller must be
+	// allowed to edit it. Without this check every signed-in member
+	// could tag any discussion in the forum.
+	allowed, err := api.CanEditDiscussion(e, discussionID)
+	if err != nil {
+		return api.WriteError(e, http.StatusInternalServerError, api.CodeInternal, "The tag could not be attached.")
+	}
+	if !allowed {
+		return api.WriteError(e, http.StatusForbidden, api.CodePermissionDenied, "You are not allowed to tag that discussion.")
+	}
+
 	var body struct {
 		Data struct {
 			Attributes struct {
@@ -106,6 +117,16 @@ func removeTagHandler(e *core.RequestEvent) error {
 
 	discussionID := e.Request.PathValue("id")
 	tagID := e.Request.PathValue("tagId")
+
+	// Detaching a tag changes the discussion too, so it carries the
+	// same edit permission check as attaching one.
+	allowed, err := api.CanEditDiscussion(e, discussionID)
+	if err != nil {
+		return api.WriteError(e, http.StatusInternalServerError, api.CodeInternal, "The tag could not be removed.")
+	}
+	if !allowed {
+		return api.WriteError(e, http.StatusForbidden, api.CodePermissionDenied, "You are not allowed to untag that discussion.")
+	}
 
 	if err := detachTag(e.App, discussionID, tagID); err != nil {
 		return api.WriteError(e, http.StatusInternalServerError, api.CodeInternal, "The tag could not be removed.")

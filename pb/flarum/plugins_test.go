@@ -2,6 +2,7 @@ package flarum
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"testing"
 
@@ -321,4 +322,63 @@ func TestPlugin_MigrationIsIdempotent(t *testing.T) {
 	after, err := app.FindAllRecords(collection)
 	require.NoError(t, err)
 	require.Len(t, after, len(first), "the migration rows must not be duplicated")
+}
+
+// TestTags_AnotherMemberCannotTagADiscussion pins the AUTHOR rule on
+// the tag routes.
+//
+// Attaching and detaching a tag CHANGES a discussion, so the caller
+// must be allowed to change it. The handler used to check only that
+// the caller was signed in, which meant every member could tag — and
+// untag — any discussion in the forum.
+func TestTags_AnotherMemberCannotTagADiscussion(t *testing.T) {
+	app, handler := newTestForum(t)
+	tag := seedTag(t, app, "Announcements", "announcements")
+
+	author := testUser(t, app, "tag_author")
+	intruder := testUser(t, app, "tag_intruder")
+
+	authorToken, err := author.NewAuthToken()
+	require.NoError(t, err)
+	intruderToken, err := intruder.NewAuthToken()
+	require.NoError(t, err)
+
+	// The author starts a discussion.
+	recorder := do(t, handler, http.MethodPost, "/forum/api/discussions",
+		`{"data":{"type":"discussions","attributes":{"title":"Mine","content":"body"}}}`,
+		sessionCookies(authorToken, "csrf-token"))
+	require.Equal(t, http.StatusCreated, recorder.Code, recorder.Body.String())
+
+	var created struct {
+		Data struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &created))
+	discussionID := created.Data.ID
+	require.NotEmpty(t, discussionID)
+
+	body := `{"data":{"attributes":{"tag":"announcements"}}}`
+
+	// The intruder may not attach a tag to it.
+	recorder = do(t, handler, http.MethodPost, "/forum/api/discussions/"+discussionID+"/tags",
+		body, sessionCookies(intruderToken, "csrf-token"))
+	require.Equal(t, http.StatusForbidden, recorder.Code, recorder.Body.String())
+
+	// The intruder may not detach one either.
+	recorder = do(t, handler, http.MethodDelete,
+		"/forum/api/discussions/"+discussionID+"/tags/"+tag.Id, "",
+		sessionCookies(intruderToken, "csrf-token"))
+	require.Equal(t, http.StatusForbidden, recorder.Code, recorder.Body.String())
+
+	// The author may attach one.
+	recorder = do(t, handler, http.MethodPost, "/forum/api/discussions/"+discussionID+"/tags",
+		body, sessionCookies(authorToken, "csrf-token"))
+	require.Equal(t, http.StatusCreated, recorder.Code, recorder.Body.String())
+
+	// And detach it again.
+	recorder = do(t, handler, http.MethodDelete,
+		"/forum/api/discussions/"+discussionID+"/tags/"+tag.Id, "",
+		sessionCookies(authorToken, "csrf-token"))
+	require.Equal(t, http.StatusNoContent, recorder.Code, recorder.Body.String())
 }
