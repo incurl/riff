@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -20,6 +22,40 @@ import (
 	"github.com/incurl/riff/pb/flarum/repository"
 	_ "github.com/incurl/riff/pb/migrations"
 )
+
+// readVendoredFrontendFile reads a file out of the vendored frontend
+// tree.
+//
+// It is for the tests that pin a CONTRACT between the Go side and the
+// vendored upstream frontend — the group-id constants, for instance,
+// which the frontend compares against and the backend stores. Those
+// values live in TypeScript, so the only way to check that the two
+// agree is to read the source.
+//
+// The repository root is found by walking up from the test's working
+// directory, because `go test` runs a package's tests with the package
+// directory as the working directory.
+func readVendoredFrontendFile(t *testing.T, relative string) string {
+	t.Helper()
+
+	dir, err := os.Getwd()
+	require.NoError(t, err)
+
+	for {
+		candidate := filepath.Join(dir, relative)
+		if _, err := os.Stat(candidate); err == nil {
+			contents, err := os.ReadFile(candidate)
+			require.NoError(t, err)
+			return string(contents)
+		}
+
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatalf("could not find %q above the package directory", relative)
+		}
+		dir = parent
+	}
+}
 
 // newTestApp boots a PocketBase app for a forum test.
 //

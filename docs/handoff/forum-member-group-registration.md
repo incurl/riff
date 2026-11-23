@@ -1,8 +1,10 @@
 # Handoff: "grant forumgroupmember membership at registration"
 
-**Status: investigation complete, implementation NOT started.**
-The tree is clean; no code was changed for this task. Everything below is
-verified against upstream Flarum v2.0.0 and against riff's live behaviour.
+**Status: investigation complete; the recommended path (§5.3) is IMPLEMENTED.**
+No member-group row is stored — see §5. The follow-up that WAS taken is
+the frontend group-id constants fix (§4a), which is now done and pinned
+by a test. Everything below is verified against upstream Flarum v2.0.0
+and against riff's live behaviour.
 
 **The single most important finding: upstream Flarum v2.0.0 does NOT store a
 member-group row, and the requested change would not reproduce upstream.**
@@ -257,14 +259,15 @@ user's membership.
 
 These are NOT the requested task, but the investigation surfaced them.
 
-### 4a. The frontend's group-id constants are wrong (a real bug)
+### 4a. The frontend's group-id constants are wrong (a real bug) — FIXED
 
-See §3a. The vendored frontend compares group ids against `'1'`/`'2'`/`'3'`
+See §3a. The vendored frontend compared group ids against `'1'`/`'2'`/`'3'`
 while riff uses `forumgroupadmin`/`forumgroupguest`/`forumgroupmembr`.
-Fixing it means patching the vendored upstream file (or overriding it),
-which the AGENTS.md rules treat as a vendored-tree edit. At minimum the
-admin UI's group editor should not offer guest/member — today it does, and
-the server rejects the write.
+They now carry riff's ids (`pb/flarum/frontend/packages/core/src/common/models/Group.ts`),
+and `TestForum_TheGroupIDsMatchTheFrontend` reads them back out of the
+TypeScript source so the two sides cannot drift apart again. With the
+constants right, the admin group editor hides guest/member, and the
+admin-checkbox guard works.
 
 ### 4b. `member_count` is never written
 
@@ -408,13 +411,19 @@ sed -n '40,46p' /tmp/fu/framework/core/js/src/common/components/EditUserModal.ts
 
 ## 8. Repository state
 
-- Tree **clean**; the probe test was deleted. `git status` is empty.
-- HEAD: `153671004 feat(pb/flarum): let an administrator assign the moderator group`
+- The recommended path (§5.3) is **implemented**; no member-group row is
+  stored. The §4a frontend group-id fix is done.
+- The admin surface (`forum_settings` / permissions / group order) was
+  brought in line with upstream v2.0.0 in the same change — see
+  `DECISIONS.md` "The forum's admin surface speaks upstream's command
+  wire format".
 - Prior commits: `c71c73dfd` (the upstream permission alignment),
   `16364f51b` (ownership checks + the login timing fix),
-  `4f86c6cde` (the colour-preview swatch).
-- `build`, `vet`, `golangci-lint` (0 issues), the full suite and the race
-  suite all passed on `153671004`.
+  `4f86c6cde` (the colour-preview swatch),
+  `153671004` (assigning the moderator group).
+- `build`, `vet`, `golangci-lint` (0 issues) and the full test suite
+  pass. The new admin-surface tests are pinned by
+  `go test -count=1 -run 'TestForum_TheAdmin|TestForum_TheSettings|TestForum_ThePermission|TestForum_AMemberMayNotSave|TestForum_SavingAPermission|TestForum_TheGroupIDs' ./pb/flarum/`.
 
 ### Reference: riff's key files
 
@@ -430,4 +439,7 @@ sed -n '40,46p' /tmp/fu/framework/core/js/src/common/components/EditUserModal.ts
 | the user resource | `pb/flarum/api/serialize.go:73` (`userResourceWithGroups`) |
 | the users list | `pb/flarum/api/handlers_discussions.go:253` |
 | the module's hooks | `pb/flarum/register.go:128` (`Register`), `:144` (`OnServe`) |
-| the vendored frontend's group ids | `pb/flarum/frontend/packages/core/src/common/models/Group.ts:5-7` |
+| the vendored frontend's group ids | `pb/flarum/frontend/packages/core/src/common/models/Group.ts` (now the port's ids) |
+| the admin surface | `pb/flarum/api/handlers_admin.go`, `pb/flarum/api/routes.go` |
+| permission-key translation | `pb/flarum/domain/permission_keys.go` |
+| the boot payload's permissions | `pb/flarum/routes.go::adminPermissions` |

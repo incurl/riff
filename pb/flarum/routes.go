@@ -12,6 +12,7 @@ import (
 	"github.com/pocketbase/pocketbase/tools/router"
 
 	"github.com/incurl/riff/pb/flarum/api"
+	"github.com/incurl/riff/pb/flarum/domain"
 	"github.com/incurl/riff/pb/flarum/frontend"
 	"github.com/incurl/riff/pb/flarum/plugin"
 	"github.com/incurl/riff/pb/flarum/repository"
@@ -313,7 +314,7 @@ func (m *Module) adminPayload() *frontend.Admin {
 			"discussions": {"id"},
 		},
 		SearchDrivers:       map[string][]string{},
-		Permissions:         map[string][]string{},
+		Permissions:         m.adminPermissions(),
 		MaintenanceByConfig: false,
 		DBDriver:            m.databaseDriver(),
 		DBVersion:           "",
@@ -410,6 +411,42 @@ func (m *Module) adminSettings() map[string]any {
 	}
 
 	return settings
+}
+
+// adminPermissions returns the granted permissions, per permission.
+//
+// It is upstream's `Permission::map()`
+// (`framework/core/src/Admin/Content/AdminPayload.php` reads
+// `$document->payload['permissions'] = Permission::map();`), and the
+// admin application reads it into `app.data.permissions`.
+//
+// The map is NOT optional. `PermissionDropdown.tsx` reads
+// `app.data.permissions[permission]` for the permission being edited and
+// for every permission it requires, and uses the answer to decide
+// which groups the permission may be granted to — so an empty map makes
+// the whole grid inert: every dropdown reads "no group holds this",
+// the "everyone" and "members" badges never light up, and a required
+// permission ("you cannot reply unless you can see the forum") narrows
+// every group to nothing.
+//
+// The keys are translated into upstream's names, because the admin
+// application registers upstream's names
+// (`permission: 'discussion.reply'`) and looks them up verbatim.
+func (m *Module) adminPermissions() map[string][]string {
+	stored, err := m.repo.PermissionMap()
+	if err != nil {
+		// The permissions could not be read. An empty map is what the
+		// admin app can cope with; a wrong one is not.
+		return map[string][]string{}
+	}
+
+	permissions := make(map[string][]string, len(stored))
+	for permission, groups := range stored {
+		key := domain.UpstreamPermissionKey(permission)
+		permissions[key] = append(permissions[key], groups...)
+	}
+
+	return permissions
 }
 
 // adminModelStatistics returns the counts the admin app reads.

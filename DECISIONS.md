@@ -5,6 +5,110 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## The forum's admin surface speaks upstream's command wire format, not JSON:API (2026-11-23)
+
+The forum's public API is JSON:API, but its ADMIN surface is not, and
+conflating the two is a whole class of silent failure. Upstream's admin
+controllers are plain command endpoints:
+
+| Method | Path | Body | Answer |
+| --- | --- | --- | --- |
+| POST | `/settings` | the settings map itself (`{key: value, …}`) | 204, empty |
+| DELETE | `/settings` | `{keys: [...], extensionId: ''}` | 204, empty |
+| POST | `/permission` | `{permission, groupIds}` | 204, empty |
+| POST | `/groups/order` | `{order: [...]}` | 204, empty |
+
+`SetSettingsController::handle()` reads `$request->getParsedBody()` as
+the settings — there is no wrapper — and every one of them asserts
+admin and returns `new EmptyResponse(204)`. The reused Flarum frontend
+posts exactly those bodies (`admin/utils/saveSettings.js` posts the
+flat map; `ResetExtensionSettingsModal.tsx` posts the keys;
+`PermissionDropdown.tsx` posts the permission; `GroupBar.tsx` posts the
+order).
+
+So the port's handlers read a FLAT object and answer an empty 204. A
+handler that demanded a JSON:API envelope rejected every admin save
+with "The settings could not be read", and the admin's Save button
+reported a validation error while changing nothing.
+
+Four things this surface needs that are easy to miss:
+
+- **NO `GET /api/settings`.** Upstream has no such route: the settings
+  reach the admin application through the boot payload
+  (`AdminPayload` carries `$this->settings->all()`), which the port
+  already does in `adminSettings()`.
+
+- **THE PERMISSION MAP IS PART OF THE BOOT PAYLOAD.** Upstream sends
+  `$document->payload['permissions'] = Permission::map()`, and the
+  admin application reads it into `app.data.permissions`.
+  `PermissionDropdown` uses it for the permission being edited AND for
+  every permission that one requires, so an empty map makes the grid
+  inert: every dropdown reads "no group holds this", the "everyone" /
+  "members" badges never light up, and a required permission narrows
+  every group to nothing.
+
+- **THE PERMISSION KEYS ARE TRANSLATED.** The admin application speaks
+  upstream's names (`discussion.reply`, `discussion.editPosts`,
+  `discussion.rename`), and the forum stores FLAT names (`reply`,
+  `editPost`, `editDiscussion`) — see the earlier entry on the
+  permission model. So `pb/flarum/domain/permission_keys.go` maps
+  between them in both directions, and the handler translates on the
+  way in. Without it the grid writes keys no handler reads, so
+  granting a permission changes nothing. A key the table does not know
+  passes through unchanged, so an extension's own permission
+  round-trips.
+
+- **`updated_by` CANNOT HOLD AN ADMINISTRATOR'S ID.** The settings
+  collection's `updated_by` is a relation to the shared `users`
+  collection, but the port's administrator is a `_superusers` record.
+  Writing the administrator's id fails PocketBase's relation
+  validation — "Failed to find all relation records with the provided
+  ids" — which makes every settings save fail for the ONLY account
+  allowed to perform one. The field is left empty for an
+  administrator; upstream has no such column at all (its `settings`
+  table is `(key, value)`).
+
+The method override needs care here too. PocketBase's router matches on
+the REAL method before any handler runs, so a `DELETE` sent as a
+`POST` with `X-HTTP-Method-Override: DELETE` never reaches the DELETE
+route: the POST route has to resolve the effective method itself
+(`settingsHandler` delegates to `deleteSettingsHandler`).
+
+## The vendored frontend's group-id constants must match the backend's (2026-11-23)
+
+The vendored Flarum frontend compares group ids against three static
+constants in `common/models/Group.ts` — `ADMINISTRATOR_ID`, `GUEST_ID`
+and `MEMBER_ID` — in about a dozen places. Upstream's values are the
+integers `'1'`, `'2'` and `'3'`, because its `groups` table has an
+auto-incrementing integer primary key and the built-in groups are the
+first rows. This port's groups live in a PocketBase collection whose
+record ids are 15-character strings, and the built-ins carry
+`forumgroupadmin` / `forumgroupguest` / `forumgroupmembr`
+(`pb/flarum/domain/models.go`).
+
+The constants were left at upstream's values. Every comparison
+therefore failed, and the failures are all silent: the admin's group
+editor offered the guest and member groups for assignment (the server
+rejects those ids), the "is this account an administrator" check never
+matched so the admin-group checkbox was never guarded, and the
+permission dropdown's "everyone" / "members" badges never lit up.
+
+The constants now carry the port's ids, and
+`TestForum_TheGroupIDsMatchTheFrontend` reads them back out of the
+TypeScript source so the two sides cannot drift apart unnoticed.
+
+This is the same failure mode as the permission-key mismatch above: a
+vendored frontend whose identifiers do not match the backend's. When a
+vendored UI compares against a constant, the constant is part of the
+API contract and deserves a test.
+
+# DECISIONS.md — riff architectural audit log
+
+This file is the single source of truth for non-obvious decisions made
+while building riff, a PO-33 community site replacing the Memos Go
+backend with PocketBase. New entries are appended at the top, oldest at
+the bottom.
+
 ## The forum's permission model follows upstream's, policy by policy (2026-11-16)
 
 The forum's authorization is a port of upstream Flarum's, and the port

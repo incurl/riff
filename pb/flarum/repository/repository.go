@@ -15,7 +15,9 @@
 package repository
 
 import (
+	"cmp"
 	"encoding/json"
+	"slices"
 	"strings"
 	"time"
 
@@ -416,6 +418,100 @@ func groupFromRecord(record *core.Record) *domain.Group {
 		Position:     record.GetInt("position"),
 		MemberCount:  record.GetInt("member_count"),
 	}
+}
+
+// SetGroupOrder writes the groups' positions.
+//
+// The order is the list of group ids, and a group's position is its
+// index in that list — upstream's `OrderGroupsController` writes the
+// array index to `position` and clears every position first, so a group
+// that is not named ends up with no position and sorts last
+// (`sortGroups` in the frontend puts a null position after every
+// numbered one).
+//
+// This port's `position` is a PocketBase NumberField and cannot hold
+// null, so "no position" is expressed instead as a position AFTER the
+// named ones, keeping the unnamed groups in their previous relative
+// order. The result is the same total order upstream produces: the
+// named groups first, in the requested order, then everything else.
+//
+// The writes are in one transaction: a partially applied reorder would
+// leave the admin's group bar in an order that matches neither the
+// request nor the old one.
+//
+// A group id that does not exist is ignored rather than rejected: the
+// request names the groups the admin can see, and upstream's write is
+// per-group, so an id that is not there simply matches no row.
+func (r *Repository) SetGroupOrder(order []string) error {
+	collection, err := r.collection("groups")
+	if err != nil {
+		return err
+	}
+
+	return r.app.RunInTransaction(func(txApp core.App) error {
+		records, err := txApp.FindAllRecords(collection)
+		if err != nil {
+			return err
+		}
+
+		byID := make(map[string]*core.Record, len(records))
+		for _, record := range records {
+			byID[record.Id] = record
+		}
+
+		positioned := make(map[string]bool, len(order))
+		next := 0
+		for _, id := range order {
+			id = strings.TrimSpace(id)
+			if id == "" {
+				continue
+			}
+			record, ok := byID[id]
+			if !ok {
+				// The group is gone: upstream's per-group update
+				// matches no row either.
+				continue
+			}
+			if positioned[id] {
+				// A duplicated id keeps its first position.
+				continue
+			}
+			record.Set("position", next)
+			if err := txApp.Save(record); err != nil {
+				return err
+			}
+			positioned[id] = true
+			next++
+		}
+
+		// The groups the request did not name follow, in their
+		// previous order. They are ordered by their current position
+		// first, then by id, so two groups that share a position
+		// still land in a stable order.
+		unnamed := make([]*core.Record, 0, len(records))
+		for _, record := range records {
+			if positioned[record.Id] {
+				continue
+			}
+			unnamed = append(unnamed, record)
+		}
+		slices.SortStableFunc(unnamed, func(left, right *core.Record) int {
+			if diff := cmp.Compare(left.GetInt("position"), right.GetInt("position")); diff != 0 {
+				return diff
+			}
+			return strings.Compare(left.Id, right.Id)
+		})
+
+		for _, record := range unnamed {
+			record.Set("position", next)
+			if err := txApp.Save(record); err != nil {
+				return err
+			}
+			next++
+		}
+
+		return nil
+	})
 }
 
 // --- discussions ---------------------------------------------------------

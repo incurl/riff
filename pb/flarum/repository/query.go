@@ -245,3 +245,134 @@ func (r *Repository) AllSettings() (map[string]any, error) {
 	}
 	return settings, nil
 }
+
+// DeleteSetting removes a forum setting.
+//
+// The row is deleted rather than blanked, so the readers fall back to
+// upstream's installed default — which is what "reset this setting"
+// means, and what upstream's `SettingsRepository::delete()` does.
+//
+// A setting that is not set is already reset, so removing it succeeds.
+func (r *Repository) DeleteSetting(key string) error {
+	collection, err := r.collection("settings")
+	if err != nil {
+		return err
+	}
+	record, err := r.app.FindFirstRecordByFilter(collection, "key = {:key}", map[string]any{"key": key})
+	if err != nil || record == nil {
+		// The setting is unset: it is already at its default.
+		return nil //nolint:nilerr // an unset setting is already reset
+	}
+	return r.app.Delete(record)
+}
+
+// --- permissions ----------------------------------------------------------
+
+// ReplacePermission replaces the rows that grant a permission.
+//
+// The request names the COMPLETE set of groups that hold the
+// permission, so the rows for that permission and scope are replaced
+// rather than merged: the groups that are no longer named lose the
+// permission. This is upstream's model — `SetPermissionController`
+// deletes every row for the permission and inserts one row per group.
+//
+// The scope matters: a permission may be granted globally (an empty
+// scope) or to a specific subject (a tag id, say), and the two are
+// separate sets of rows. Only the rows for the named scope are
+// replaced.
+func (r *Repository) ReplacePermission(permission, scope string, groupIDs []string) error {
+	collection, err := r.collection("permissions")
+	if err != nil {
+		return err
+	}
+
+	existing, err := r.app.FindRecordsByFilter(collection,
+		"permission = {:permission} && scope = {:scope}",
+		"", 0, 0, map[string]any{"permission": permission, "scope": scope})
+	if err != nil {
+		return err
+	}
+
+	wanted := make(map[string]bool, len(groupIDs))
+	for _, groupID := range groupIDs {
+		groupID = strings.TrimSpace(groupID)
+		if groupID == "" {
+			continue
+		}
+		wanted[groupID] = true
+	}
+
+	// The rows that are no longer wanted go first, so the unique index
+	// on (group, permission, scope) is never violated by a group that
+	// stays.
+	for _, record := range existing {
+		groupID := record.GetString("group")
+		if wanted[groupID] {
+			continue
+		}
+		if err := r.app.Delete(record); err != nil {
+			return err
+		}
+	}
+
+	for groupID := range wanted {
+		if err := r.SetPermission(groupID, permission, scope, true); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// PermissionMap returns the granted permissions, keyed by permission.
+//
+// The groups are the ids that hold the permission, which is upstream's
+// `Permission::map()` (`framework/core/src/Group/Permission.php`).
+// The admin application reads it into `app.data.permissions`, and the
+// permission dropdown uses it to decide which groups a permission may
+// be granted to.
+//
+// A row is a GRANT: the `forum_permissions.allowed` column is a
+// PocketBase `BoolField` with `Required: true`, and PocketBase reads
+// that as "the value must always be true". That is upstream's model
+// exactly — its `group_permission` table has no `allowed` column at
+// all, a row IS a grant, and a permission is denied by the ABSENCE of
+// a row. The denial branch is kept as a defensive guard in case the
+// column is ever relaxed.
+//
+// The scoped rows are not included: upstream's table has no scope, and
+// the admin page's grid is global. A scoped row (a restricted tag) is
+// read by the tag plugin, not by the grid.
+func (r *Repository) PermissionMap() (map[string][]string, error) {
+	collection, err := r.collection("permissions")
+	if err != nil {
+		return nil, err
+	}
+	records, err := r.app.FindAllRecords(collection)
+	if err != nil {
+		return nil, err
+	}
+
+	permissions := map[string][]string{}
+	for _, record := range records {
+		if !record.GetBool("allowed") {
+			// A denial is not a grant.
+			continue
+		}
+		if strings.TrimSpace(record.GetString("scope")) != "" {
+			// A scoped row belongs to a subject, not to the grid.
+			continue
+		}
+		permission := record.GetString("permission")
+		if permission == "" {
+			continue
+		}
+		groupID := record.GetString("group")
+		if groupID == "" {
+			continue
+		}
+		permissions[permission] = append(permissions[permission], groupID)
+	}
+
+	return permissions, nil
+}

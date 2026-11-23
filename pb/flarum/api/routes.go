@@ -66,6 +66,12 @@ func (s *Server) Mount(r *router.Router[*core.RequestEvent]) {
 	// --- groups --------------------------------------------------------
 	r.GET(api+"/groups", s.listGroupsHandler)
 	r.GET(api+"/groups/{id}", s.showGroupHandler)
+	// The reorder is registered for POST as well, because the frontend
+	// does not send a PATCH: it turns every method other than GET and
+	// POST into a POST with an `X-HTTP-Method-Override` header (see
+	// the core's `Application.request`). The handler resolves the
+	// effective method itself.
+	r.POST(api+"/groups/order", s.orderGroupsHandler)
 
 	// --- notifications -------------------------------------------------
 	r.GET(api+"/notifications", s.listNotificationsHandler)
@@ -73,8 +79,24 @@ func (s *Server) Mount(r *router.Router[*core.RequestEvent]) {
 	r.PATCH(api+"/notifications/{id}", s.readNotificationHandler)
 
 	// --- settings ------------------------------------------------------
-	r.GET(api+"/settings", s.listSettingsHandler)
-	r.POST(api+"/settings", s.saveSettingsHandler)
+	// The settings surface is NOT a JSON:API resource: upstream's
+	// admin application posts a bare settings map and expects an empty
+	// 204, so the handlers read a flat object rather than a resource
+	// document. See pb/flarum/api/handlers_admin.go.
+	//
+	// The reset is registered for POST as well as DELETE, for the same
+	// `X-HTTP-Method-Override` reason as the group reorder above. The
+	// POST route resolves the effective method itself, because
+	// PocketBase's router matches on the real method before any handler
+	// runs, so a POST-with-override never reaches the DELETE route.
+	r.POST(api+"/settings", s.settingsHandler)
+	r.DELETE(api+"/settings", s.deleteSettingsHandler)
+
+	// --- permissions ---------------------------------------------------
+	// The permission grid's save. The body names the permission and the
+	// groups that hold it, and the answer is an empty 204 — upstream's
+	// `SetPermissionController`.
+	r.POST(api+"/permission", s.setPermissionHandler)
 
 	// --- mail ----------------------------------------------------------
 	// The admin application's mail page fetches this on mount, so the

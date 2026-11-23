@@ -469,49 +469,6 @@ func (s *Server) readAllNotificationsHandler(e *core.RequestEvent) error {
 	return s.writeDocumentStatus(e, http.StatusNoContent, Document{})
 }
 
-// listSettingsHandler serves GET /api/settings.
-func (s *Server) listSettingsHandler(e *core.RequestEvent) error {
-	settings, err := s.repo.AllSettings()
-	if err != nil {
-		return fail(e, errInternal("The settings could not be loaded.", err))
-	}
-	return s.writeDocument(e, Document{Data: map[string]any{"settings": settings}})
-}
-
-// saveSettingsHandler serves POST /api/settings.
-func (s *Server) saveSettingsHandler(e *core.RequestEvent) error {
-	actor, err := s.requireAuth(e)
-	if err != nil {
-		return fail(e, err)
-	}
-
-	if err := sessionCSRF(e); err != nil {
-		return fail(e, errForbidden("The request could not be verified."))
-	}
-
-	if !actor.User.IsAdmin {
-		return fail(e, errForbidden("You are not allowed to change the settings."))
-	}
-
-	body, err := decodeBody(e)
-	if err != nil {
-		return fail(e, err)
-	}
-
-	settings, ok := body.Data.Attributes["settings"].(map[string]any)
-	if !ok {
-		return fail(e, errValidation("The settings could not be read."))
-	}
-
-	for key, value := range settings {
-		if err := s.repo.SaveSetting(key, value, actor.User.ID); err != nil {
-			return fail(e, errInternal("The settings could not be saved.", err))
-		}
-	}
-
-	return s.writeDocument(e, Document{Data: map[string]any{"settings": settings}})
-}
-
 // showGroupHandler serves GET /api/groups/{id}.
 func (s *Server) showGroupHandler(e *core.RequestEvent) error {
 	group, err := s.repo.FindGroup(e.Request.PathValue("id"))
@@ -568,7 +525,7 @@ func (s *Server) resetNotificationPreferencesHandler(e *core.RequestEvent) error
 	// header, because it rewrites every method other than GET and POST.
 	// The route is registered as `Any` for that reason, so the effective
 	// method is resolved here.
-	if err := requireMethod(e, http.MethodDelete); err != nil {
+	if err := RequireMethod(e, http.MethodDelete); err != nil {
 		return fail(e, err)
 	}
 

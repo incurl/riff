@@ -625,6 +625,17 @@ func (*Server) writeDocumentStatus(e *core.RequestEvent, status int, doc Documen
 	return e.JSON(status, doc)
 }
 
+// writeEmpty answers with a bodyless status.
+//
+// It is for the admin surface's command endpoints, which upstream
+// answers with `new EmptyResponse(204)`. A 204 carrying a body is not
+// what upstream sends, and `e.JSON` would serialise the zero Document as
+// `{"data":null}`.
+func (*Server) writeEmpty(e *core.RequestEvent, status int) error {
+	e.Response.WriteHeader(status)
+	return nil
+}
+
 // notFoundError builds a not-found apiError.
 func notFoundError(detail string) *apiError { return errNotFound(detail) }
 

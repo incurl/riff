@@ -19,13 +19,18 @@ import (
 // and the route does not match.
 const methodOverrideHeader = "X-HTTP-Method-Override"
 
-// effectiveMethod returns the method a request should be treated as.
+// EffectiveMethod returns the method a request should be treated as.
 //
 // A POST carrying the override header is treated as the method the
 // header names. Any other request keeps its own method: the override
 // only applies to a POST, because that is the only method the
 // frontend rewrites.
-func effectiveMethod(e *core.RequestEvent) string {
+//
+// It is exported because a PLUGIN route needs it too: PocketBase's
+// router matches on the real method before any handler runs, so a
+// plugin that answers a DELETE has to register its route for POST as
+// well and resolve the effective method itself.
+func EffectiveMethod(e *core.RequestEvent) string {
 	if e.Request.Method != http.MethodPost {
 		return e.Request.Method
 	}
@@ -39,13 +44,16 @@ func effectiveMethod(e *core.RequestEvent) string {
 	}
 }
 
-// requireMethod rejects a request whose effective method is not the
+// RequireMethod rejects a request whose effective method is not the
 // expected one.
 //
 // It answers 405 with an `Allow` header, which is what the method
 // mismatch deserves: the route exists, but not for this verb.
-func requireMethod(e *core.RequestEvent, expected string) error {
-	if effectiveMethod(e) == expected {
+//
+// It is exported for the plugins, which register their routes for both
+// verbs and resolve the effective method themselves.
+func RequireMethod(e *core.RequestEvent, expected string) error {
+	if EffectiveMethod(e) == expected {
 		return nil
 	}
 
