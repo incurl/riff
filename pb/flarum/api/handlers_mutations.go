@@ -406,6 +406,24 @@ func (s *Server) updateUserHandler(e *core.RequestEvent) error {
 		profile.Preferences = preferences
 	}
 
+	// The group membership is an ADMIN's business: it is what makes an
+	// account a moderator, and upstream manages it through the same
+	// user resource (`Schema\\Relationship\\ToMany::make('groups')` is
+	// writable there).
+	//
+	// Only an administrator may change it, and the IMPLICIT groups
+	// (guest, member) are not assignable: they are not memberships but
+	// the caller's state, and a row for them would let a caller claim
+	// a group they are not in.
+	if groups, ok := body.Data.Relationships["groups"]; ok {
+		if !actor.User.IsAdmin {
+			return fail(e, errForbidden("You are not allowed to change that account's groups."))
+		}
+		if err := s.setUserGroups(e, id, groups); err != nil {
+			return fail(e, err)
+		}
+	}
+
 	if err := s.repo.SaveUserProfile(profile); err != nil {
 		return fail(e, errInternal("The profile could not be saved.", err))
 	}
@@ -602,4 +620,86 @@ func (s *Server) resetNotificationPreferencesHandler(e *core.RequestEvent) error
 		return fail(e, errInternal("The profile could not be loaded.", err))
 	}
 	return s.writeDocument(e, Document{Data: s.userResourceWithGroups(user, user.Groups)})
+}
+
+// setUserGroups replaces an account's group membership.
+//
+// The membership is what makes an account a MODERATOR: the moderation
+// powers live in the moderator group, and an explicit group row is what
+// names the accounts that hold them.
+//
+// Only the EXPLICIT groups are assignable. The implicit groups (guest,
+// member) are the caller's state rather than a membership, so a row
+// for them would let an account claim a group it is not in — and the
+// guest group would grant it the guest's read-only powers twice over.
+func (s *Server) setUserGroups(_ *core.RequestEvent, userID string, relationship any) error {
+	assignable := map[string]bool{
+		domain.GroupModeratorID: true,
+		domain.GroupAdminID:     true,
+	}
+
+	// The request names the groups the account should have, so the
+	// current membership is replaced rather than added to.
+	wanted := map[string]bool{}
+	for _, entry := range relationshipIdentifiers(relationship) {
+		if !assignable[entry] {
+			return errForbidden("That group cannot be assigned.")
+		}
+		wanted[entry] = true
+	}
+
+	current, err := s.repo.UserGroupIDs(userID)
+	if err != nil {
+		return errInternal("The groups could not be loaded.", err)
+	}
+
+	for _, groupID := range current {
+		if assignable[groupID] && !wanted[groupID] {
+			if err := s.repo.RemoveUserFromGroup(userID, groupID); err != nil {
+				return errInternal("The groups could not be saved.", err)
+			}
+		}
+	}
+
+	for groupID := range wanted {
+		if err := s.repo.AddUserToGroup(userID, groupID); err != nil {
+			return errInternal("The groups could not be saved.", err)
+		}
+	}
+
+	return nil
+}
+
+// relationshipIdentifiers reads the group ids out of a relationship.
+//
+// The relationship is the raw decoded JSON, so it is read defensively:
+// a `groups` relationship is an object with a `data` member, and the
+// `data` member is either a list of identifiers or a single one.
+func relationshipIdentifiers(relationship any) []string {
+	ids := make([]string, 0)
+
+	object, ok := relationship.(map[string]any)
+	if !ok {
+		return ids
+	}
+
+	switch data := object["data"].(type) {
+	case []any:
+		for _, item := range data {
+			if identifier, ok := item.(map[string]any); ok {
+				if id, ok := identifier["id"].(string); ok {
+					ids = append(ids, id)
+				}
+			}
+		}
+	case map[string]any:
+		if id, ok := data["id"].(string); ok {
+			ids = append(ids, id)
+		}
+	default:
+		// A relationship the frontend does not recognise carries no
+		// identifiers, which leaves the membership unchanged.
+	}
+
+	return ids
 }

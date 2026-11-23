@@ -321,3 +321,67 @@ func TestForum_TheMemberGroupHoldsNoModerationPowers(t *testing.T) {
 		require.Empty(t, rows, "the member group must not hold %q", permission)
 	}
 }
+
+// TestForum_AnAdministratorCanAssignTheModeratorGroup pins that the
+// moderator group is reachable.
+//
+// The moderation powers live in that group, so without a way to assign
+// it they would be unreachable: the group would exist and no account
+// could ever be in it. Upstream manages the membership through the
+// same user resource (`Schema\\Relationship\\ToMany::make('groups')` is
+// writable there), and so does the forum.
+func TestForum_AnAdministratorCanAssignTheModeratorGroup(t *testing.T) {
+	app, handler := newTestForum(t)
+
+	moderator := testUser(t, app, "assigned_moderator")
+	moderatorToken, err := moderator.NewAuthToken()
+	require.NoError(t, err)
+
+	admin := testSuperuser(t, app)
+
+	recorder := do(t, handler, http.MethodPatch, "/forum/api/users/"+moderator.Id,
+		`{"data":{"type":"users","id":"`+moderator.Id+`","relationships":{"groups":{"data":[{"type":"groups","id":"`+domain.GroupModeratorID+`"}]}}}}`,
+		sessionCookies(admin[0].Value, admin[1].Value))
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	// The account is now a moderator, so it may edit a post that is
+	// not its own.
+	author := testUser(t, app, "moderated_author")
+	authorToken, err := author.NewAuthToken()
+	require.NoError(t, err)
+
+	recorder = do(t, handler, http.MethodPost, "/forum/api/discussions",
+		`{"data":{"type":"discussions","attributes":{"title":"Moderated","content":"body"}}}`,
+		sessionCookies(authorToken, "csrf-token"))
+	require.Equal(t, http.StatusCreated, recorder.Code, recorder.Body.String())
+	discussionID := resourceIDOf(t, recorder)
+
+	recorder = do(t, handler, http.MethodPost, "/forum/api/posts",
+		`{"data":{"type":"posts","attributes":{"content":"mine","discussion":"`+discussionID+`"}}}`,
+		sessionCookies(authorToken, "csrf-token"))
+	require.Equal(t, http.StatusCreated, recorder.Code, recorder.Body.String())
+	postID := resourceIDOf(t, recorder)
+
+	recorder = do(t, handler, http.MethodPatch, "/forum/api/posts/"+postID,
+		`{"data":{"type":"posts","attributes":{"content":"moderated"}}}`,
+		sessionCookies(moderatorToken, "csrf-token"))
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+}
+
+// TestForum_AMemberMayNotAssignGroups pins that the membership is an
+// administrator's business.
+//
+// It is what makes an account a moderator, so a member may not grant
+// it to itself.
+func TestForum_AMemberMayNotAssignGroups(t *testing.T) {
+	app, handler := newTestForum(t)
+
+	user := testUser(t, app, "group_grabber")
+	token, err := user.NewAuthToken()
+	require.NoError(t, err)
+
+	recorder := do(t, handler, http.MethodPatch, "/forum/api/users/"+user.Id,
+		`{"data":{"type":"users","id":"`+user.Id+`","relationships":{"groups":{"data":[{"type":"groups","id":"`+domain.GroupModeratorID+`"}]}}}}`,
+		sessionCookies(token, "csrf-token"))
+	require.Equal(t, http.StatusForbidden, recorder.Code, recorder.Body.String())
+}
