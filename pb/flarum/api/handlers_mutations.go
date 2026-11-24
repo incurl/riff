@@ -384,6 +384,15 @@ func (s *Server) updatePostHandler(e *core.RequestEvent) error {
 		return fail(e, errInternal("The post could not be updated.", err))
 	}
 
+	// The edit is announced, so a listener can react to it.
+	//
+	// Without this an edit reaches nobody: `EventPostEdited` was
+	// declared and never dispatched, and a plugin that keeps a derived
+	// set in step with a post's content (the Mentions plugin's mention
+	// set, for instance) would keep the set the edit REMOVED.
+	s.dispatch(e.Request.Context(), "forum.post.edited", actor.User.ID, updated.ID,
+		map[string]any{"discussion": updated.DiscussionID})
+
 	resource, err := s.postResource(e, updated)
 	if err != nil {
 		return fail(e, errInternal("The post could not be updated.", err))

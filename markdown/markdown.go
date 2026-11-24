@@ -98,6 +98,10 @@ type Option func(*config)
 type config struct {
 	enableTags     bool
 	enableMentions bool
+	// mentionHref builds the URL a mention links to. It is nil when the
+	// caller asked for the parser only, in which case a rendered
+	// mention is a span rather than a link.
+	mentionHref func(username string) string
 }
 
 // WithTagExtension enables #tag parsing.
@@ -108,9 +112,35 @@ func WithTagExtension() Option {
 }
 
 // WithMentionExtension enables @mention parsing.
+//
+// It enables the PARSER only. A mention node has no HTML renderer of
+// its own in this configuration, so a service that renders HTML with the
+// extension enabled DROPS every mention from the output — the node
+// carries no source segment, so nothing can be recovered from it.
+//
+// A caller that renders HTML should use [WithMentionLinks] instead: it
+// does both halves, and the text is never lost.
 func WithMentionExtension() Option {
 	return func(c *config) {
 		c.enableMentions = true
+	}
+}
+
+// WithMentionLinks enables @mention parsing AND renders the mentions as
+// links.
+//
+// It is the option a caller that renders HTML wants: the two halves
+// belong together, because enabling the parser without the renderer
+// deletes the mention from the output.
+//
+// The builder supplies the URL a mention links to, so the caller decides
+// where an account lives and this package decides only the markup. A
+// builder that returns an empty string renders the mention as a span
+// rather than a link.
+func WithMentionLinks(href func(username string) string) Option {
+	return func(c *config) {
+		c.enableMentions = true
+		c.mentionHref = href
 	}
 }
 
@@ -151,6 +181,20 @@ func NewService(opts ...Option) Service {
 			parser.WithAutoHeadingID(), // Generate heading IDs
 		),
 	}, markdownhtml.Options{}.GoldmarkOptions()...)
+
+	// The mention node renderer goes on the SAME instance that parses the
+	// content. A mention node carries no source segment, so a renderer
+	// that emits nothing DELETES the mention from the output — the
+	// parser and the renderer have to agree.
+	//
+	// The renderer is registered only when the caller asked for links:
+	// with [WithMentionExtension] the parser is enabled on its own, and
+	// a mention renders as a span rather than vanishing.
+	if cfg.enableMentions {
+		options = append(options, markdownhtml.MentionRendererOption(markdownhtml.MentionLinkOptions{
+			Href: cfg.mentionHref,
+		}))
+	}
 
 	md := goldmark.New(options...)
 
@@ -327,10 +371,15 @@ func (s *service) RenderMarkdown(content []byte) (string, error) {
 // is a table in the HTML.
 //
 // The tag and mention extensions are a caveat rather than a feature
-// here. They build AST nodes with no HTML node renderer, so enabling
-// them makes the HTML renderer emit nothing for the node and every
-// `#tag` and `@mention` in the body silently vanishes. A caller that
-// renders HTML should use the plain service.
+// here. The TAG extension builds AST nodes with no HTML node renderer,
+// so enabling it makes the HTML renderer emit nothing for the node and
+// every `#tag` in the body silently vanishes. A caller that renders HTML
+// should use the plain service.
+//
+// The MENTION extension is different: the mention node renderer is
+// registered on this instance whenever the extension is enabled, so a
+// mention renders as a link (with [WithMentionLinks]) or as a span
+// (with [WithMentionExtension]) — never as nothing.
 //
 // Raw HTML in the source is escaped. The caller that inserts the result
 // into a page does so as trusted HTML, so an unescaped script tag would

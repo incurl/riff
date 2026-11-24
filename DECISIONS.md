@@ -5,6 +5,89 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## A MENTION IS A REFERENCE, NOT A DECORATION (2026-11-25)
+
+The mentions plugin is the port of upstream `flarum/mentions`. The
+reference is upstream's `UserMentionedBlueprint`, its
+`post_mentions_user` table, and its `PostResourceFields`.
+
+**THE MENTION NODE HAD NO HTML RENDERER, SO A MENTION DELETED ITSELF
+FROM THE POST.** A mention node carries NO source segment, so an HTML
+renderer that emits nothing for it cannot recover the text: `"hey
+@alice"` rendered as `"hey "`. The forum therefore DISABLED the mention
+extension, and `markdown.RenderHTML` was documented as a trap. The
+renderer now exists (`markdown/html/mention_renderer.go`), and the
+markdown package grew ONE option that does both halves — the parser
+AND the node renderer — because enabling one without the other is what
+deleted the text. The default never drops it: with no href builder the
+mention renders as a `<span>`, which degrades the link but keeps the
+word. `markdown/html` still imports nothing but goldmark: the CALLER
+decides where an account lives (the forum passes its base path), and
+the package decides only the markup.
+
+**THE EVENT BUS WAS NEVER WIRED TO THE API SERVER.** `api.NewServer`
+read `Options.Bus` into nothing: the `bus` field was left nil, and
+`Server.dispatch` returns early on a nil bus. Every forum event — the
+`post.created`, the `discussion.created`, the `post.liked` — was
+dispatched into the void. The design's claim that "`EventPostEdited` is
+declared and never dispatched" was TRUE but understated: NO event
+reached a listener, and no plugin had ever subscribed, so nothing
+looked wrong. A plugin that keeps a derived set in step with a post's
+content would have silently done nothing.
+
+**THE NOTIFICATION KIND TRAVELS AS `contentType`, NOT `type`.** The
+vendored SPA looks a notification's component up by that name
+(`NotificationType.tsx` reads `notification.contentType()` and uses it
+as the key into `app.notificationComponents`). The serializer emitted
+the kind as `type`, so `contentType()` was `undefined` for EVERY
+notification, the component lookup missed, and the list rendered an
+EMPTY ROW — while the unread badge still counted it, because the badge
+reads `isRead`. The symptom is a badge with a blank list, and it
+affected the `postLiked` notification the likes plugin ships as much as
+a mention one. `contentType` and `content` are now published alongside
+the old names rather than in place of them: the rename is additive, so
+whatever consumed `type` keeps working.
+
+**THE COLLECTION IS THE AUTHORITY ON WHAT A NOTIFICATION MAY BE.** The
+`forum_notifications` collection's `type` is a `SelectField`, and a
+`SelectField` REFUSES a value it does not allow ("Invalid value
+…"), so a kind the collection does not carry cannot be written at all
+and the notification is silently lost. The collection allowed
+`mentionedInPost`; upstream's blueprint is `userMentioned`. The port
+uses upstream's spelling — the SPA's component lookup and upstream's
+catalogue agree on it — and the plugin's migration WIDENS the
+collection's allowed values, idempotently, so an instance that already
+has rows keeps them.
+
+**ONLY A MENTION THAT IS NEW IS NOTIFIED.** The notification is one per
+(post, mentioned account). A post that is edited, and edited again,
+must not fill the reader's inbox with copies of the same mention, so
+the sync reports which mentions are NEW and only those are notified.
+
+**A MENTION OF AN ACCOUNT THAT DOES NOT EXIST IS INERT.** It does not
+fail the save, it notifies nobody, and it stores nothing. The RENDERER
+still emits a link: the renderer cannot consult the database (the
+markdown package knows nothing about the forum), so the link is
+rendered regardless and the READ side decides whether the account
+exists. The alternative — an existence predicate supplied by the forum
+— is one more seam for one broken link.
+
+**THE `mentionedBy` RELATION IS A RELATION ON THE ACCOUNT.** It names
+the other places the post's AUTHOR was mentioned, so the lookup starts
+from the post's author and returns the mentioning posts, oldest first,
+limited to four (upstream's `PostResourceFields::$maxMentionedBy = 4`).
+The COUNT is over the posts the CALLER may see — it is upstream's
+`whereVisibleTo` — so the number cannot reveal a post the caller
+cannot read. A hidden post is visible to a moderator and to nobody
+else, and a post in a hidden discussion is hidden with it.
+
+`go test -run 'TestMentions_' ./pb/flarum/` pins the collection and
+its unique index, the stored mention set, the inert unknown username,
+the self-mention (stored, not notified), the replaced set after an
+edit, the notification and its kind, and the post resource fields.
+`go test ./markdown/...` pins the renderer: the mention is never
+dropped, in any configuration.
+
 ## A LIKE IS NOTIFIED, OR IT DID NOT HAPPEN (2026-11-24)
 
 The likes plugin is aligned with upstream `flarum/likes` (the Flarum

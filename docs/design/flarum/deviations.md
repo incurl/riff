@@ -207,13 +207,23 @@ Upstream Flarum formats a post's Markdown server-side and returns
   service parses with, so the HTML carries the same extensions (tables,
   strikethrough, task lists, linkify) as the AST.
 
-**riff's `#tag` and `@mention` extensions are not enabled.** They are
-riff's memos syntax (a `#tag` becomes a memo tag, an `@user` a memo
-mention), and they build AST nodes with no HTML node renderer — so
-enabling them makes the HTML renderer emit nothing for the node and
-every `#tag` and `@mention` in a post silently vanishes from the
-rendered body. In a Flarum post both are literal text, which is what
-upstream shows too.
+**riff's `#tag` extension is not enabled.** It is riff's memos syntax
+(a `#tag` becomes a memo tag), and it builds AST nodes with no HTML
+node renderer — so enabling it makes the HTML renderer emit nothing for
+the node and every `#tag` in a post silently vanishes from the rendered
+body. In a Flarum post a `#tag` is literal text, which is what upstream
+shows too.
+
+**The `@mention` extension IS enabled, and it is the one exception.**
+Upstream's `flarum/mentions` renders `@username` as a link to the
+account's profile, and the forum does the same. It is enabled through
+`markdown.WithMentionLinks`, which does BOTH halves — the parser AND
+the HTML node renderer — because a mention node carries no source
+segment: a renderer that emits nothing DELETES the mention from the
+rendered body. With no href builder the mention renders as a `<span>`
+rather than as nothing, so the text is never lost. The URL is the
+forum's own user route (`/u/:username`), so the link resolves inside
+the mount path. See the Mentions plugin.
 
 **Raw HTML is escaped.** The frontend inserts `contentHtml` as trusted
 HTML (`m.trust(contentHtml)` in flarum/forum/components/Comment.tsx),
@@ -370,7 +380,25 @@ Upstream's notification system is a per-extension blueprint registry
 with a large catalogue of notification types. The forum's
 `forum_notifications` collection carries the notification kinds the
 first-party plugins produce (`postLiked`, `discussionTagged`,
-`mentionedInPost`, `commentOnPost`).
+`mentionedInPost`, `commentOnPost`, `userMentioned`).
+
+**The kind is the `type` field, and the collection is the authority on
+what it may be.** A `SelectField` refuses a value it does not allow, so
+a kind the collection does not carry cannot be written at all. Each
+plugin that produces a kind its upstream blueprint names differently
+WIDENS the collection, idempotently — the Mentions plugin adds
+`userMentioned` (upstream's `UserMentionedBlueprint::getType()`) and
+keeps the `mentionedInPost` the collection already carried.
+
+**The kind is PUBLISHED as `contentType`, not as `type`.** The
+vendored SPA looks a notification's component up by that name
+(`NotificationType.tsx` reads `notification.contentType()` and uses it
+as the key into `app.notificationComponents`), so a notification that
+carries the kind under any other name renders an EMPTY ROW — while the
+unread badge still counts it, because the badge reads `isRead`. The
+symptom is a badge with a blank list. `contentType` and `content` are
+published ALONGSIDE the old names rather than in place of them, so the
+rename is additive.
 
 ## 16. The deferred items
 

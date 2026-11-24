@@ -43,6 +43,7 @@ package flarum
 import (
 	"context"
 	"log/slog"
+	"net/url"
 	"strings"
 
 	"github.com/pkg/errors"
@@ -215,15 +216,29 @@ func newModule(app core.App, opts Options) (*Module, error) {
 	// tables, strikethrough, task lists and linkify that Flarum core's
 	// formatter supports.
 	//
-	// The tag and mention extensions are deliberately NOT enabled. They
-	// are riff's memos syntax (a #tag becomes a memo tag, an @user a
-	// memo mention), and they build AST nodes with no HTML renderer, so
-	// enabling them would silently drop every `#tag` and `@mention`
-	// from the rendered body. In a forum post both are literal text,
+	// The tag extension is deliberately NOT enabled. It is riff's memos
+	// syntax (a #tag becomes a memo tag), and it builds AST nodes with
+	// no HTML renderer, so enabling it would silently drop every `#tag`
+	// from the rendered body. In a forum post a `#tag` is literal text,
 	// which is what Flarum core shows too.
 	//
+	// The mention extension IS enabled, and it is the one exception:
+	// upstream Flarum's `flarum/mentions` renders `@username` as a link
+	// to the account's profile, and the forum does the same. It is
+	// enabled through `WithMentionLinks`, which does BOTH halves — the
+	// parser and the HTML node renderer — because a mention node carries
+	// no source segment: a renderer that emits nothing DELETES the
+	// mention from the rendered body.
+	//
+	// The URL is the forum's own user route (`/u/:username`), so the
+	// link resolves inside the mount path.
+	//
 	// The service is stateless and safe to share across goroutines.
-	markdownService := markdown.NewService()
+	markdownService := markdown.NewService(
+		markdown.WithMentionLinks(func(username string) string {
+			return opts.BasePath + "/u/" + url.PathEscape(username)
+		}),
+	)
 
 	apiServer := api.NewServer(api.Options{
 		App:         app,
@@ -361,6 +376,7 @@ func (m *Module) boot(ctx context.Context) error {
 						ActorID:  req.ActorID,
 						RecordID: req.RecordID,
 						Type:     req.Type,
+						Can:      m.pluginCan(ctx, req.ActorID),
 					})
 					if err != nil {
 						return nil, err

@@ -130,6 +130,14 @@ type RelationshipRequest struct {
 	RecordID string
 	// Type is the JSON:API resource type.
 	Type string
+	// Can reports whether the actor may perform an action on a subject.
+	//
+	// It is the forum's permission service, so a plugin's relationship
+	// answers exactly what its own route answers. It is the same
+	// checker [AttributeRequest] carries: a relationship that filters
+	// by what the caller may see needs the same question answered for
+	// the same caller.
+	Can func(action, subjectType, subjectID string) bool
 }
 
 // RelationshipWriter contributes the WRITE side of a relationship.

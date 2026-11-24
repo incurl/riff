@@ -148,6 +148,7 @@ func NewServer(opts Options) *Server {
 		basePath:            basePath,
 		apiPath:             basePath + "/api",
 		logger:              logger,
+		bus:                 opts.Bus,
 		renderer:            opts.Renderer,
 		attributes:          map[string][]AttributeSource{},
 		relationships:       map[string][]RelationshipSource{},

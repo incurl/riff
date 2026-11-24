@@ -1,0 +1,17 @@
+/* A mention in a post's body. */
+
+/*
+ * The markup is upstream Flarum's: the server renders
+ * `<a class="UserMention" href="…">@name</a>`, and this stylesheet
+ * gives it the forum's link colour.
+ */
+.UserMention {
+  color: var(--link-color, #4a90e2);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.UserMention:hover,
+.UserMention:focus-visible {
+  text-decoration: underline;
+}

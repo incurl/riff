@@ -7,6 +7,7 @@ import (
 	"github.com/incurl/riff/pb/flarum/plugins/likes"
 	"github.com/incurl/riff/pb/flarum/plugins/lock"
 	"github.com/incurl/riff/pb/flarum/plugins/markdown"
+	"github.com/incurl/riff/pb/flarum/plugins/mentions"
 	"github.com/incurl/riff/pb/flarum/plugins/polls"
 	"github.com/incurl/riff/pb/flarum/plugins/statistics"
 	"github.com/incurl/riff/pb/flarum/plugins/sticky"
@@ -40,6 +41,7 @@ func defaultPlugins() []plugin.Plugin {
 		sticky.New(),
 		suspend.New(),
 		markdown.New(),
+		mentions.New(),
 		gamification.New(),
 		polls.New(),
 		statistics.New(),

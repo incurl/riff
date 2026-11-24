@@ -266,14 +266,30 @@ func postResource(post *domain.Post, canEdit, canDelete, canHide bool, extra map
 }
 
 // notificationResource renders a notification as a JSON:API resource.
+//
+// **THE KIND TRAVELS AS `contentType`, NOT `type`.** The vendored SPA
+// looks the component up by that name: `NotificationType.tsx` reads
+// `notification.contentType()` and uses it as the key into
+// `app.notificationComponents`. A notification that carries the kind
+// under any other name has an `undefined` contentType, the component
+// lookup misses, and the list renders an EMPTY ROW — while the unread
+// badge still counts it, because the badge reads `isRead`.
+//
+// The symptom is a badge with a blank list.
+//
+// `type` is kept alongside it: the forum's own API and the MCP surface
+// read it, and a field that is only renamed is a breaking change for
+// whatever consumed the old name.
 func notificationResource(notification *domain.Notification) Resource {
 	attributes := map[string]any{
-		"type":      notification.Type,
-		"subject":   notification.Subject,
-		"excerpt":   notification.Excerpt,
-		"readAt":    timestamp(notification.ReadAt),
-		"createdAt": timestamp(notification.CreatedAt),
-		"isRead":    notification.IsRead,
+		"contentType": notification.Type,
+		"content":     notification.Subject,
+		"type":        notification.Type,
+		"subject":     notification.Subject,
+		"excerpt":     notification.Excerpt,
+		"readAt":      timestamp(notification.ReadAt),
+		"createdAt":   timestamp(notification.CreatedAt),
+		"isRead":      notification.IsRead,
 	}
 
 	relationships := map[string]Relationship{

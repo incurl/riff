@@ -19,6 +19,8 @@ reused Flarum Mithril frontend.
   the Tags and Likes plugins as the worked examples.
 - [Known deviations](deviations.md) — where the forum deliberately
   differs from upstream Flarum.
+- [Mentions](mentions.md) — the `@username` mention design, and what
+  the implementation settled.
 
 ## The shape of the thing
 

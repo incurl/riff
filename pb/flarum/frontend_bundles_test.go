@@ -37,7 +37,7 @@ var shellScriptSrc = regexp.MustCompile(`<script[^>]*src="([^"]+)"`)
 // shellStylesheetHref matches the shell's stylesheet links.
 var shellStylesheetHref = regexp.MustCompile(`<link[^>]*href="([^"]+)"`)
 
-// requiredBundleAssets is what the three first-party plugins advertise.
+// requiredBundleAssets is what the first-party plugins advertise.
 //
 // They are named explicitly rather than read from the registry so the
 // test keeps failing if a plugin stops registering its bundle.
@@ -48,6 +48,8 @@ var requiredBundleAssets = []string{
 	"plugins/likes/style.css",
 	"plugins/uploads/forum.js",
 	"plugins/uploads/style.css",
+	"plugins/mentions/forum.js",
+	"plugins/mentions/style.css",
 }
 
 // coreFrontendAssetsUnderTest are the bundles the shell loads before the
