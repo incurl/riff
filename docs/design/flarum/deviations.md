@@ -161,6 +161,11 @@ Three front-end deviations are deliberate:
   dereferences `app.session.user!.email()` at boot, so an anonymous
   visitor served the shell would get a blank page instead of a sign-in
   prompt.
+  The administrator is **a member of the administrator group** (upstream
+  derives `isAdmin()` from the group alone), or a PocketBase superuser —
+  the union of the two, because riff's superusers are the instance's
+  operators. See DECISIONS.md "An administrator is a MEMBER OF THE ADMIN
+  GROUP, not a superuser".
 - **The admin shell is served with `Cache-Control: max-age=0,
   no-store`**, the same header upstream sends (its admin middleware
   carries `DisableBrowserCache`). The shell carries the boot payload,

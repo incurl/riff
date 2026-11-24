@@ -182,7 +182,17 @@ func newModule(app core.App, opts Options) (*Module, error) {
 	container := flarumcore.NewContainer()
 
 	repo := repository.New(app, registry)
-	sessions := session.NewResolver(app, opts.BasePath)
+	sessions := session.NewResolver(app, opts.BasePath).WithGroups(func(userID string) []string {
+		// The groups decide whether the caller administers the forum, so
+		// the resolver has to be able to read them. The lookup is
+		// deliberately forgiving: a failure to read the memberships
+		// leaves the caller with none, which is the safe direction.
+		groups, err := repo.UserGroupIDs(userID)
+		if err != nil {
+			return nil
+		}
+		return groups
+	})
 	permissions := domain.NewPermissionService(repo, busAdapter{bus})
 
 	assets, err := frontend.Load()

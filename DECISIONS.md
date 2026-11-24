@@ -5,6 +5,67 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## An administrator is a MEMBER OF THE ADMIN GROUP, not a superuser (2026-11-24)
+
+Upstream derives the administrator flag from **group membership** and
+from nothing else (`framework/core/src/User/User.php:527`):
+
+```php
+public function isAdmin(): bool
+{
+    return $this->groups->contains(Group::ADMINISTRATOR_ID);
+}
+```
+
+The admin routes are gated on that flag
+(`Admin/Middleware/RequireAdministrateAbility.php` is
+`RequestUtil::getActor($request)->assertAdmin()`), so in upstream the
+administrator group is the ONLY route to the admin panel.
+
+This port derived the flag from the **PocketBase collection** instead
+(`record.Collection().Name == core.CollectionNameSuperusers`), and read
+the account's groups into `User.Groups` without ever consulting them.
+That made the forum's administrator group (`forumgroupadmin`) a row
+that granted NOTHING: an operator promoted somebody into it through the
+admin's own user editor, the membership row was written, and the account
+still got **403 on `/forum/admin`** and "You are not allowed to do that"
+on every admin command.
+
+The flag is now the **union** of the two sources: a PocketBase superuser
+(the instance's operator) or membership in the administrator group. The
+superuser route is kept because riff's superusers are the instance's
+operators, which is the same idea as upstream's bootstrap administrator
+— upstream's install writes a `group_user` row for the administrator
+group, so its first administrator is an administrator by group
+membership.
+
+**THE GROUP LOOKUP IS A SEAM, NOT A DEPENDENCY.** The session resolver
+cannot import the repository (the arrow points one way, from the
+repository to the domain), so `session.Resolver` takes a `GroupLookup`
+function and the module supplies it
+(`pb/flarum/register.go`: `sessions.WithGroups(...)`). The lookup is
+deliberately forgiving — a failure to read the memberships leaves the
+caller with none, which is the safe direction.
+
+**AN ADMINISTRATOR MAY NOT REMOVE THEIR OWN ADMINISTRATOR GROUP.** This
+is upstream's `User\SelfDemotionGuard`, and it becomes load-bearing the
+moment the flag is group-derived: the administrator group is the only
+route to the admin panel, so an administrator who drops it locks
+themselves out — and, if they were the last one, locks EVERYONE out.
+Upstream draws the line exactly where this port draws it: demoting
+ANOTHER administrator is allowed, because the actor is still an
+administrator afterwards; only the self-demotion is refused.
+
+The guard reads the caller from the **resolved actor**, not from
+`e.Auth`: the forum resolves its callers from the session cookie or a
+bearer token, so `e.Auth` is nil for most of the requests that reach
+the handler (and reading it panicked).
+
+Upstream also gives the administrator group every permission outright
+(`Group::hasPermission()` returns true for `ADMINISTRATOR_ID`); this
+port's equivalent is `PermissionService.Can`'s `actor.IsAdmin`
+short-circuit, which now covers the group too.
+
 ## Post attachments are a PLUGIN, because upstream's core has none (2026-11-23)
 
 Upstream Flarum v2.0.0's **core has no attachment support at all**.

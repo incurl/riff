@@ -84,6 +84,13 @@ func (a Actor) IsAdmin() bool {
 	return a.User != nil && a.User.IsAdmin
 }
 
+// GroupLookup reports the groups an account belongs to.
+//
+// It is a seam rather than a direct dependency: this package must not
+// import the repository (the dependency arrow points one way, from the
+// repository to the domain), so the module supplies the lookup.
+type GroupLookup func(userID string) []string
+
 // Resolver resolves the caller of a request and manages the session
 // cookies.
 type Resolver struct {
@@ -96,11 +103,26 @@ type Resolver struct {
 	// secure marks the cookies as Secure. It follows the request's
 	// scheme, so a plain-HTTP development instance still works.
 	secure bool
+	// groups reports the groups an account belongs to. It is optional:
+	// without it an account's groups are unknown, and only a superuser
+	// is an administrator.
+	groups GroupLookup
 }
 
 // NewResolver returns a session resolver.
 func NewResolver(app core.App, basePath string) *Resolver {
 	return &Resolver{app: app, basePath: basePath}
+}
+
+// WithGroups returns a resolver that reads the caller's groups through
+// the given lookup.
+//
+// The groups are what decide whether the caller administers the forum
+// (see [Actor.IsAdmin]), so a resolver without this cannot tell a
+// member of the administrator group from an ordinary member.
+func (r *Resolver) WithGroups(lookup GroupLookup) *Resolver {
+	r.groups = lookup
+	return r
 }
 
 // Resolve determines the caller of a request.
@@ -164,7 +186,25 @@ func (r *Resolver) recordFromRequest(e *core.RequestEvent) *core.Record {
 // Only the permitted public fields are read. The account's groups come
 // from the forum's own membership table, not from a field on the shared
 // collection.
-func (*Resolver) userFromRecord(record *core.Record) (*domain.User, error) {
+//
+// The administrator flag is the one thing that is NOT read from the
+// record's collection alone. Upstream derives it from GROUP MEMBERSHIP
+// (`User::isAdmin()` is `$this->groups->contains(Group::ADMINISTRATOR_ID)`),
+// and the forum's administrator group is a real, assignable row
+// (`forumgroupadmin`) — an operator grants it to somebody through the
+// admin's own user editor, exactly as upstream's install writes a
+// `group_user` row for the administrator group.
+//
+// Deriving the flag from the PocketBase collection alone therefore made
+// every account an operator promoted into the administrator group a
+// non-administrator: the admin panel answered 403, and the admin
+// commands answered "You are not allowed to do that".
+//
+// A PocketBase superuser is still an administrator: the forum's
+// superusers are the instance's operators, and upstream's bootstrap
+// administrator is the same idea. So the flag is the union of the two
+// sources.
+func (r *Resolver) userFromRecord(record *core.Record) (*domain.User, error) {
 	username := strings.TrimSpace(record.GetString("username"))
 	if username == "" {
 		// A PocketBase account without a username is still a valid
@@ -183,6 +223,16 @@ func (*Resolver) userFromRecord(record *core.Record) (*domain.User, error) {
 
 	if avatar := record.GetString("avatar"); avatar != "" {
 		user.AvatarURL = avatar
+	}
+
+	// The administrator group, if the account is in it.
+	if r.groups != nil {
+		for _, groupID := range r.groups(record.Id) {
+			if groupID == domain.GroupAdminID {
+				user.IsAdmin = true
+				break
+			}
+		}
 	}
 
 	return user, nil

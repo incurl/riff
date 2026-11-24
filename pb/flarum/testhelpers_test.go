@@ -215,9 +215,14 @@ func attachTag(t *testing.T, app core.App, discussionID, tagID string) {
 // frontend server's admin gate), so a test that boots the admin app
 // needs an administrator's credentials.
 //
-// A superuser counts as one because the forum derives the admin flag
-// from the record's collection: `record.Collection().Name ==
-// core.CollectionNameSuperusers`.
+// A superuser counts as one because the forum's admin flag is the union
+// of the two sources: a PocketBase superuser (the record's collection)
+// and membership in the administrator group. See
+// `pb/flarum/session/session.go::userFromRecord`.
+//
+// A test that needs the GROUP route instead creates an ordinary account
+// and puts it in the administrator group — see
+// `pb/flarum/admin_group_test.go`.
 func testSuperuser(t *testing.T, app core.App) []*http.Cookie {
 	t.Helper()
 

@@ -9,6 +9,7 @@ import (
 
 	"github.com/incurl/riff/pb/flarum/domain"
 	"github.com/incurl/riff/pb/flarum/repository"
+	"github.com/incurl/riff/pb/flarum/session"
 )
 
 // requestBody is the JSON:API request document.
@@ -419,7 +420,7 @@ func (s *Server) updateUserHandler(e *core.RequestEvent) error {
 		if !actor.User.IsAdmin {
 			return fail(e, errForbidden("You are not allowed to change that account's groups."))
 		}
-		if err := s.setUserGroups(e, id, groups); err != nil {
+		if err := s.setUserGroups(actor, id, groups); err != nil {
 			return fail(e, err)
 		}
 	}
@@ -585,11 +586,20 @@ func (s *Server) resetNotificationPreferencesHandler(e *core.RequestEvent) error
 // powers live in the moderator group, and an explicit group row is what
 // names the accounts that hold them.
 //
+// It is also what makes an account an ADMINISTRATOR, because the
+// administrator flag is derived from the administrator group (see
+// `pb/flarum/session/session.go::userFromRecord`).
+//
+// The caller is passed in rather than read off the request event: the
+// forum resolves its callers from the session cookie or a bearer token,
+// not from PocketBase's `e.Auth`, so `e.Auth` is nil for most of the
+// requests that reach here.
+//
 // Only the EXPLICIT groups are assignable. The implicit groups (guest,
 // member) are the caller's state rather than a membership, so a row
 // for them would let an account claim a group it is not in — and the
 // guest group would grant it the guest's read-only powers twice over.
-func (s *Server) setUserGroups(_ *core.RequestEvent, userID string, relationship any) error {
+func (s *Server) setUserGroups(actor session.Actor, userID string, relationship any) error {
 	assignable := map[string]bool{
 		domain.GroupModeratorID: true,
 		domain.GroupAdminID:     true,
@@ -608,6 +618,26 @@ func (s *Server) setUserGroups(_ *core.RequestEvent, userID string, relationship
 	current, err := s.repo.UserGroupIDs(userID)
 	if err != nil {
 		return errInternal("The groups could not be loaded.", err)
+	}
+
+	// AN ADMINISTRATOR MAY NOT REMOVE THEIR OWN ADMINISTRATOR GROUP.
+	//
+	// The administrator group is what makes the account an administrator
+	// (upstream derives `isAdmin()` from it), so an administrator who
+	// drops it locks THEMSELVES out of the admin panel — and, if they
+	// were the last administrator, locks EVERYONE out, because the
+	// forum's only route to the admin panel is the admin group.
+	//
+	// Upstream's `User\SelfDemotionGuard` draws exactly this line, and
+	// it draws it the same way: demoting ANOTHER administrator is
+	// allowed, because the actor is still an administrator afterwards.
+	// Only the self-demotion is refused.
+	if actor.User != nil && userID == actor.User.ID && !wanted[domain.GroupAdminID] {
+		for _, groupID := range current {
+			if groupID == domain.GroupAdminID {
+				return errForbidden("You cannot remove your own administrator group.")
+			}
+		}
 	}
 
 	for _, groupID := range current {

@@ -362,11 +362,16 @@ regression if missed:
   live **inside** `pb/flarum` and use `pb/flarum/repository`.
 - **The superuser path** creates a `_superusers` record, not a `users`
   record. Upstream's admin DOES get a `group_user` row (for
-  `ADMINISTRATOR_ID`, `CreateAdminUser.php:38`). riff's admin status comes
-  from the collection (`pb/flarum/session/session.go:181`:
-  `record.Collection().Name == core.CollectionNameSuperusers`), so the
-  admin group row is unnecessary in riff — and upstream's admin group is
-  *not* the member group. Decide deliberately.
+  `ADMINISTRATOR_ID`, `CreateAdminUser.php:38`). **RESOLVED (2026-11-24):
+  riff's admin flag is now the union of the two sources** — a PocketBase
+  superuser AND membership in the administrator group — because upstream
+  derives `isAdmin()` from the group alone
+  (`User::isAdmin()` is `$this->groups->contains(Group::ADMINISTRATOR_ID)`).
+  Deriving it from the collection alone made `forumgroupadmin` a row that
+  granted nothing: a promoted account still got 403 on `/forum/admin`.
+  See DECISIONS.md "An administrator is a MEMBER OF THE ADMIN GROUP, not a
+  superuser". Upstream's admin group is *not* the member group, so the
+  member-group question below is unaffected.
 - **Backfill existing users.** A hook only covers *new* users. Existing
   accounts need a one-off backfill if the member row is to be the norm.
 - **`CanAsModerator` must filter `forumgroupmembr` out of

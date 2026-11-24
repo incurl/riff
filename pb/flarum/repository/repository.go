@@ -279,6 +279,19 @@ func (r *Repository) UsersByIDs(ids []string) (map[string]*domain.User, error) {
 }
 
 // userFromRecord projects a shared account onto a forum user.
+//
+// The administrator flag is the union of two sources: a PocketBase
+// superuser (the instance's operator) and membership in the
+// administrator GROUP.
+//
+// The group matters because upstream derives the flag from group
+// membership alone (`User::isAdmin()` is
+// `$this->groups->contains(Group::ADMINISTRATOR_ID)`), and the forum's
+// administrator group is a real, assignable row. An account an operator
+// promoted into that group is an administrator, so the flag has to say
+// so — otherwise the `isAdmin` attribute the user resource carries says
+// "no" for an administrator, and the frontend's own admin checks
+// (`app.session.user?.isAdmin()`) disagree with the server.
 func (r *Repository) userFromRecord(record *core.Record) (*domain.User, error) {
 	username := strings.TrimSpace(record.GetString("username"))
 	if username == "" {
@@ -313,6 +326,12 @@ func (r *Repository) userFromRecord(record *core.Record) (*domain.User, error) {
 	groups, err := r.UserGroupIDs(record.Id)
 	if err == nil {
 		user.Groups = groups
+		for _, groupID := range groups {
+			if groupID == domain.GroupAdminID {
+				user.IsAdmin = true
+				break
+			}
+		}
 	}
 
 	return user, nil

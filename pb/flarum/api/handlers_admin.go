@@ -40,13 +40,16 @@ import (
 // the forum.
 //
 // Upstream's controllers call `RequestUtil::getActor($request)->assertAdmin()`,
-// which is `assertCan('administrate')`. The forum's administrator is the
-// account whose PocketBase record lives in the `_superusers` collection
-// (see `pb/flarum/session/session.go::userFromRecord`), so the check is
-// the collection test rather than a permission row: upstream derives
-// `isAdmin()` from the administrator GROUP membership, and this port
-// derives it from the collection, which is the same fact by another
-// route.
+// which is `assertCan('administrate')`.
+//
+// The flag is the union of two sources: a PocketBase superuser (the
+// instance's operator) and membership in the administrator GROUP.
+// Upstream derives `isAdmin()` from the group alone
+// (`User::isAdmin()` is `$this->groups->contains(Group::ADMINISTRATOR_ID)`),
+// and this port's administrator group is a real, assignable row — so the
+// group is what an operator grants to make somebody an administrator.
+//
+// See `pb/flarum/session/session.go::userFromRecord` for the derivation.
 //
 // The CSRF check comes after the actor check, and both come before the
 // body is read, so an unauthenticated caller learns nothing about the
