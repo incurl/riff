@@ -52,6 +52,21 @@ func (s *Server) showDiscussionHandler(e *core.RequestEvent) error {
 		return fail(e, errNotFound("That discussion does not exist."))
 	}
 
+	// `?bySlug=true` means the path segment is the discussion's SLUG,
+	// not its record id. The frontend asks for it that way because the
+	// discussion URL is built from the slug
+	// (`app.routes.discussion` uses `discussion.slug()`), and the slug
+	// is what the reader sees.
+	//
+	// Upstream resolves it the same way (`DiscussionResource::find`:
+	// `fromSlug($id, $actor)` when `bySlug` is set, `findOrFail($id)`
+	// otherwise), and the slug carries the id in its first segment —
+	// which is what makes it unique, since two discussions may share a
+	// title.
+	if wantsSlugLookup(e) {
+		id = DiscussionIDFromSlug(id)
+	}
+
 	discussion, err := s.repo.FindDiscussion(id)
 	if err != nil {
 		return fail(e, notFoundError("That discussion does not exist."))

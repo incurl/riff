@@ -132,7 +132,7 @@ func groupResource(group *domain.Group) Resource {
 func discussionResource(discussion *domain.Discussion, canReply, canRename, canHide, canDelete, canTag bool, tagIDs []string) Resource {
 	attributes := map[string]any{
 		"title":            discussion.Title,
-		"slug":             discussion.Slug,
+		"slug":             DiscussionSlug(discussion.ID, discussion.Slug),
 		"createdAt":        timestamp(discussion.CreatedAt),
 		"lastPostedAt":     timestamp(discussion.LastPostedAt),
 		"lastPostNumber":   discussion.LastPostNumber,

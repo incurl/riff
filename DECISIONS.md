@@ -5,6 +5,61 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## THE DISCUSSION SLUG CARRIES THE ID, because the URL is built from it (2026-11-24)
+
+A discussion that had just been posted could not be opened:
+
+    GET https://…/forum/api/discussions/test?bySlug=true&page[near]=0 404 (Not Found)
+
+The path segment is the discussion's SLUG, not its id — the `bySlug=true`
+flag says so — and the server treated it as an id.
+
+**THE FRONTEND NAVIGATES BY SLUG.** The route helper uses
+`discussion.slug()` (framework/core/js/src/forum/routes.ts:58):
+
+    discussion: (discussion: Discussion, near?: number) => {
+      return app.route(near && near !== 1 ? 'discussion.near' : 'discussion', {
+        id: discussion.slug(),
+        near: near && near !== 1 ? near : undefined,
+      });
+    },
+
+and the discussion page asks the API for it with `bySlug=true`
+(`DiscussionPage.tsx:176,257`):
+
+    discussionPromise = app.store.find<Discussion>('discussions', m.route.param('id'), this.requestParams());
+
+so the request is `GET /api/discussions/<slug>?bySlug=true`, and the
+server has to resolve a SLUG there. Upstream resolves it the same way
+(`DiscussionResource::find`):
+
+    if (Arr::get($context->request->getQueryParams(), 'bySlug', false)) {
+        $discussion = $this->slugManager->forResource(Discussion::class)->fromSlug($id, $actor);
+    } else {
+        $discussion = $this->query($context)->findOrFail($id);
+    }
+
+**THE USER ROUTE ALREADY DID THIS** (`showUserHandler` honours
+`wantsSlugLookup`), and the DISCUSSION ROUTE DID NOT. The `bySlug` flag
+was simply ignored for discussions.
+
+**THE SLUG MUST CARRY THE ID.** Upstream's slug is the id, then the
+title's slug (`IdWithTransliteratedSlugDriver::toSlug` is
+`$instance->id . (trim($instance->slug) ? '-' . $instance->slug : '')`),
+and `fromSlug` reads the id back by taking the part BEFORE the first
+dash.
+
+That is not decoration: **the title's slug alone is not unique.** Two
+discussions may share a title, and the slug column is not unique
+either. Leading with the id is what makes the published slug name
+exactly one discussion, and taking the first segment is what reads it
+back. riff published the bare title slug ("test"), which resolved to
+nothing.
+
+So the slug is now `{id}-{title-slug}`, and the handler reads the id
+back out of it when `bySlug` is set. A slug with no dash is taken as a
+bare id, so a client that asks for a discussion by its id still works.
+
 ## THE FORUM DOCUMENT IS BUILT IN ONE PLACE, because two copies DRIFTED (2026-11-24)
 
 The "New Discussion" button was disabled for every signed-in account.

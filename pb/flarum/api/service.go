@@ -41,6 +41,48 @@ func slugify(title string) string {
 	return slug
 }
 
+// DiscussionSlug builds the slug the API publishes for a discussion.
+//
+// It is upstream's format: the id, then the title's slug
+// (`IdWithTransliteratedSlugDriver::toSlug` is
+// `$instance->id . (trim($instance->slug) ? '-' . $instance->slug : ”)`).
+//
+// **THE ID IS PART OF THE SLUG, and that is what makes it unique.** The
+// title's slug alone is not: two discussions may share a title, and
+// upstream's slug column is not unique either. Upstream resolves the
+// ambiguity by LEADING with the id and reading it back by taking the
+// part before the first dash (`fromSlug` splits on `-` and uses the
+// first segment).
+//
+// The frontend builds the discussion URL from this attribute
+// (`app.routes.discussion` uses `discussion.slug()`), so publishing
+// anything else makes the URL unresolvable: the request comes back as
+// `GET /api/discussions/<slug>?bySlug=true`, and the server has to be
+// able to find the discussion from it.
+func DiscussionSlug(id, titleSlug string) string {
+	if titleSlug == "" {
+		return id
+	}
+	return id + "-" + titleSlug
+}
+
+// DiscussionIDFromSlug reads the id out of a discussion slug.
+//
+// It is the inverse of [DiscussionSlug] and mirrors upstream's
+// `fromSlug`: the id is the part BEFORE the first dash.
+//
+// A slug with no dash is taken to be a bare id, so a client that asks
+// for a discussion by its id still works.
+func DiscussionIDFromSlug(slug string) string {
+	if slug == "" {
+		return ""
+	}
+	if index := strings.Index(slug, "-"); index > 0 {
+		return slug[:index]
+	}
+	return slug
+}
+
 // createDiscussion creates a discussion and its first post.
 //
 // The two are written together: a discussion without a first post would
