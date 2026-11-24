@@ -7,7 +7,7 @@ repo. If a fact here conflicts with source files or CI config, trust the source 
 
 riff is a self-hosted PocketBase backend serving memos, patches, samples, and spaces for PO-33 sampler creators.
 
-- Backend: Go 1.27.0, PocketBase v0.40.5, Connect RPC, gRPC-Gateway, Protocol Buffers. The Go binary is `main.go` at the repo root (no `cmd/`).
+- Backend: Go 1.27.0, PocketBase v0.40.6, Connect RPC, gRPC-Gateway, Protocol Buffers. The Go binary is `main.go` at the repo root (no `cmd/`).
 - Frontend: React 19, TypeScript 7, Vite 8, Tailwind CSS v4, React Query v5. The Memos SPA is built by `pnpm release` (Vite) into `server/frontend/dist/` and embedded into the riff binary at compile time via `//go:embed` in `server/frontend/embed.go`. PocketBase serves it at `/` (with `/_/` reserved for the admin UI).
 - Wiki front end: LeafWiki's own React SPA (`ui/leafwiki-ui` upstream), built by `scripts/build_wiki_spa.sh` into `pb/leafwiki/ui/dist/` and embedded via `//go:embed all:ui` in `pb/leafwiki/ui_embed.go`. PocketBase serves it at `/wiki`.
 - Storage: PocketBase owns the DB layer (SQLite by default). There is no per-driver SQL; collections are defined in `pb/migrations/*.go` and registered via a blank import from `main.go`.
