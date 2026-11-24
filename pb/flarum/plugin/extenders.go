@@ -187,6 +187,8 @@ type Extenders struct {
 	permissions []PermissionHandler
 	// assets collects the plugin's frontend asset declarations.
 	assets []AssetBundle
+	// locales collects the plugin's language-pack declarations.
+	locales []LocaleBundle
 }
 
 // NameResolver resolves logical model names to physical collection names.
@@ -215,6 +217,34 @@ type AssetBundle struct {
 	Admin string
 	// CSS is the stylesheet path, relative to the asset root.
 	CSS string
+	// Version is the plugin version, used for cache busting.
+	Version string
+}
+
+// LocaleBundle is a plugin's language-pack declaration.
+//
+// A language pack is a catalogue, not a code bundle: the SPA loads exactly
+// one locale bundle per frontend (the active locale's), and that bundle
+// carries the core's translations for that language as well as the
+// extensions'. So a pack declares only the files it adds to the
+// `forum-<code>.js` / `admin-<code>.js` pair.
+//
+// It mirrors the `extra.flarum-locale` block of an upstream language
+// pack's composer.json, which is what tells Flarum the extension provides
+// a locale rather than code.
+type LocaleBundle struct {
+	// PluginID is the owning plugin.
+	PluginID string
+	// Code is the locale code, e.g. "zh-Hans". It is what the host passes
+	// as the active locale and what the asset name carries.
+	Code string
+	// Title is the locale's name in its own language, e.g. "简体中文". It
+	// is what the frontend's locale list shows.
+	Title string
+	// Forum is the forum-app locale bundle, relative to the asset root.
+	Forum string
+	// Admin is the admin-app locale bundle, relative to the asset root.
+	Admin string
 	// Version is the plugin version, used for cache busting.
 	Version string
 }
@@ -264,6 +294,11 @@ func (e *Extenders) AddAsset(bundle AssetBundle) {
 	e.assets = append(e.assets, bundle)
 }
 
+// AddLocale declares a language pack.
+func (e *Extenders) AddLocale(bundle LocaleBundle) {
+	e.locales = append(e.locales, bundle)
+}
+
 // Routes returns the declared routes.
 func (e *Extenders) Routes() []RouteDef { return e.routes }
 
@@ -284,6 +319,9 @@ func (e *Extenders) Permissions() []PermissionHandler { return e.permissions }
 
 // Assets returns the declared asset bundles.
 func (e *Extenders) Assets() []AssetBundle { return e.assets }
+
+// Locales returns the declared language packs.
+func (e *Extenders) Locales() []LocaleBundle { return e.locales }
 
 // Migrate runs a plugin's migrations.
 //

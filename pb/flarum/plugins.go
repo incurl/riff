@@ -2,6 +2,7 @@ package flarum
 
 import (
 	"github.com/incurl/riff/pb/flarum/plugin"
+	"github.com/incurl/riff/pb/flarum/plugins/chinese"
 	"github.com/incurl/riff/pb/flarum/plugins/likes"
 	"github.com/incurl/riff/pb/flarum/plugins/tags"
 	"github.com/incurl/riff/pb/flarum/plugins/uploads"
@@ -18,10 +19,16 @@ import (
 // attachment support at all — attachments moved to the `fof/upload`
 // extension — so the forum implements them as a plugin that mirrors
 // that extension's contract.
+//
+// Chinese is the fourth and a different shape: a language pack is a
+// catalogue, not a feature. It is registered by default because a
+// translation that has to be installed explicitly is a translation
+// nobody uses, and it costs nothing when the active locale is `en`.
 func defaultPlugins() []plugin.Plugin {
 	return []plugin.Plugin{
 		tags.New(),
 		likes.New(),
 		uploads.New(),
+		chinese.New(),
 	}
 }

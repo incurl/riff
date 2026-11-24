@@ -83,6 +83,14 @@ type Options struct {
 	// Likes plugins are added by default unless Plugins is set
 	// explicitly.
 	Plugins []plugin.Plugin
+	// Locale is the active locale, e.g. "en" or "zh-Hans". An unset or
+	// unknown value falls back to "en", so a typo never leaves the forum
+	// with no catalogue at all.
+	//
+	// The value selects which `forum-<locale>.js` / `admin-<locale>.js`
+	// pair the shell loads: the core ships `en`, and a language-pack
+	// plugin declares the others.
+	Locale string
 	// DisableDefaultPlugins turns off the first-party plugins. It exists
 	// so a test can exercise the core alone.
 	DisableDefaultPlugins bool

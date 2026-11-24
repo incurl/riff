@@ -64,6 +64,14 @@ func (m *Module) mount(r *router.Router[*core.RequestEvent]) {
 	})
 
 	// --- the frontend --------------------------------------------------
+	// The advertised bundles are validated before the shell emits them.
+	// The shell writes a <script>/<link> per registered bundle whether or
+	// not the file was embedded, and a tag for a file that is not there
+	// is a SILENT 404: the page renders, the console stays empty, and the
+	// plugin's UI simply never appears. That is what "the tags and likes
+	// are not visible" looks like, so the build names the missing file.
+	m.warnMissingAssets()
+
 	frontendServer := frontend.NewServer(frontend.ServerOptions{
 		Assets:   m.assets,
 		BasePath: m.opts.BasePath,
@@ -147,6 +155,186 @@ func (m *Module) bundles() []frontend.Bundle {
 	return bundles
 }
 
+// coreFrontendAssets are the bundles the shell emits before the plugins'.
+//
+// The locale bundles are NOT listed here: their names depend on the
+// active locale, so they are resolved by [Module.localeAssetNames] and
+// reported by the same check.
+//
+// They are listed so a PARTIAL build is reported. `ui/dist` is build
+// output and is gitignored, so a tree that carries only some of it is
+// easy to produce (a core-only rebuild, a stale directory kept between
+// builds). The shell would then reference files that are not embedded.
+var coreFrontendAssets = []string{
+	"forum.js", "forum.css",
+	"admin.js", "admin.css",
+}
+
+// warnMissingAssets logs every advertised frontend asset the embedded
+// tree does not carry.
+//
+// The shell emits a script/link tag per registered bundle, and a tag for
+// a file that is not embedded is a silent 404: nothing reaches the
+// console and the plugin's UI never appears. The logs are therefore the
+// only place the cause is visible, and they are written ONCE (from
+// mount) because RenderBootShell runs per request.
+//
+// It is skipped entirely when no build was dropped in: that is the
+// documented fallback-shell case, and warning about every asset in it
+// would bury the real signal.
+func (m *Module) warnMissingAssets() {
+	if m.assets == nil || !m.assets.HasBuild() {
+		return
+	}
+
+	for _, name := range coreFrontendAssets {
+		if !m.assets.Exists(name) {
+			m.logger.Warn("forum: the embedded frontend does not carry a core asset", "asset", name)
+		}
+	}
+
+	for _, bundle := range m.bundles() {
+		for _, asset := range []string{bundle.Forum, bundle.Admin, bundle.CSS} {
+			if asset == "" {
+				continue
+			}
+			if !m.assets.Exists(strings.TrimPrefix(asset, "/")) {
+				m.logger.Warn(
+					"forum: a plugin's frontend asset is not embedded, so its UI will not load",
+					"plugin", bundle.ID,
+					"asset", asset,
+				)
+			}
+		}
+	}
+
+	// The locale bundles are per-language, so they are checked for EVERY
+	// declared locale rather than only the active one: a missing one is a
+	// build fault, and it should surface at startup even on an instance
+	// that currently runs in another language.
+	for _, bundle := range m.localeBundles() {
+		for _, asset := range []string{bundle.Forum, bundle.Admin} {
+			if asset == "" {
+				continue
+			}
+			if !m.assets.Exists(strings.TrimPrefix(asset, "/")) {
+				m.logger.Warn(
+					"forum: a language pack's catalogue is not embedded, so that locale will render raw keys",
+					"plugin", bundle.PluginID,
+					"locale", bundle.Code,
+					"asset", asset,
+				)
+			}
+		}
+	}
+}
+
+// localeBundles returns the language packs the plugins declared, in
+// dependency order.
+func (m *Module) localeBundles() []plugin.LocaleBundle {
+	bundles := make([]plugin.LocaleBundle, 0)
+	for _, id := range m.plugins.Order() {
+		extenders := m.plugins.PluginExtenders()[id]
+		if extenders == nil {
+			continue
+		}
+		bundles = append(bundles, extenders.Locales()...)
+	}
+	return bundles
+}
+
+// defaultLocale is the locale the core ships a catalogue for.
+//
+// The core's own compile step (`packages/core/build-locale.cjs`) produces
+// `forum-en.js` and `admin-en.js`, so it is always available and is the
+// fallback for an unset or unknown request.
+const defaultLocale = "en"
+
+// defaultLocaleTitle is the name the built-in locale is listed under.
+const defaultLocaleTitle = "English"
+
+// locales returns the available locales as code -> title.
+//
+// The built-in English catalogue is always present; a language pack adds
+// its own entry. The map is what the boot payload's `locales` carries and
+// what the frontend's locale list shows.
+func (m *Module) locales() map[string]string {
+	out := map[string]string{defaultLocale: defaultLocaleTitle}
+	for _, bundle := range m.localeBundles() {
+		if bundle.Code == "" || bundle.Code == defaultLocale {
+			continue
+		}
+		title := bundle.Title
+		if title == "" {
+			title = bundle.Code
+		}
+		out[bundle.Code] = title
+	}
+	return out
+}
+
+// activeLocale returns the locale the shell should load.
+//
+// An unset value means English. A value with no catalogue behind it also
+// means English, for two separate reasons:
+//
+//   - no language pack declares it (a typo in `RIFF_FORUM_LOCALE`);
+//   - one declares it but its bundle was never built or staged.
+//
+// Both would otherwise render raw translation keys
+// (`core.forum.header.back_to_index_tooltip`) in the UI, which reads as a
+// frontend bug rather than a configuration or build one. warnMissingAssets
+// still names the missing file, so the degradation is visible in the logs
+// rather than silent.
+func (m *Module) activeLocale() string {
+	requested := strings.TrimSpace(m.opts.Locale)
+	if requested == "" || requested == defaultLocale {
+		return defaultLocale
+	}
+
+	if _, ok := m.locales()[requested]; !ok {
+		return defaultLocale
+	}
+
+	// Declared but not embedded: the catalogue the UI needs is not there.
+	if name := m.localeAssetName(requested, false); name == "" || !m.assets.Exists(name) {
+		return defaultLocale
+	}
+
+	return requested
+}
+
+// localeAssetName returns the locale bundle for one frontend.
+//
+// The core ships its own catalogue for `en`; any other locale comes from a
+// language pack, which declares the two file names. The path is returned
+// as declared (relative to the asset root) because a language pack may put
+// it anywhere — `plugins/chinese/forum-zh-Hans.js` here.
+//
+// An empty string means no bundle is declared for that frontend, which the
+// caller treats as "nothing to load".
+func (m *Module) localeAssetName(locale string, admin bool) string {
+	if locale == defaultLocale {
+		if admin {
+			return "admin-" + defaultLocale + ".js"
+		}
+		return "forum-" + defaultLocale + ".js"
+	}
+
+	for _, bundle := range m.localeBundles() {
+		if bundle.Code != locale {
+			continue
+		}
+		path := bundle.Forum
+		if admin {
+			path = bundle.Admin
+		}
+		return strings.TrimPrefix(path, "/")
+	}
+
+	return ""
+}
+
 // RenderBootShell renders the SPA shell.
 //
 // It is the frontend package's BootRenderer implementation: it builds
@@ -182,10 +370,23 @@ func (m *Module) RenderBootShell(e *core.RequestEvent, admin bool) ([]byte, erro
 func (m *Module) scriptURLs(admin bool) []string {
 	base := m.opts.BasePath + "/assets/"
 	urls := []string{}
+
+	entry := "forum.js"
 	if admin {
-		urls = append(urls, base+"admin.js", base+"admin-en.js")
-	} else {
-		urls = append(urls, base+"forum.js", base+"forum-en.js")
+		entry = "admin.js"
+	}
+	urls = append(urls, base+entry)
+
+	// The active locale's catalogue, right after the entry: `trans()` is
+	// called while the entry registers, and the bundle is what stops the
+	// keys rendering raw.
+	//
+	// It is resolved through the locale rather than hardcoded: the core
+	// ships `en`, and a language pack ships the other codes. Only the
+	// active locale's pair is loaded — a second catalogue would merge its
+	// keys over the first.
+	if name := m.localeAssetName(m.activeLocale(), admin); name != "" && m.assets.Exists(name) {
+		urls = append(urls, base+name)
 	}
 
 	for _, bundle := range m.bundles() {
@@ -194,6 +395,13 @@ func (m *Module) scriptURLs(admin bool) []string {
 			path = bundle.Admin
 		}
 		if path == "" {
+			continue
+		}
+		// A bundle the embedded tree does not carry is skipped rather
+		// than emitted: the tag would 404 silently and the plugin's UI
+		// would never appear, with nothing in the console to say why.
+		// warnMissingAssets names the file in the logs.
+		if !m.assets.Exists(strings.TrimPrefix(path, "/")) {
 			continue
 		}
 		urls = append(urls, base+strings.TrimPrefix(path, "/")+"?v="+bundle.Version)
@@ -226,6 +434,11 @@ func (m *Module) styleURLs(admin bool) []string {
 		if bundle.CSS == "" {
 			continue
 		}
+		// Same rule as the scripts: a stylesheet that was not embedded
+		// is skipped rather than emitted as a dead link.
+		if !m.assets.Exists(strings.TrimPrefix(bundle.CSS, "/")) {
+			continue
+		}
 		urls = append(urls, base+strings.TrimPrefix(bundle.CSS, "/")+"?v="+bundle.Version)
 	}
 	return urls
@@ -252,8 +465,8 @@ func (m *Module) bootPayload(e *core.RequestEvent, admin bool) (frontend.BootPay
 	payload := frontend.BootPayload{
 		Resources:      []any{},
 		Session:        frontend.BootSession{},
-		Locale:         "en",
-		Locales:        map[string]string{"en": "English"},
+		Locale:         m.activeLocale(),
+		Locales:        m.locales(),
 		AssetsRevision: m.assets.Revision(),
 	}
 

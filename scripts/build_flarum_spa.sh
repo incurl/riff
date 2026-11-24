@@ -89,4 +89,22 @@ for plugin in $PLUGINS; do
   fi
 done
 
+# Build and stage the language packs.
+#
+# A language pack is a catalogue, not a webpack extension: it has no
+# js/webpack.config.cjs, so it is not part of the loop above. Its build
+# compiles locale/*.yml into the two `app.translator.addTranslations(…)`
+# scripts the SPA loads, named after the locale (forum-zh-Hans.js and
+# admin-zh-Hans.js). The Go plugin declares those paths, so a missing
+# build here is a locale that renders raw translation keys.
+for pack in chinese; do
+  pack_dir="$ROOT/pb/flarum/plugins/$pack"
+
+  echo "Building the $pack language pack"
+  node "$pack_dir/build-locale.cjs"
+
+  mkdir -p "$TARGET/plugins/$pack"
+  cp "$pack_dir/dist/"*.js "$TARGET/plugins/$pack/"
+done
+
 echo "The forum front end is staged in $TARGET"

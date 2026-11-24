@@ -5,6 +5,93 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## A LANGUAGE PACK IS A PLUGIN, AND AN UNKNOWN LOCALE FALLS BACK TO ENGLISH (2026-11-24)
+
+`flarum-lang/chinese-simplified` is implemented as `pb/flarum/plugins/chinese/`,
+the reference implementation of a LOCALE plugin. It is a plugin rather
+than a core feature for the same reason upstream models it as an
+extension: a translation is a catalogue, not behaviour, and the set of
+languages an instance carries should be visible where every other
+feature is.
+
+**IT DECLARES A LOCALE, NOT A CODE BUNDLE.** `plugin.LocaleBundle`
+(`AddLocale`) mirrors the `extra.flarum-locale` block of an upstream
+language pack's composer.json: a code, a title and the two catalogue
+file names. A language pack has no `flarum.extensions` entry — the SPA
+loads exactly ONE catalogue per frontend, and that file carries the
+core's translations for the language as well as the extensions'.
+
+**ONLY THE ACTIVE LOCALE IS LOADED.** `scriptURLs` used to hardcode
+`forum-en.js`. It now resolves `localeAssetName(activeLocale, admin)`.
+Emitting both catalogues would merge the English keys over the Chinese
+ones — `addTranslations` is additive, and the later call wins — so the
+shell would look half-translated in a way that is very hard to attribute.
+
+**AN UNKNOWN LOCALE FALLS BACK TO ENGLISH.** `Options.Locale`
+(`RIFF_FORUM_LOCALE`) is checked against the DECLARED set. A typo must not
+request `forum-fr.js` and leave the UI rendering
+`core.forum.header.back_to_index_tooltip`, where the failure looks like a
+frontend bug rather than a configuration one. Nothing is guessed: `en` is
+always present because the core compiles it.
+
+**THE COMPILER RULES ARE SHARED, NOT COPIED.** `packages/core/build-locale.cjs`
+and the pack's build both call `locale-compile.cjs`. The `=> key`
+reference resolution is the load-bearing half: the catalogue has ~200 of
+them, and leaving them unresolved renders the literal `=> core.ref.foo`.
+The core's own output was verified byte-identical after the extraction, so
+the refactor changed no shipped bytes.
+
+**ONLY WHAT THIS PORT SERVES IS VENDORED.** Upstream carries catalogues
+for several hundred extensions. Copying them would make the tree claim
+support for extensions riff does not have — the same trap as an
+`AssetBundle` naming a bundle nothing builds. `core`, `validation`,
+`flarum-tags`, `flarum-likes` and `fof-upload` are vendored; adding one is
+a dropped `.yml` and a rebuild.
+
+`go test -run 'TestLocale_' ./pb/flarum/` pins the declared locale, the
+shell's catalogue selection (including that the English one is NOT also
+loaded), the admin/forum split, the fallback, the boot payload and the
+served asset. The asset test asserts on CJK characters in the VALUES, not
+the keys: an English catalogue under a Chinese file name would pass a
+key-only check and translate nothing. `npm test` in `pb/flarum/frontend`
+pins the compiler's reference resolution and per-frontend filter.
+
+## A MISSING PLUGIN BUNDLE IS SKIPPED, NOT EMITTED AS A DEAD TAG (2026-11-24)
+
+"Tags and likes are not visible from the UI" had no server-side or
+frontend-logic cause: the tag relationship reaches the wire, `GET
+/api/tags` answers, the bundles register themselves on
+`flarum.extensions`, the extenders run, and the items ARE added
+(`infoItems` yields `tags`, `footerItems` yields `like`). The forum's
+own Jest suite pins all of that.
+
+**THE SHELL EMITS A TAG FOR EVERY REGISTERED BUNDLE, WHATEVER WAS
+BUILT.** `ui/dist` is build output and is gitignored, so a tree that
+carries only the core bundles (a core-only rebuild, a stale directory
+kept between builds, a binary built before `scripts/build_flarum_spa.sh`
+staged the plugins) produces a shell whose `plugins/<name>/forum.js`
+request 404s. A 404 on a `<script>` is invisible: the page renders, the
+console stays clean, and the plugin's UI simply never appears. That is
+indistinguishable from "the plugin does not work".
+
+The module now VALIDATES the list before advertising it.
+`Module.warnMissingAssets`, called once from `mount` (not per request),
+logs the plugin id and the missing file; `scriptURLs`/`styleURLs` skip
+any asset `frontend.Assets.Exists` reports absent instead of emitting a
+dead tag. `Assets.Exists` already existed and had no caller — this is
+what it was for.
+
+**The guard is deliberately silent when NO build was dropped in**: that
+is the documented fallback-shell case, and warning about every asset
+would bury the signal the guard exists to raise.
+
+`go test -run 'TestFrontendBundles_' ./pb/flarum/` pins both halves. It
+skips when `ui/dist` is absent (a fresh clone), asserts every advertised
+bundle is embedded AND answers 200, and was mutation-checked by moving
+`ui/dist/plugins/tags/forum.js` aside: the test goes red naming the
+file, and the rendered shell drops the tag while keeping the other two
+plugins.
+
 ## THE THEME SETTINGS TRAVEL ON THE FORUM DOCUMENT, not only in the admin payload (2026-11-24)
 
 An administrator picked a colour scheme in the Appearance page and it

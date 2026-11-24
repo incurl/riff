@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 	"strconv"
 
-	"github.com/incurl/riff/pb/flarum"
 	"github.com/incurl/riff/internal/ratelimit"
+	"github.com/incurl/riff/pb/flarum"
 	"github.com/pocketbase/pocketbase"
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/pocketbase/pocketbase/plugins/migratecmd"
@@ -249,9 +249,14 @@ func main() {
 	// shared PocketBase `users` collection as its account source and
 	// keeps every forum-owned collection under the `forum_` prefix, so
 	// it never collides with the host's own collections.
+	// Locale selects which translation catalogue the forum shell loads.
+	// The core ships `en`; the bundled Chinese language pack provides
+	// `zh-Hans`. An empty or unknown value falls back to `en`, so a typo
+	// never leaves the forum rendering raw translation keys.
 	if err := flarum.Register(app, flarum.Options{
 		BasePath:         envOr("RIFF_FORUM_BASE_PATH", flarum.DefaultBasePath),
 		CollectionPrefix: envOr("RIFF_FORUM_COLLECTION_PREFIX", "forum_"),
+		Locale:           envOr("RIFF_FORUM_LOCALE", ""),
 	}); err != nil {
 		log.Fatal(err)
 	}
