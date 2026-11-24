@@ -31,13 +31,17 @@
 #      and the binary then serves the dependency-free fallback shell instead of
 #      the real front end. The stylesheet is the one that goes unnoticed: the
 #      forum still renders, just unstyled, with a 404 for
-#      /forum/assets/forum.css in the console. Build it first with
-#      `sh scripts/build_flarum_spa.sh`.
-#   3. `scripts/ravine` is a symlink (or a path) to the built ravine Jekyll
+#      /forum/assets/forum.css in the console.
+#      THIS SCRIPT BUILDS IT (see "Front ends" below); the check is kept as
+#      verification that the build actually produced the files.
+#   3. Optional: `pb/leafwiki/ui/dist` for the wiki. This script builds it too,
+#      but a host without a LeafWiki checkout is a warning rather than a
+#      failure — the wiki falls back to a tracked reader that works.
+#   4. `scripts/ravine` is a symlink (or a path) to the built ravine Jekyll
 #      site. The Dockerfile imports it as a buildkit named context under the
 #      name `ravine`; the symlink is the convention documented in AGENTS.md
 #      so the same command works on every developer's machine.
-#   4. `docker buildx` works on the host. The `default` builder is fine.
+#   5. `docker buildx` works on the host. The `default` builder is fine.
 #
 # Outputs:
 #   - A local image tagged `riff:dev` (override with RIFF_IMAGE_TAG).
@@ -76,6 +80,64 @@ if [ -z "${repo_root}" ]; then
 fi
 cd "${repo_root}"
 
+# --- Toolchain ----------------------------------------------------------------
+# Checked BEFORE the front-end builds below: those take minutes, and a host
+# without buildx would otherwise fail at the very end having done all of that
+# work first.
+if ! command -v docker >/dev/null 2>&1; then
+  echo "docker not on PATH." >&2
+  exit 1
+fi
+if ! docker buildx version >/dev/null 2>&1; then
+  echo "docker buildx is not available (install/enable the buildx plugin)." >&2
+  exit 1
+fi
+
+# --- Front ends ---------------------------------------------------------------
+# Both front ends are gitignored build output that the binary bakes in with
+# //go:embed, and both fall back to a TRACKED shell when the build is absent.
+# What the fallback costs is what makes the two different:
+#
+#   - the forum's is not a working forum. pb/flarum/frontend/ui/index.html is a
+#     dependency-free fallback, so the image serves that instead of the real
+#     SPA — no plugin bundles, no stylesheet — and nothing fails at build time.
+#     That is why the forum build is REQUIRED here.
+#   - the wiki's is a working reader (pb/leafwiki/ui/index.html), so a host
+#     without a LeafWiki checkout can still produce a usable image. That is why
+#     the wiki build is BEST EFFORT.
+#
+# Set RIFF_SKIP_FRONTEND_BUILDS=1 to skip both, when this run follows builds you
+# have just done by hand. The checks below still verify the output either way.
+if [ "${RIFF_SKIP_FRONTEND_BUILDS:-0}" != "1" ]; then
+  echo ">> building the forum front end"
+  sh scripts/build_flarum_spa.sh
+
+  echo ">> building the wiki front end"
+  wiki_built=1
+  # build_wiki_spa.sh takes the LeafWiki checkout as its only argument; forward
+  # the override when one is set so the two knobs cannot disagree.
+  if [ -n "${RIFF_LEAFWIKI_DIR:-}" ]; then
+    sh scripts/build_wiki_spa.sh "${RIFF_LEAFWIKI_DIR}" || wiki_built=0
+  else
+    sh scripts/build_wiki_spa.sh || wiki_built=0
+  fi
+
+  if [ "${wiki_built}" != "1" ]; then
+    cat >&2 <<EOF
+warning: the wiki SPA was not built (scripts/build_wiki_spa.sh failed).
+
+pb/leafwiki/ui/dist is absent, so the image bakes in the tracked fallback
+reader (pb/leafwiki/ui/index.html) instead of LeafWiki's own SPA. That is a
+working wiki, just not the real front end.
+
+Point the build at a LeafWiki checkout to include it, or build it once with:
+
+    RIFF_LEAFWIKI_DIR=/path/to/leafwiki \$0
+    sh scripts/build_wiki_spa.sh /path/to/leafwiki
+EOF
+  fi
+fi
+
 if [ ! -f server/frontend/dist/index.html ]; then
   cat >&2 <<EOF
 server/frontend/dist/index.html is missing — the SPA has not been built yet.
@@ -112,11 +174,13 @@ does NOT fail when the directory is incomplete: ui/index.html is tracked, so
 the build succeeds and the image serves the fallback shell — the forum then
 renders unstyled and /forum/assets/forum.css answers 404.
 
-Build it first:
+This script RUNS that build (see "Front ends" above), so reaching this point
+means it ran and did NOT produce the files — most likely it failed part-way.
+Run it on its own to see why:
 
     sh scripts/build_flarum_spa.sh
 
-Then re-run this script.
+Or re-run this script without RIFF_SKIP_FRONTEND_BUILDS set.
 EOF
   exit 1
 fi
@@ -137,15 +201,6 @@ fi
 ravine_ctx="$(readlink -f "${RIFF_RAVINE_LINK}")"
 if [ ! -d "${ravine_ctx}" ]; then
   echo "${RIFF_RAVINE_LINK} resolves to ${ravine_ctx}, which is not a directory." >&2
-  exit 1
-fi
-
-if ! command -v docker >/dev/null 2>&1; then
-  echo "docker not on PATH." >&2
-  exit 1
-fi
-if ! docker buildx version >/dev/null 2>&1; then
-  echo "docker buildx is not available (install/enable the buildx plugin)." >&2
   exit 1
 fi
 
