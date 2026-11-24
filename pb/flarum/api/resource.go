@@ -37,11 +37,19 @@ type Links struct {
 
 // Meta carries the metadata of a response.
 //
-// The frontend reads `meta.page.total` to render a page count, so the
-// pagination metadata is always present on a collection response.
+// The frontend reads `meta.page.total` to render a page count and
+// `meta.perPage` to learn the page size, so both are always present on
+// a collection response.
 type Meta struct {
 	// Page carries the pagination metadata.
 	Page *PageMeta `json:"page,omitempty"`
+	// PerPage is the number of records in the page.
+	//
+	// The frontend reads it to size its own pages: the list state
+	// falls back to its default page size when the server does not
+	// say how many records a page holds, and a server that pages by a
+	// different size would then fetch the wrong window.
+	PerPage int `json:"perPage,omitempty"`
 	// Extra holds any additional metadata.
 	Extra map[string]any `json:"-"`
 }
@@ -51,6 +59,14 @@ type PageMeta struct {
 	// Total is the number of records matching the query, ignoring
 	// pagination.
 	Total int `json:"total"`
+	// Offset is the number of records the page starts after.
+	//
+	// The frontend reads it to work out the offset of a page it did
+	// not request itself (the post stream's window arithmetic), so a
+	// page that does not say where it starts cannot be placed.
+	Offset int `json:"offset"`
+	// Limit is the number of records the page holds.
+	Limit int `json:"limit"`
 }
 
 // Resource is a JSON:API resource object.
@@ -97,6 +113,12 @@ func (m Meta) MarshalJSON() ([]byte, error) {
 	}
 	if m.Page != nil {
 		out["page"] = m.Page
+	}
+	// The page size travels beside the page block: the frontend reads
+	// `meta.perPage` to size its own pages, and it is a SIBLING of
+	// `meta.page`, not a member of it.
+	if m.PerPage > 0 {
+		out["perPage"] = m.PerPage
 	}
 	return json.Marshal(out)
 }

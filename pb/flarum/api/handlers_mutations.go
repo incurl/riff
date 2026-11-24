@@ -538,6 +538,41 @@ func (s *Server) readAllNotificationsHandler(e *core.RequestEvent) error {
 	return s.writeDocumentStatus(e, http.StatusNoContent, Document{})
 }
 
+// deleteAllNotificationsHandler serves DELETE /api/notifications.
+//
+// It is upstream's `DeleteAllNotificationsController`, and the frontend
+// calls it from the notification page's "delete all" button
+// (framework/core/js/src/forum/states/NotificationListState.ts:60).
+//
+// The route is registered for POST as well, because the frontend does
+// not send a DELETE: it turns every method other than GET and POST
+// into a POST with an `X-HTTP-Method-Override` header (see the core's
+// `Application.request`). The handler resolves the effective method
+// itself.
+func (s *Server) deleteAllNotificationsHandler(e *core.RequestEvent) error {
+	if e.Request.Method == http.MethodPost {
+		if err := RequireMethod(e, http.MethodDelete); err != nil {
+			return fail(e, err)
+		}
+	}
+
+	actor, err := s.requireAuth(e)
+	if err != nil {
+		return fail(e, err)
+	}
+
+	if err := sessionCSRF(e); err != nil {
+		return fail(e, errForbidden("The request could not be verified."))
+	}
+
+	// Only the caller's OWN notifications: the repository filters by the
+	// user id, so one account can never delete another's.
+	if err := s.repo.DeleteAllNotifications(actor.User.ID); err != nil {
+		return fail(e, errInternal("The notifications could not be deleted.", err))
+	}
+	return s.writeDocumentStatus(e, http.StatusNoContent, Document{})
+}
+
 // showGroupHandler serves GET /api/groups/{id}.
 func (s *Server) showGroupHandler(e *core.RequestEvent) error {
 	group, err := s.repo.FindGroup(e.Request.PathValue("id"))

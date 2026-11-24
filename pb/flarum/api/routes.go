@@ -99,6 +99,14 @@ func (s *Server) Mount(r *router.Router[*core.RequestEvent]) {
 
 	// --- notifications -------------------------------------------------
 	r.GET(api+"/notifications", s.listNotificationsHandler)
+	// The "delete all" endpoint. It is registered for POST as well,
+	// because the frontend does not send a DELETE: it turns every method
+	// other than GET and POST into a POST with an
+	// `X-HTTP-Method-Override` header (see the core's
+	// `Application.request`). The handler resolves the effective method
+	// itself.
+	r.DELETE(api+"/notifications", s.deleteAllNotificationsHandler)
+	r.POST(api+"/notifications", s.deleteAllNotificationsHandler)
 	r.POST(api+"/notifications/read", s.readAllNotificationsHandler)
 	r.PATCH(api+"/notifications/{id}", s.readNotificationHandler)
 	// The POST twin, for the same `X-HTTP-Method-Override` reason.

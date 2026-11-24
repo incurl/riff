@@ -23,6 +23,9 @@ func (s *Server) listDiscussionsHandler(e *core.RequestEvent) error {
 		TagID:  query.Get("filter[tag]"),
 		State:  query.Get("filter[state]"),
 		Search: strings.TrimSpace(query.Get("filter[q]")),
+		// The sort is upstream's: a bare name sorts ascending, a leading
+		// "-" sorts descending (`-lastPostedAt`, `-commentCount`, ...).
+		Sort: strings.TrimSpace(query.Get("sort")),
 	}
 
 	discussions, total, err := s.repo.ListDiscussions(filter, limit, offset)
@@ -39,9 +42,46 @@ func (s *Server) listDiscussionsHandler(e *core.RequestEvent) error {
 		resources = append(resources, resource)
 	}
 
+	meta, links := pagination(e, total, limit, offset)
+	return s.writeDocumentWithIncluded(e, resources, meta, links)
+}
+
+// writeDocumentWithIncluded writes a document and the resources its
+// primary resources relate to.
+//
+// The `included` array is what makes a relation resolvable on the
+// client: the frontend reads a relationship out of the STORE, and the
+// store is filled from `payload.included`. Without it the identifier
+// in the relationship names a resource that never arrives.
+func (s *Server) writeDocumentWithIncluded(e *core.RequestEvent, primaries []Resource, meta *Meta, links *Links) error {
+	included, err := s.includedResources(e, primaries)
+	if err != nil {
+		return fail(e, errInternal("The forum could not be loaded.", err))
+	}
+
 	return s.writeDocument(e, Document{
-		Data: resources,
-		Meta: &Meta{Page: &PageMeta{Total: total}},
+		Data:     primaries,
+		Included: included,
+		Meta:     meta,
+		Links:    links,
+	})
+}
+
+// writeSingleDocumentWithIncluded writes a document for ONE resource.
+//
+// A single resource is an OBJECT in JSON:API, not an array: the
+// frontend's `Model.hasOne` reads `payload.data.type` and
+// `payload.data.id` directly, so an array would break every relation
+// on the page.
+func (s *Server) writeSingleDocumentWithIncluded(e *core.RequestEvent, primary Resource) error {
+	included, err := s.includedResources(e, []Resource{primary})
+	if err != nil {
+		return fail(e, errInternal("The forum could not be loaded.", err))
+	}
+
+	return s.writeDocument(e, Document{
+		Data:     primary,
+		Included: included,
 	})
 }
 
@@ -84,7 +124,7 @@ func (s *Server) showDiscussionHandler(e *core.RequestEvent) error {
 		return fail(e, errInternal("The discussion could not be loaded.", err))
 	}
 
-	return s.writeDocument(e, Document{Data: resource})
+	return s.writeSingleDocumentWithIncluded(e, resource)
 }
 
 // discussionResource renders a discussion with its relationships filled
@@ -114,9 +154,6 @@ func (s *Server) discussionResource(e *core.RequestEvent, discussion *domain.Dis
 	// The owner-aware check is the one that matters, because the
 	// group permission alone says "no" for the author (the author
 	// holds no `editDiscussion` row) and "yes" for a moderator.
-	// The UI flags have to come from the SAME check the write path
-	// makes, or the two disagree: upstream computes `canRename` and
-	// `canDelete` with the same `can()` call the write path uses.
 	canRename, err := s.canRenameDiscussion(e, discussion.ID)
 	if err != nil {
 		canRename = false
@@ -149,6 +186,7 @@ func (s *Server) listPostsHandler(e *core.RequestEvent) error {
 
 	discussionID := query.Get("filter[discussion]")
 	authorSlug := query.Get("filter[author]")
+	ids := query.Get("filter[id]")
 
 	var (
 		posts []*domain.Post
@@ -156,6 +194,13 @@ func (s *Server) listPostsHandler(e *core.RequestEvent) error {
 	)
 
 	switch {
+	case ids != "":
+		// The post stream asks for a WINDOW of posts by id: the
+		// discussion's `posts` relationship names them all but carries no
+		// attributes, so the stream loads the ones it is about to show
+		// (`app.store.find('posts', loadIds)` builds
+		// `?filter[id]=a,b,c`).
+		posts, err = s.repo.PostsByIDs(strings.Split(ids, ","))
 	case discussionID != "":
 		posts, err = s.repo.ListPosts(discussionID, limit, offset)
 	case authorSlug != "":
@@ -164,7 +209,7 @@ func (s *Server) listPostsHandler(e *core.RequestEvent) error {
 		// post types the page shows.
 		posts, err = s.repo.ListPostsByAuthor(authorSlug, query.Get("filter[type]"), limit, offset)
 	default:
-		return fail(e, errValidation("A discussion or author filter is required."))
+		return fail(e, errValidation("A discussion, an author or an id filter is required."))
 	}
 
 	if err != nil {
@@ -180,7 +225,7 @@ func (s *Server) listPostsHandler(e *core.RequestEvent) error {
 		resources = append(resources, resource)
 	}
 
-	return s.writeDocument(e, Document{Data: resources})
+	return s.writeDocumentWithIncluded(e, resources, nil, nil)
 }
 
 // showPostHandler serves GET /api/posts/{id}.
@@ -199,7 +244,7 @@ func (s *Server) showPostHandler(e *core.RequestEvent) error {
 	if err != nil {
 		return fail(e, errInternal("The post could not be loaded.", err))
 	}
-	return s.writeDocument(e, Document{Data: resource})
+	return s.writeSingleDocumentWithIncluded(e, resource)
 }
 
 // postResource renders a post with its plugin-contributed attributes.

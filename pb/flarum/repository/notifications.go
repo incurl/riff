@@ -114,6 +114,32 @@ func (r *Repository) MarkAllNotificationsRead(userID string) error {
 	return nil
 }
 
+// DeleteAllNotifications removes every notification of a user.
+//
+// It is upstream's `DeleteAllNotifications` command: the frontend's
+// notification page has a "delete all" button, and it calls
+// `DELETE /api/notifications`.
+//
+// Only the caller's OWN notifications are removed: the filter names the
+// user, so one account can never delete another's.
+func (r *Repository) DeleteAllNotifications(userID string) error {
+	collection, err := r.collection("notifications")
+	if err != nil {
+		return err
+	}
+
+	records, err := r.app.FindRecordsByFilter(collection, "user = {:user}", "", 0, 0, map[string]any{"user": userID})
+	if err != nil {
+		return err
+	}
+	for _, record := range records {
+		if err := r.app.Delete(record); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // notificationFromRecord projects a notifications record.
 func notificationFromRecord(record *core.Record) *domain.Notification {
 	notification := &domain.Notification{

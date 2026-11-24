@@ -5,6 +5,88 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## THE AUDIT: EVERY FRONTEND/SERVER CONTRACT, CHECKED AT ONCE (2026-11-24)
+
+Four bugs in a row had the same shape: **the frontend is upstream's
+(unmodified), and the backend implemented a contract slightly
+differently.** Each one was found by a bug report rather than by a
+test, so the whole surface was enumerated and checked.
+
+The frontend's API surface is small and enumerable: 11 `app.request`
+call sites and 13 `app.store.find` call sites. Cross-referencing them
+against riff's route table found five more mismatches.
+
+**1. `DELETE /api/notifications` WAS NOT SERVED.** The notification
+page has a "delete all" button, and it calls it
+(`NotificationListState.ts:60`). Upstream serves it
+(`Api/routes.php`: `$map->delete('/notifications', …)`), and riff
+answered 404.
+
+**2. THE RESPONSE CARRIED NO `included`, SO NO RELATION RESOLVED.** The
+frontend reads a relationship out of the STORE, and the store is filled
+from `payload.included` (`Store.pushPayload`); the relationship's
+IDENTIFIER alone is not enough. Upstream sends the related resources by
+default (`DiscussionResource.php:101` `defaultInclude(['user',
+'user.groups', 'lastPostedUser', …])`), and the frontend asks for them
+explicitly (`DiscussionListState.ts:32`: `include: ['user',
+'lastPostedUser']`).
+
+riff sent relationship identifiers and no `included` array at all, so
+`discussion.user()` read as undefined and **every discussion in the
+list rendered without an author** — no name, no avatar.
+
+**3. THE PAGINATION METADATA WAS INCOMPLETE, SO THERE WAS NO "Load
+more".** The frontend reads four things (`PaginatedListState.ts:197,
+227,147`): `meta.page.total`, `meta.page.offset`, `meta.perPage`, and
+`links.next` / `links.prev`.
+
+riff sent only `meta.page.total`. **`links.next` IS THE "Load more"
+BUTTON**: the frontend decides to offer it with
+`hasNext: !!links?.next`, and the button is rendered only when
+`state.hasNext()` is true (`PostList.tsx:25`). Without it the infinite
+scroll never loaded a second page — the list showed the first twenty
+records and stopped. The `Links` struct existed in riff but was never
+populated.
+
+**4. THE `sort` PARAMETER WAS NEVER READ, SO THE SORT DROPDOWN DID
+NOTHING.** The frontend sends upstream's sort names
+(`DiscussionListState.ts:73`: `map.latest = '-lastPostedAt'`,
+`map.top = '-commentCount'`, `map.newest = '-createdAt'`, `map.oldest =
+'createdAt'`, `map.az = 'title'`, `map.za = '-title'`), and upstream
+names the same set (`DiscussionResource::sorts()`). Every listing came
+back in the repository's own order.
+
+**5. THE POST STREAM COULD NOT LOAD ITS POSTS.** The stream shows a
+WINDOW of posts: the discussion's `posts` relationship names them all
+but carries no attributes, so the stream loads the ones it is about to
+show — BY ID (`PostStreamState.ts:308`: `app.store.find('posts',
+loadIds)`), which `Store.find` turns into `?filter[id]=a,b,c`
+(`Store.ts:193`).
+
+riff's post list required `filter[discussion]` or `filter[author]`, so
+the stream's request answered **422**.
+
+### What was NOT a mismatch
+
+The admin endpoints that riff does not serve (`/mail/bounce-stats`,
+`/system-info/system`, `/queue/*`, `/extensions/*`) belong to features
+riff does not have — mail sending, a job queue, extension management.
+Their widgets CATCH their own errors (`loadError = true`), so they
+degrade to an empty widget instead of breaking the dashboard.
+
+### The lesson
+
+Every one of these was a contract the upstream FRONTEND depends on and
+that upstream's BACKEND documents in its own source. The frontend is
+vendored unmodified, so the contract is upstream's — but the port
+re-implements it, and a re-implementation drifts.
+
+The durable answer is to CHECK the contract rather than to rediscover it
+per bug report: the frontend's call sites are enumerable, and upstream's
+resource classes state each endpoint's `defaultInclude`, `sorts` and
+`filters`. A test that walks the vendored frontend's call sites and
+asserts each one answers would keep the surface honest.
+
 ## THE DISCUSSION SLUG CARRIES THE ID, because the URL is built from it (2026-11-24)
 
 A discussion that had just been posted could not be opened:

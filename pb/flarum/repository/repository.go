@@ -548,6 +548,50 @@ type DiscussionFilter struct {
 	// IncludeHidden includes hidden discussions. Only a moderator may
 	// ask for them.
 	IncludeHidden bool
+	// Sort is the ordering the caller asked for.
+	//
+	// It is upstream's sort name, with a leading "-" for a descending
+	// order (`-lastPostedAt`, `-commentCount`, `createdAt`, `title`).
+	// The frontend's index page sends one of those, and upstream's
+	// `DiscussionResource::sorts()` names the same set. An unknown sort
+	// falls back to the most recent activity.
+	Sort string
+}
+
+// discussionOrderBy maps a sort name to the database ordering.
+//
+// The names are upstream's (`DiscussionResource::sorts()`): a bare name
+// sorts ascending, a leading "-" sorts descending. They are the values
+// the frontend's index page sends (`map.latest = '-lastPostedAt'`,
+// `map.top = '-commentCount'`, `map.newest = '-createdAt'`,
+// `map.oldest = 'createdAt'`, `map.az = 'title'`, `map.za = '-title'`).
+//
+// The column names are the forum's own: the API speaks upstream's names
+// and the database speaks the collection's.
+//
+// An unknown sort falls back to the most recent activity, which is
+// upstream's default (`defaultSort('-lastPostedAt')`).
+func discussionOrderBy(sort string) string {
+	descending := strings.HasPrefix(sort, "-")
+	name := strings.TrimPrefix(sort, "-")
+
+	direction := "ASC"
+	if descending {
+		direction = "DESC"
+	}
+
+	switch name {
+	case "lastPostedAt":
+		return "last_posted_at " + direction
+	case "commentCount":
+		return "comment_count " + direction
+	case "createdAt":
+		return "created " + direction
+	case "title":
+		return "title " + direction
+	default:
+		return "last_posted_at DESC"
+	}
 }
 
 // ListDiscussions returns the discussions matching a filter.
@@ -588,7 +632,7 @@ func (r *Repository) ListDiscussions(filter DiscussionFilter, limit, offset int)
 	if filterExpr != "" {
 		query = query.AndWhere(dbxExp(filterExpr, params))
 	}
-	query = query.OrderBy("last_posted_at DESC").Limit(int64(limit)).Offset(int64(offset))
+	query = query.OrderBy(discussionOrderBy(filter.Sort)).Limit(int64(limit)).Offset(int64(offset))
 	var records []*core.Record
 	if err := query.All(&records); err != nil {
 		return nil, 0, err
@@ -686,6 +730,40 @@ func (r *Repository) ListPosts(discussionID string, limit, offset int) ([]*domai
 	}
 	posts := make([]*domain.Post, 0, len(records))
 	for _, record := range records {
+		posts = append(posts, postFromRecord(record))
+	}
+	return posts, nil
+}
+
+// PostsByIDs returns several posts at once.
+//
+// It is the batch form of [Repository.FindPost], and it answers the
+// frontend's `filter[id]` lookup: the post stream asks for a WINDOW of
+// posts by id (`app.store.find('posts', loadIds)` builds
+// `?filter[id]=a,b,c`), because the discussion's `posts` relationship
+// names them all but carries no attributes.
+//
+// The posts come back in the order they were asked for, because the
+// stream sorts by the post NUMBER and the numbers are the order the
+// discussion holds them in.
+func (r *Repository) PostsByIDs(ids []string) ([]*domain.Post, error) {
+	collection, err := r.collection("posts")
+	if err != nil {
+		return nil, err
+	}
+
+	posts := make([]*domain.Post, 0, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		record, err := r.app.FindRecordById(collection, id)
+		if err != nil {
+			// A post that is gone is simply absent: the stream shows
+			// what is left.
+			continue
+		}
 		posts = append(posts, postFromRecord(record))
 	}
 	return posts, nil
