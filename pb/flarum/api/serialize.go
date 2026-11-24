@@ -1,6 +1,8 @@
 package api
 
 import (
+	"context"
+	"log/slog"
 	"time"
 
 	"github.com/incurl/riff/pb/flarum/domain"
@@ -49,7 +51,7 @@ func timestamp(t time.Time) string {
 // payload: the frontend reads the user from the store, and a
 // relationship's identifier alone carries no attributes.
 func (s *Server) UserResource(user *domain.User) Resource {
-	return s.userResourceWithGroups(user, user.Groups)
+	return s.userResourceWithGroups("", user, user.Groups)
 }
 
 // avatarURL is the public URL of an account's picture, or empty.
@@ -68,9 +70,38 @@ func (s *Server) avatarURL(user *domain.User) string {
 	return s.basePath + "/avatars/" + user.ID
 }
 
+// applyPluginAttributes fills in the attributes the plugins contributed
+// for a resource type.
+//
+// It is the one place a plugin's contribution reaches the wire, so every
+// resource type plugins extend goes through it. A type that did not would
+// carry its plugin attributes nowhere, and the frontend would read them as
+// undefined — a missing `canLock` silently hides the lock control.
+func (s *Server) applyPluginAttributes(ctx context.Context, resource *Resource, actorID, recordID string) error {
+	for _, source := range s.attributes[resource.Type] {
+		value, err := source.Value(ctx, AttributeRequest{
+			ActorID:  actorID,
+			RecordID: recordID,
+			Type:     resource.Type,
+		})
+		if err != nil {
+			return err
+		}
+		if resource.Attributes == nil {
+			resource.Attributes = map[string]any{}
+		}
+		resource.Attributes[source.Name] = value
+	}
+	return nil
+}
+
 // userResourceWithGroups renders a user as a JSON:API resource with an
 // explicit group list.
-func (s *Server) userResourceWithGroups(user *domain.User, groups []string) Resource {
+//
+// `actorID` is the CALLER. The suspend extension's `canSuspend` attribute
+// is a question about the pair, not about the account alone, so the caller
+// has to travel with the resource.
+func (s *Server) userResourceWithGroups(actorID string, user *domain.User, groups []string) Resource {
 	if groups == nil {
 		groups = user.Groups
 	}
@@ -99,12 +130,22 @@ func (s *Server) userResourceWithGroups(user *domain.User, groups []string) Reso
 		"groups": {Data: identifiers(TypeGroup, groups)},
 	}
 
-	return Resource{
+	resource := Resource{
 		Type:          TypeUser,
 		ID:            user.ID,
 		Attributes:    attributes,
 		Relationships: relationships,
 	}
+
+	// The suspension attributes are the only plugin-contributed ones on a
+	// user today. A failure is logged rather than fatal: a user resource is
+	// rendered inside list responses, and losing a whole feed because one
+	// attribute could not be computed is the worse outcome.
+	if err := s.applyPluginAttributes(context.Background(), &resource, actorID, user.ID); err != nil {
+		s.logger.Debug("forum: a user attribute could not be computed", slog.String("error", err.Error()))
+	}
+
+	return resource
 }
 
 // groupResource renders a group as a JSON:API resource.

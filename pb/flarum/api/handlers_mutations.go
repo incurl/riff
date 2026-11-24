@@ -155,7 +155,11 @@ func (s *Server) createPostHandler(e *core.RequestEvent) error {
 		return fail(e, notFoundError("That discussion does not exist."))
 	}
 
-	if discussion.State == domain.DiscussionLocked {
+	// The same rule the resource's `canReply` reports: a locked discussion
+	// takes no new replies, but a caller who could unlock it may still
+	// post. The gate and the flag have to agree, or the UI offers a
+	// composer whose submit is refused.
+	if discussion.IsLocked && !s.can(e, domain.PermissionLockDiscussion, TypeDiscussion, discussion.ID) {
 		return fail(e, errForbidden("That discussion is locked."))
 	}
 	if !s.can(e, domain.PermissionReply, TypeDiscussion, discussion.ID) {
@@ -492,7 +496,7 @@ func (s *Server) updateUserHandler(e *core.RequestEvent) error {
 	if err != nil {
 		return fail(e, errInternal("The profile could not be saved.", err))
 	}
-	return s.writeDocument(e, Document{Data: s.userResourceWithGroups(user, user.Groups)})
+	return s.writeDocument(e, Document{Data: s.userResourceWithGroups(s.actor(e).ID(), user, user.Groups)})
 }
 
 // readNotificationHandler serves PATCH /api/notifications/{id}.
@@ -680,7 +684,7 @@ func (s *Server) resetNotificationPreferencesHandler(e *core.RequestEvent) error
 	if err != nil {
 		return fail(e, errInternal("The profile could not be loaded.", err))
 	}
-	return s.writeDocument(e, Document{Data: s.userResourceWithGroups(user, user.Groups)})
+	return s.writeDocument(e, Document{Data: s.userResourceWithGroups(s.actor(e).ID(), user, user.Groups)})
 }
 
 // setUserGroups replaces an account's group membership.

@@ -1,0 +1,6 @@
+/* The sticky badge shown on a pinned discussion. */
+
+.Badge--sticky {
+  background: #d13e32;
+  color: #fff;
+}

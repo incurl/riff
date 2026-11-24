@@ -30,7 +30,16 @@ const LOCALE = 'zh-Hans';
 // The catalogue files, in load order.
 //
 // Only the extensions this port serves are vendored — see README.md.
-const SOURCES = ['core.yml', 'validation.yml', 'flarum-tags.yml', 'flarum-likes.yml', 'fof-upload.yml'];
+const SOURCES = [
+  'core.yml',
+  'validation.yml',
+  'flarum-tags.yml',
+  'flarum-likes.yml',
+  'flarum-lock.yml',
+  'flarum-sticky.yml',
+  'flarum-suspend.yml',
+  'fof-upload.yml',
+];
 
 compileLocale({
   sources: SOURCES,

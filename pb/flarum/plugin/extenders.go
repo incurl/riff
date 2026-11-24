@@ -96,6 +96,13 @@ type AttributeRequest struct {
 	RecordID string
 	// Type is the JSON:API resource type.
 	Type string
+	// Can reports whether the actor may perform an action on a subject.
+	//
+	// It is the forum's permission service, so a plugin's `can*` attribute
+	// answers exactly what its own route answers. A plugin that
+	// re-implemented the rule would drift from its write path, and the UI
+	// would offer a control the endpoint then refuses.
+	Can func(action, subjectType, subjectID string) bool
 }
 
 // RelationshipContributor contributes a relationship to a JSON:API

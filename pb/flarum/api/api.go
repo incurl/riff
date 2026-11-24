@@ -157,6 +157,25 @@ func (s *Server) APIPath() string { return s.apiPath }
 // BasePath returns the module's mount path.
 func (s *Server) BasePath() string { return s.basePath }
 
+// IsAdministrator reports whether an account administers the forum.
+//
+// A superuser always does, and so does a member of the administrator group
+// (`forumgroupadmin`). It is exported for the plugins: upstream refuses to
+// suspend an administrator (`Suspend\Listener\SavingUser`), and the rule
+// is the forum's, not the plugin's to re-derive.
+func (s *Server) IsAdministrator(userID string) bool {
+	if userID == "" || s.repo == nil {
+		return false
+	}
+
+	user, err := s.repo.UserByID(userID)
+	if err != nil || user == nil {
+		return false
+	}
+
+	return user.IsAdmin
+}
+
 // AddAttribute registers a plugin-contributed attribute.
 //
 // It is called by the plugin manager when a plugin declares an attribute
@@ -191,6 +210,13 @@ func (s *Server) domainActor(e *core.RequestEvent) domain.Actor {
 	if actor.User == nil {
 		return domain.Actor{}
 	}
+	// A suspended account is treated as a guest, exactly as upstream's
+	// `flarum/suspend` does. Administrators are exempt: upstream refuses
+	// to suspend one at all.
+	if !actor.User.IsAdmin && !actor.User.SuspendedUntil.IsZero() && actor.User.SuspendedUntil.After(time.Now()) {
+		return domain.SuspendedActor(actor.User.ID, actor.User.IsAdmin)
+	}
+
 	groupIDs, err := s.repo.UserGroupIDs(actor.User.ID)
 	if err != nil {
 		groupIDs = nil

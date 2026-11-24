@@ -33,6 +33,12 @@ type Actor struct {
 	IsAdmin bool
 	// GroupIDs holds the groups the caller belongs to.
 	GroupIDs []string
+	// Suspended reports whether the caller's participation is revoked.
+	//
+	// A suspended account keeps its identity (it can sign in and read the
+	// forum) but is treated as a guest for every permission check, which
+	// is upstream's `flarum/suspend` rule.
+	Suspended bool
 }
 
 // IsAuthenticated reports whether the caller is signed in.
@@ -41,6 +47,17 @@ func (a Actor) IsAuthenticated() bool { return a.UserID != "" }
 // ActorFor builds a domain actor.
 func ActorFor(userID string, isAdmin bool, groupIDs []string) Actor {
 	return Actor{UserID: userID, IsAdmin: isAdmin, GroupIDs: groupIDs}
+}
+
+// SuspendedActor returns an actor whose groups are revoked.
+//
+// It is upstream's `flarum/suspend` behaviour: its
+// `RevokeAccessFromSuspendedUsers` swaps a suspended account's groups for
+// the guest group on every permission check. The account stays signed in
+// (it can read the forum and see why it was suspended), but it holds no
+// participation powers.
+func SuspendedActor(userID string, isAdmin bool) Actor {
+	return Actor{UserID: userID, IsAdmin: isAdmin, Suspended: true}
 }
 
 // PermissionRow is one permission rule.
@@ -263,7 +280,10 @@ func (a Actor) groupSet() []string {
 		groups = append(groups, id)
 	}
 
-	if !a.IsAuthenticated() {
+	if !a.IsAuthenticated() || a.Suspended {
+		// A suspended account is treated exactly as an anonymous one, which
+		// is what upstream's `RevokeAccessFromSuspendedUsers` does: it
+		// returns the guest group instead of the account's own.
 		add(GroupGuestID)
 		return groups
 	}

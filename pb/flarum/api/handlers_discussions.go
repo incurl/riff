@@ -143,7 +143,13 @@ func (s *Server) discussionResource(e *core.RequestEvent, discussion *domain.Dis
 	discussion.TagIDs = tagIDs
 
 	canReply := s.can(e, domain.PermissionReply, TypeDiscussion, discussion.ID)
-	if discussion.State == domain.DiscussionLocked {
+
+	// A locked discussion takes no new replies — except from a caller who
+	// could unlock it. That is upstream's `Lock\Access\DiscussionPolicy::
+	// reply()`: `is_locked && $actor->cannot('lock')` denies, so a
+	// moderator keeps replying in a locked thread, which is what makes a
+	// lock-with-a-note workflow possible.
+	if discussion.IsLocked && !s.can(e, domain.PermissionLockDiscussion, TypeDiscussion, discussion.ID) {
 		canReply = false
 	}
 
@@ -164,7 +170,7 @@ func (s *Server) discussionResource(e *core.RequestEvent, discussion *domain.Dis
 		canTag = false
 	}
 
-	return discussionResource(
+	resource := discussionResource(
 		discussion,
 		canReply,
 		canRename,
@@ -172,7 +178,16 @@ func (s *Server) discussionResource(e *core.RequestEvent, discussion *domain.Dis
 		s.canDeleteDiscussion(e, discussion),
 		canTag,
 		tagIDs,
-	), nil
+	)
+
+	// The plugins' own attributes: `isLocked`/`canLock` from the Lock
+	// plugin, `isSticky`/`canSticky` from Sticky. Without this the
+	// frontend reads them as undefined and draws no control and no badge.
+	if err := s.applyPluginAttributes(e.Request.Context(), &resource, s.actor(e).ID(), discussion.ID); err != nil {
+		return Resource{}, err
+	}
+
+	return resource, nil
 }
 
 // listPostsHandler serves GET /api/posts.
@@ -320,7 +335,7 @@ func (s *Server) listUsersHandler(e *core.RequestEvent) error {
 
 	resources := make([]Resource, 0, len(users))
 	for _, user := range users {
-		resources = append(resources, s.userResourceWithGroups(user, user.Groups))
+		resources = append(resources, s.userResourceWithGroups(s.actor(e).ID(), user, user.Groups))
 	}
 
 	return s.writeDocument(e, Document{Data: resources})
@@ -382,7 +397,7 @@ func (s *Server) showUserHandler(e *core.RequestEvent) error {
 	if err != nil {
 		return fail(e, notFoundError("That user does not exist."))
 	}
-	return s.writeDocument(e, Document{Data: s.userResourceWithGroups(user, user.Groups)})
+	return s.writeDocument(e, Document{Data: s.userResourceWithGroups(s.actor(e).ID(), user, user.Groups)})
 }
 
 // wantsSlugLookup reports whether the request asked for a slug lookup.
@@ -475,7 +490,7 @@ func (s *Server) ForumDocument(e *core.RequestEvent) (Resource, error) {
 
 	actorResource := any(nil)
 	if actor.User != nil {
-		actorResource = s.userResourceWithGroups(actor.User, actor.User.Groups)
+		actorResource = s.userResourceWithGroups(actor.User.ID, actor.User, actor.User.Groups)
 	}
 
 	// The theme settings. Upstream carries them on the FORUM DOCUMENT

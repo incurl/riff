@@ -1,0 +1,10 @@
+/* The suspended badge shown on a suspended account. */
+
+.Badge--suspended {
+  background: #ddd;
+  color: #666;
+}
+
+.SuspendUserModal textarea.FormControl {
+  min-height: 6rem;
+}

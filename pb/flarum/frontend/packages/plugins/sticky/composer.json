@@ -1,0 +1,10 @@
+{
+  "name": "riff/sticky",
+  "description": "Pin discussions in the riff forum.",
+  "type": "flarum-extension",
+  "version": "1.0.0",
+  "license": "MIT",
+  "require": {
+    "flarum/core": "^2.0.0"
+  }
+}

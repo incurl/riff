@@ -5,6 +5,72 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## LOCK AND STICKY ARE TWO COLUMNS, AND A SUSPENDED ACCOUNT IS A GUEST (2026-11-24)
+
+`flarum/lock`, `flarum/sticky` and `flarum/suspend` are now plugins
+(`pb/flarum/plugins/{lock,sticky,suspend}/`).
+
+**`state` CARRIED THREE UNRELATED THINGS.** The discussions collection had
+one `state` select of `open`, `locked`, `hidden` and `sticky`, so locking a
+pinned discussion silently unpinned it and pinning a locked one silently
+reopened it. Neither failure is reported anywhere: the request succeeds,
+the flag the caller did not touch changes, and the only symptom is a
+discussion that is no longer where it should be. Upstream keeps three
+independent columns (`is_locked`, `is_sticky`, and the visibility state),
+and the port now does too — `state` keeps visibility, and each plugin owns
+its own boolean.
+
+Both plugins' migrations BACKFILL from the legacy encoding and the
+repository keeps a `state` fallback, so an existing instance keeps its
+locked and pinned discussions across the upgrade. Without the backfill an
+upgrade silently reopens every closed discussion, which is the worst
+possible outcome for a moderation tool.
+
+**THE REPLY GATE IS THE POLICY, NOT THE COLUMN.** A locked discussion
+refuses a reply from anyone who could not unlock it — upstream's
+`Lock\Access\DiscussionPolicy::reply()` — so a moderator can still post a
+closing note in a locked thread. The resource's `canReply` and the write
+path's refusal are the same question, asked the same way; a gate that only
+checked the column would leave the composer enabled and the submit
+refused.
+
+**A SUSPENDED ACCOUNT IS A GUEST, IN ONE PLACE.** Upstream's
+`RevokeAccessFromSuspendedUsers` swaps the account's groups for the guest
+group on every permission check. The port models that as
+`domain.Actor.Suspended`, which `groupSet()` maps to the guest group: every
+permission is revoked at once, including permissions added by plugins that
+do not exist yet. A per-handler `isSuspended` check would have to be added
+to each new write path, and the one that is forgotten is the hole.
+
+The suspension is read in BOTH user projections — the repository's and the
+session resolver's. They are separate functions, and the permission layer
+asks the session's: mapping only the repository's made the suspension
+visible in the UI while every write still succeeded, which is the failure
+this feature exists to prevent.
+
+**ATTRIBUTES REACH THE WIRE THROUGH ONE HELPER.** Only the post resource
+applied `s.attributes[TypePost]`; a discussion or user attribute was
+silently dropped, and an absent `canLock` reads as false in the frontend,
+so the control simply never appeared. `Server.applyPluginAttributes` now
+serves discussions, posts and users. The `Can` callback on
+`plugin.AttributeRequest` is the permission service itself, so a plugin's
+`can*` flag and its endpoint ask the same question.
+
+**`flarum/mentions` IS NOT PORTED.** Its backend is small (parse the
+mentions out of the post body, store them, expose `mentionsUsers` /
+`mentionedBy`), but the frontend is not: upstream's autocomplete is a
+composer extension with its own mention formats, a quote button, mention
+previews and a mentioned-by list, and the port's vendored `TextEditor` has
+these behind a `flarum-mentions` bundle that has to be authored for this
+API. Shipping the storage without the composer would record mentions
+nobody can insert, so it is left for a follow-up with the markdown
+renderer and the composer in scope.
+
+`go test -run 'TestLock_|TestSticky_|TestSuspend_|TestModerationPlugins_' ./pb/flarum/`
+pins the toggles, the reply gate on both sides, the both-flags-at-once
+case, the permission boundaries, the suspension's effect on participation,
+the attribute visibility rules and the admin permission-key translation.
+
 ## A LANGUAGE PACK IS A PLUGIN, AND AN UNKNOWN LOCALE FALLS BACK TO ENGLISH (2026-11-24)
 
 `flarum-lang/chinese-simplified` is implemented as `pb/flarum/plugins/chinese/`,

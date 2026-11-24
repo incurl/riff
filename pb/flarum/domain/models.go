@@ -61,6 +61,16 @@ type User struct {
 	// UnreadNotificationCount is how many unread notifications the
 	// account has.
 	UnreadNotificationCount int
+	// SuspendedUntil is when the account's suspension ends, zero when it
+	// is not suspended. Upstream models an indefinite suspension as a date
+	// far in the future.
+	SuspendedUntil time.Time
+	// SuspendReason is why the account was suspended, visible to
+	// moderators only.
+	SuspendReason string
+	// SuspendMessage is what the suspended account is shown. It is
+	// visible to the suspended account and to moderators.
+	SuspendMessage string
 }
 
 // Group is a permission group.
@@ -106,7 +116,17 @@ type Discussion struct {
 	// ParticipantCount is how many distinct accounts posted in it.
 	ParticipantCount int
 	// State is one of the Discussion* constants.
+	//
+	// It carries the discussion's VISIBILITY (open or hidden). Locking and
+	// pinning used to be encoded here too, as `locked` and `sticky`, which
+	// made the two mutually exclusive: a pinned discussion could not be
+	// locked, and locking a pinned one silently unpinned it. Upstream keeps
+	// them in two independent boolean columns (`is_locked`, `is_sticky`), so
+	// the state column now carries visibility only and the two flags have
+	// their own fields.
 	State string
+	// IsLocked reports whether the discussion accepts no new replies.
+	IsLocked bool
 	// IsSticky reports whether the discussion is pinned.
 	IsSticky bool
 	// IsHidden reports whether the discussion is hidden.
@@ -259,6 +279,20 @@ const (
 	PermissionEditTag = "editTag"
 	// PermissionDeleteTag allows deleting a tag.
 	PermissionDeleteTag = "deleteTag"
+	// PermissionLockDiscussion allows locking and unlocking a discussion.
+	//
+	// It is upstream's `discussion.lock`, which its `flarum/lock`
+	// extension registers and its `Lock\Access\DiscussionPolicy`
+	// reads.
+	PermissionLockDiscussion = "lock"
+	// PermissionStickyDiscussion allows pinning and unpinning a discussion.
+	//
+	// It is upstream's `discussion.sticky`, registered by `flarum/sticky`.
+	PermissionStickyDiscussion = "sticky"
+	// PermissionSuspendUser allows suspending an account.
+	//
+	// It is upstream's `user.suspend`, registered by `flarum/suspend`.
+	PermissionSuspendUser = "suspendUser"
 	// PermissionAdministrate allows administering the forum.
 	PermissionAdministrate = "administrate"
 )

@@ -158,7 +158,7 @@ func (s *Server) relatedResources(e *core.RequestEvent, resourceType, relation, 
 			if err != nil || user == nil {
 				return nil, false, err
 			}
-			return []Resource{s.userResourceWithGroups(user, user.Groups)}, true, nil
+			return []Resource{s.userResourceWithGroups(s.actor(e).ID(), user, user.Groups)}, true, nil
 		case "firstPost", "lastPost":
 			post, err := s.repo.FindPost(identifier)
 			if err != nil {
@@ -180,7 +180,7 @@ func (s *Server) relatedResources(e *core.RequestEvent, resourceType, relation, 
 			if err != nil || user == nil {
 				return nil, false, err
 			}
-			return []Resource{s.userResourceWithGroups(user, user.Groups)}, true, nil
+			return []Resource{s.userResourceWithGroups(s.actor(e).ID(), user, user.Groups)}, true, nil
 		case "discussion":
 			discussion, err := s.repo.FindDiscussion(identifier)
 			if err != nil {

@@ -119,6 +119,14 @@ var defaultPermissions = map[string][]string{
 		domain.PermissionEditPost,
 		domain.PermissionDeletePost,
 		domain.PermissionHidePost,
+		// The extension powers, which upstream puts in the moderator
+		// group too: `flarum/lock` and `flarum/sticky` add a
+		// `discussion.*` row each, and `flarum/suspend` a `user.suspend`.
+		// They live here rather than in the member group because a
+		// member-group row is inherited by every signed-in caller.
+		domain.PermissionLockDiscussion,
+		domain.PermissionStickyDiscussion,
+		domain.PermissionSuspendUser,
 	},
 }
 

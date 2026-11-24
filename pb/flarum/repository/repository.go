@@ -309,6 +309,15 @@ func (r *Repository) userFromRecord(record *core.Record) (*domain.User, error) {
 		user.AvatarURL = avatar
 	}
 
+	// The suspension columns live on the shared users record, added by
+	// the Suspend plugin's migration. A record that predates them reads
+	// as not suspended.
+	if until := record.GetDateTime("suspended_until"); !until.IsZero() {
+		user.SuspendedUntil = until.Time()
+	}
+	user.SuspendReason = record.GetString("suspend_reason")
+	user.SuspendMessage = record.GetString("suspend_message")
+
 	// The forum-side extras live in the forum's own collection.
 	profile, err := r.FindUserProfile(record.Id)
 	if err == nil && profile != nil {
@@ -704,9 +713,16 @@ func (*Repository) discussionFromRecord(record *core.Record) *domain.Discussion 
 	}
 	discussion.HiddenUserID = record.GetString("hidden_user")
 
-	if discussion.State == domain.DiscussionSticky {
-		discussion.IsSticky = true
-	}
+	// Locking and pinning are their own columns, as upstream models them
+	// (`is_locked`, `is_sticky`).
+	//
+	// The STATE check is a fallback for rows written before those columns
+	// existed, when the two were encoded in `state`: without it an
+	// already-locked discussion would silently become replyable on
+	// upgrade. The migration backfills the columns, so this only matters
+	// for a row the backfill could not see.
+	discussion.IsLocked = record.GetBool("is_locked") || discussion.State == domain.DiscussionLocked
+	discussion.IsSticky = record.GetBool("is_sticky") || discussion.State == domain.DiscussionSticky
 
 	return discussion
 }

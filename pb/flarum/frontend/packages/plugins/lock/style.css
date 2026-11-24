@@ -1,0 +1,6 @@
+/* The lock badge shown on a locked discussion. */
+
+.Badge--locked {
+  background: #ddd;
+  color: #666;
+}

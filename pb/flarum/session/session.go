@@ -225,6 +225,14 @@ func (r *Resolver) userFromRecord(record *core.Record) (*domain.User, error) {
 		user.AvatarURL = avatar
 	}
 
+	// The suspension columns, added by the Suspend plugin. They are read
+	// HERE as well as in the repository because the permission layer asks
+	// the session's projection, not the repository's: without this a
+	// suspended account keeps every group permission and can still post.
+	if until := record.GetDateTime("suspended_until"); !until.IsZero() {
+		user.SuspendedUntil = until.Time()
+	}
+
 	// The administrator group, if the account is in it.
 	if r.groups != nil {
 		for _, groupID := range r.groups(record.Id) {

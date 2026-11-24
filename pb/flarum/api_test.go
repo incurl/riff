@@ -225,15 +225,18 @@ func TestForum_ExtensionManifestIsServed(t *testing.T) {
 		Extensions []map[string]any `json:"extensions"`
 	}
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &manifest))
-	require.Len(t, manifest.Extensions, 3, "the Tags, Likes and Uploads plugins must be listed")
+	// Every first-party plugin that ships a frontend bundle is listed. The
+	// language pack is not: it declares a locale, not an asset bundle.
+	require.Len(t, manifest.Extensions, 6, "every bundled plugin must be listed")
 
 	ids := []string{}
 	for _, extension := range manifest.Extensions {
 		ids = append(ids, extension["id"].(string))
 	}
-	require.Contains(t, ids, "riff/tags")
-	require.Contains(t, ids, "riff/likes")
-	require.Contains(t, ids, "riff/uploads")
+
+	for _, want := range []string{"riff/tags", "riff/likes", "riff/uploads", "flarum/lock", "flarum/sticky", "flarum/suspend"} {
+		require.Contains(t, ids, want)
+	}
 }
 
 // TestForum_PluginCollectionsAreCreated pins that the plugins' own

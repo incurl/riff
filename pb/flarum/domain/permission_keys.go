@@ -72,6 +72,14 @@ var upstreamPermissionKeys = map[string]string{
 	"discussion.editPosts":   PermissionEditPost,
 	"discussion.hidePosts":   PermissionHidePost,
 	"discussion.deletePosts": PermissionDeletePost,
+
+	// The extension moderation powers. Each is registered by the
+	// extension that owns the action, as upstream's admin pages do:
+	// `flarum/lock` sends `discussion.lock`, `flarum/sticky` sends
+	// `discussion.sticky`, and `flarum/suspend` sends `user.suspend`.
+	"discussion.lock":   PermissionLockDiscussion,
+	"discussion.sticky": PermissionStickyDiscussion,
+	"user.suspend":      PermissionSuspendUser,
 }
 
 // forumPermissionKeys is the reverse of upstreamPermissionKeys: the

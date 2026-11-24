@@ -272,6 +272,37 @@ func newModule(app core.App, opts Options) (*Module, error) {
 	return module, nil
 }
 
+// pluginCan returns a permission checker for a plugin callback.
+//
+// It resolves the actor once, so a resource carrying several
+// plugin-contributed `can*` attributes does not read the account and its
+// groups once per attribute.
+func (m *Module) pluginCan(ctx context.Context, actorID string) func(action, subjectType, subjectID string) bool {
+	actor := m.pluginActor(actorID)
+
+	return func(action, subjectType, subjectID string) bool {
+		if actor.UserID == "" {
+			return false
+		}
+		allowed, err := m.permissions.Can(ctx, actor, action, subjectType, subjectID)
+		return err == nil && allowed
+	}
+}
+
+// pluginActor resolves the domain actor for an account id.
+func (m *Module) pluginActor(actorID string) domain.Actor {
+	if actorID == "" {
+		return domain.Actor{}
+	}
+
+	user, err := m.repo.UserByID(actorID)
+	if err != nil || user == nil {
+		return domain.Actor{}
+	}
+
+	return domain.ActorFor(user.ID, user.IsAdmin, user.Groups)
+}
+
 // boot runs the plugin lifecycle.
 func (m *Module) boot(ctx context.Context) error {
 	enabled, err := m.enabledPlugins()
@@ -304,6 +335,7 @@ func (m *Module) boot(ctx context.Context) error {
 					ActorID:  req.ActorID,
 					RecordID: req.RecordID,
 					Type:     req.Type,
+					Can:      m.pluginCan(ctx, req.ActorID),
 				})
 			})
 		}
