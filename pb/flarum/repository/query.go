@@ -229,6 +229,71 @@ func (r *Repository) SaveSetting(key string, value any, updatedBy string) error 
 	return r.app.Save(record)
 }
 
+// SetPluginEnabled records a plugin's enabled state.
+//
+// The state lives in the forum's `plugin_state` collection, and it is
+// what the module reads at boot: a plugin with no state row is
+// enabled, and an operator disables one explicitly.
+//
+// **A DISABLED PLUGIN IS A ROW THAT IS NOT THERE.** The collection's
+// `enabled` column is a `BoolField` with `Required: true`, and
+// PocketBase's `Required` on a bool means the value must be "TRUE" —
+// so a `false` can never be stored, and the write fails with "enabled:
+// cannot be blank". A row that says "false" is therefore impossible,
+// and the state has to be expressed by the row's ABSENCE.
+//
+// That is the same shape the permission table uses: a group holds a
+// permission when a row says so, and a group that does not hold it
+// has no row at all.
+//
+// The row is keyed by the plugin's RAW id (`vendor/name`), because
+// that is the id the plugin manager knows the plugin by. The admin
+// application uses the FLATTENED id (`vendor-name`) in its URLs, so
+// the caller flattens it back before it gets here.
+func (r *Repository) SetPluginEnabled(pluginID string, enabled bool) error {
+	collection, err := r.collection("plugin_state")
+	if err != nil {
+		return err
+	}
+
+	record, err := r.app.FindFirstRecordByFilter(collection, "plugin_id = {:plugin}",
+		map[string]any{"plugin": pluginID})
+	if err != nil {
+		// No row: the plugin is enabled, which is the default. There
+		// is nothing to write.
+		if enabled {
+			return nil
+		}
+
+		// Disabling a plugin that has no row needs a row to remove:
+		// the row's ABSENCE is the state, so the plugin is disabled
+		// by writing the row and then deleting it. A record that was
+		// never saved has no id, and PocketBase refuses to delete
+		// one ("the model can be deleted only if it is existing and
+		// has a non-empty primary key").
+		record = core.NewRecord(collection)
+		record.Set("plugin_id", pluginID)
+		record.Set("enabled", true)
+		if err := r.app.Save(record); err != nil {
+			return err
+		}
+
+		return r.app.Delete(record)
+	}
+
+	if !enabled {
+		// The row's absence is the state. Removing it is what
+		// disables the plugin.
+		return r.app.Delete(record)
+	}
+
+	// A row that exists and says "true" is the enabled state. The
+	// column cannot be false, so there is nothing to change.
+	record.Set("enabled", true)
+
+	return r.app.Save(record)
+}
+
 // AllSettings returns every forum setting, keyed by its key.
 func (r *Repository) AllSettings() (map[string]any, error) {
 	collection, err := r.collection("settings")

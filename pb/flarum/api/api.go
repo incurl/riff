@@ -59,6 +59,25 @@ type Server struct {
 	// renderer renders a post's Markdown source into the HTML the
 	// frontend displays.
 	renderer ContentRenderer
+	// extensions are the forum's plugins, by their RAW id.
+	//
+	// The admin application addresses a plugin by the FLATTENED id
+	// (`vendor-name`) — it is a path segment — and the state table
+	// records the RAW id, so the server needs both spellings.
+	extensions map[string]ExtensionInfo
+}
+
+// ExtensionInfo describes one of the forum's plugins.
+//
+// It is the API server's own narrow view of a plugin: the id and the
+// name are all the admin surface needs. The plugin package's Manifest
+// is richer, and the API package does not import it — the two packages
+// are siblings, and the dependency would point the wrong way.
+type ExtensionInfo struct {
+	// ID is the plugin's raw id, e.g. "riff/likes".
+	ID string
+	// Name is the plugin's display name.
+	Name string
 }
 
 // ContentRenderer renders a post's Markdown source into HTML.
@@ -131,6 +150,12 @@ type Options struct {
 	// the frontend trusts and inserts `contentHtml` as-is, so the
 	// forum must always produce a rendered body.
 	Renderer ContentRenderer
+	// Extensions are the forum's plugins, by their raw id.
+	//
+	// The admin surface needs them to map the FLATTENED id the
+	// frontend addresses a plugin by onto the raw id the state table
+	// records.
+	Extensions map[string]ExtensionInfo
 }
 
 // NewServer returns an API server.
@@ -154,6 +179,15 @@ func NewServer(opts Options) *Server {
 		relationships:       map[string][]RelationshipSource{},
 		relationshipWriters: map[string][]RelationshipWriterSource{},
 	}
+}
+
+// SetExtensions records the forum's plugins for the admin surface.
+//
+// It is called by the module AFTER the plugins are registered: the API
+// server is built before that, so the list is not known when it is
+// constructed.
+func (s *Server) SetExtensions(extensions map[string]ExtensionInfo) {
+	s.extensions = extensions
 }
 
 // APIPath returns the JSON:API prefix.

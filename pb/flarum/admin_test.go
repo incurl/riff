@@ -70,8 +70,19 @@ func TestAdmin_PayloadCarriesWhatTheAdminAppReadsAtBoot(t *testing.T) {
 
 	// The extensions list is the forum's own plugins: real data, not a
 	// placeholder.
-	require.Contains(t, admin.Extensions, "riff/tags", "the tags plugin should be listed")
-	require.Contains(t, admin.Extensions, "riff/likes", "the likes plugin should be listed")
+	//
+	// **THE IDS ARE FLATTENED**, because the admin application
+	// addresses an extension by the id in its URL and that id is a
+	// PATH SEGMENT: a plugin's raw id is `vendor/name`, which
+	// contains a slash and would be two segments. Upstream flattens the
+	// same way (`Extension::nameToId()`).
+	require.Contains(t, admin.Extensions, "riff-tags", "the tags plugin should be listed")
+	require.Contains(t, admin.Extensions, "riff-likes", "the likes plugin should be listed")
+	require.Contains(t, admin.Extensions, "flarum-mentions", "the mentions plugin should be listed")
+
+	for id := range admin.Extensions {
+		require.NotContains(t, id, "/", "an extension id must be one path segment: %q", id)
+	}
 }
 
 // TestAdmin_ForumPayloadHasNoAdminData pins that the forum app's payload
@@ -163,10 +174,23 @@ func TestAdmin_SettingsAreParseable(t *testing.T) {
 
 	// The enabled plugins are the forum's own, so the admin app shows
 	// the right ones as enabled.
+	//
+	// **THE IDS ARE FLATTENED.** The admin application looks an
+	// extension up by the id in its URL, and that id is a PATH
+	// SEGMENT: a plugin's raw id is `vendor/name`, which contains a
+	// slash and would be two segments. Upstream flattens the same way
+	// (`Extension::nameToId()`), and the flattened id is what the
+	// extension map is keyed by, so the two agree.
 	var enabled []string
 	require.NoError(t, json.Unmarshal([]byte(admin.Settings["extensions_enabled"].(string)), &enabled))
-	require.Contains(t, enabled, "riff/tags")
-	require.Contains(t, enabled, "riff/likes")
+	require.Contains(t, enabled, "riff-tags")
+	require.Contains(t, enabled, "riff-likes")
+
+	for _, id := range enabled {
+		require.NotContains(t, id, "/", "an extension id must be one path segment: %q", id)
+		require.Contains(t, admin.Extensions, id,
+			"the enabled list and the extension map must agree on the id")
+	}
 }
 
 // TestAdmin_ModelStatisticsCarryTheUserCount pins the count the admin

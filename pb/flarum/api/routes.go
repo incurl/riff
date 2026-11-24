@@ -112,6 +112,18 @@ func (s *Server) Mount(r *router.Router[*core.RequestEvent]) {
 	// The POST twin, for the same `X-HTTP-Method-Override` reason.
 	r.POST(api+"/notifications/{id}", s.readNotificationHandler)
 
+	// --- extensions ----------------------------------------------------
+	// The admin application's enable/disable toggle. The id in the URL
+	// is the FLATTENED one (`vendor-name`), because it is a path
+	// segment and the raw id (`vendor/name`) would be two of them.
+	//
+	// The POST twin is here for the same `X-HTTP-Method-Override`
+	// reason as the other write routes: the frontend rewrites a PATCH
+	// into a POST, and PocketBase's router matches on the real method
+	// before any handler runs.
+	r.PATCH(api+"/extensions/{id}", s.updateExtensionHandler)
+	r.POST(api+"/extensions/{id}", s.updateExtensionHandler)
+
 	// --- settings ------------------------------------------------------
 	// The settings surface is NOT a JSON:API resource: upstream's
 	// admin application posts a bare settings map and expects an empty

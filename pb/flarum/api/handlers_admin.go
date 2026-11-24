@@ -8,6 +8,7 @@ import (
 	"github.com/pocketbase/pocketbase/core"
 
 	"github.com/incurl/riff/pb/flarum/domain"
+	"github.com/incurl/riff/pb/flarum/repository"
 	"github.com/incurl/riff/pb/flarum/session"
 )
 
@@ -70,6 +71,80 @@ func (s *Server) requireAdmin(e *core.RequestEvent, detail string) (session.Acto
 	}
 
 	return actor, nil
+}
+
+// updateExtensionHandler serves PATCH /api/extensions/{id}.
+//
+// It is the admin application's enable/disable toggle: the extension
+// page's switch posts `{enabled: true|false}` to this URL.
+//
+// The id in the URL is the FLATTENED id (`vendor-name`), because it is
+// a path segment and the raw id (`vendor/name`) would be two of them.
+// The state is recorded under the plugin's RAW id, which is the id the
+// plugin manager knows the plugin by.
+//
+// The answer is an empty 204, and the frontend reloads the page after
+// it: a disabled plugin's bundle must not be loaded, and the boot
+// payload's extension list is what decides that.
+//
+// The state is read at BOOT (`Module.enabledPlugins`), so the toggle
+// takes effect on the next load — which is what the reload is for.
+func (s *Server) updateExtensionHandler(e *core.RequestEvent) error {
+	if _, err := s.requireAdmin(e, "You are not allowed to change the extensions."); err != nil {
+		return fail(e, err)
+	}
+
+	if err := sessionCSRF(e); err != nil {
+		return fail(e, errForbidden("The request could not be verified."))
+	}
+
+	id := e.Request.PathValue("id")
+	if id == "" {
+		return fail(e, errValidation("An extension id is required."))
+	}
+
+	body, err := decodeSettingsMap(e)
+	if err != nil {
+		return fail(e, err)
+	}
+
+	enabled, ok := body["enabled"].(bool)
+	if !ok {
+		return fail(e, errValidation("The request must say whether the extension is enabled."))
+	}
+
+	pluginID, known := s.pluginIDFor(id)
+	if !known {
+		return fail(e, notFoundError("That extension does not exist."))
+	}
+
+	if err := s.repo.SetPluginEnabled(pluginID, enabled); err != nil {
+		return fail(e, errInternal("The extension could not be updated.", err))
+	}
+
+	return s.writeEmpty(e, http.StatusNoContent)
+}
+
+// pluginIDFor maps a FLATTENED extension id onto the plugin's raw id.
+//
+// The admin application addresses an extension by the flattened id
+// (`vendor-name`) — it is a path segment, and the raw id contains a
+// slash — while the plugin manager knows the plugin by its raw id
+// (`vendor/name`).
+//
+// The mapping is the reverse of the flattening, so it is a guess: a
+// plugin whose raw id is not `vendor-name` cannot be told apart from
+// another one that flattens to the same string. The forum's plugins
+// all have the `vendor/name` shape, and the manifest list is the
+// authority: a flattened id that no plugin carries is refused.
+func (s *Server) pluginIDFor(flattened string) (string, bool) {
+	for _, extension := range s.extensions {
+		if repository.ExtensionID(extension.ID) == flattened {
+			return extension.ID, true
+		}
+	}
+
+	return "", false
 }
 
 // settingsHandler serves the settings command endpoints.

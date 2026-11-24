@@ -5,6 +5,50 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## AN EXTENSION ID IS A PATH SEGMENT (2026-11-25)
+
+The admin application's extension page — the per-plugin settings page —
+was unreachable: every entry in the admin sidebar linked to a URL the
+router could not resolve.
+
+**AN EXTENSION ID WITH A SLASH IS NOT A PATH SEGMENT.** A plugin's id is
+`vendor/name` — it CONTAINS A SLASH — and the admin app's extension
+page lives at `/extension/:id`, a pattern with ONE segment. The route
+builder substitutes the id verbatim, so an id with a slash becomes two
+segments and the route does not match. Upstream avoids this at the
+PAYLOAD boundary: `Extension::nameToId()` flattens `flarum/tags` to
+`flarum-tags`, and that flattened id is both the key of
+`app.data.extensions` and the route parameter. The Go side now does the
+same (`repository.ExtensionID`), so the two agree — and the id is a
+single segment, so the route matches.
+
+**THE ENABLED LIST MUST USE THE SAME IDS.** `isExtensionEnabled` asks
+whether `extensions_enabled` holds the extension's id, so a list of the
+RAW `vendor/name` ids would report EVERY plugin as disabled, and the
+extension page would show "enable to see" instead of its settings — the
+same page, unreachable by a different route.
+
+**A DISABLED PLUGIN IS A ROW THAT IS NOT THERE.** The state table's
+`enabled` column is a `BoolField` with `Required: true`, and
+PocketBase's `Required` on a bool means the value must be "TRUE" — so a
+`false` can never be stored, and the write fails with "enabled: cannot
+be blank". A plugin therefore could not be disabled AT ALL. The state
+is now expressed by the row's ABSENCE, which is the same shape the
+permission table uses: a group holds a permission when a row says so,
+and a group that does not hold it has no row. The table is SEEDED with
+a row per plugin at boot, so the forum's plugins ship enabled, and the
+seeding is idempotent so a disabled plugin stays disabled.
+
+**THE ENABLE/DISABLE TOGGLE HAD NO ROUTE AT ALL.** The admin
+application's switch posts `{enabled: …}` to
+`PATCH /api/extensions/{id}`, and the forum answered 404 — so the
+switch showed the plugin as enabled whatever the server said. The route
+exists now, with the POST twin the other write routes carry (the
+frontend rewrites a PATCH into a POST, and PocketBase's router matches
+on the real method). The id in the URL is the FLATTENED one, because it
+is a path segment; the state is recorded under the RAW one, because that
+is the id the plugin manager knows the plugin by.
+
 ## A MENTION IS A REFERENCE, NOT A DECORATION (2026-11-25)
 
 The mentions plugin is the port of upstream `flarum/mentions`. The

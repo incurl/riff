@@ -521,8 +521,25 @@ func (m *Module) bootPayload(e *core.RequestEvent, admin bool) (frontend.BootPay
 func (m *Module) adminPayload() *frontend.Admin {
 	extensions := map[string]any{}
 	for _, manifest := range m.plugins.Manifests() {
-		extensions[manifest.ID] = map[string]any{
-			"id":          manifest.ID,
+		// **THE EXTENSION ID IS FLATTENED, BECAUSE IT IS A PATH
+		// SEGMENT.** A plugin's id is `vendor/name` — it CONTAINS A
+		// SLASH — and the admin app's extension page lives at
+		// `/extension/:id`, a pattern with ONE segment. The route
+		// builder substitutes the id verbatim, so an id with a slash
+		// becomes two segments and the route does not match: the
+		// extension's settings page is unreachable, and every entry
+		// in the admin sidebar links to a URL the router cannot
+		// resolve.
+		//
+		// Upstream avoids this the same way: `Extension::nameToId()`
+		// flattens `flarum/tags` to `flarum-tags`, and THAT is the
+		// key the admin app's `app.data.extensions` is keyed by. The
+		// flattened id is therefore both the map key and the route
+		// parameter, and they agree.
+		id := repository.ExtensionID(manifest.ID)
+
+		extensions[id] = map[string]any{
+			"id":          id,
 			"name":        manifest.Name,
 			"version":     manifest.Version,
 			"description": "",
@@ -642,9 +659,16 @@ func (m *Module) adminSettings() map[string]any {
 	//
 	// This is the value `isExtensionEnabled` parses, so it must be a
 	// JSON document and not a Go slice.
+	//
+	// The ids are the FLATTENED ones, because that is what the admin
+	// app looks up: `isExtensionEnabled` asks whether the list holds
+	// the extension's id, and the extension's id is the flattened one
+	// the admin payload published. A list of the raw `vendor/name`
+	// ids would report EVERY plugin as disabled, and the extension
+	// page would then show "enable to see" instead of its settings.
 	enabled := []string{}
 	for _, manifest := range m.plugins.Manifests() {
-		enabled = append(enabled, manifest.ID)
+		enabled = append(enabled, repository.ExtensionID(manifest.ID))
 	}
 	settings["extensions_enabled"] = mustJSON(enabled)
 

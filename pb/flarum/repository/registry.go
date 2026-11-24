@@ -172,6 +172,39 @@ func PluginSlug(pluginID string) string {
 	return strings.ReplaceAll(strings.TrimSpace(pluginID), "/", "-")
 }
 
+// ExtensionID reduces a plugin ID to the id the admin application
+// addresses an extension by.
+//
+// It is upstream's `Extension::nameToId()`, and the admin surface
+// depends on the exact spelling: the id is a PATH SEGMENT in the
+// admin app's extension URL, and the extension map is keyed by it.
+//
+//	"flarum/tags"               -> "flarum-tags"
+//	"flarum/flarum-ext-suspend" -> "flarum-suspend"
+//	"some-vendor/foo"           -> "some-vendor-foo"
+//
+// The `flarum-` and `flarum-ext-` prefixes are stripped because
+// upstream strips them, and the plugin's own id is what the catalogue
+// and the composer name agree on.
+//
+// It is NOT [PluginSlug]: that one names a COLLECTION, and a
+// collection's name is not a path segment, so it keeps the prefix.
+func ExtensionID(pluginID string) string {
+	id := strings.TrimSpace(pluginID)
+	if id == "" {
+		return ""
+	}
+	if id == "flarum/core" {
+		return "core"
+	}
+
+	id = strings.Replace(id, "/flarum-ext-", "-", 1)
+	id = strings.Replace(id, "/flarum-", "-", 1)
+	id = strings.Replace(id, "/", "-", 1)
+
+	return id
+}
+
 // Core returns the logical names of every core model, sorted.
 func (r *Registry) Core() []string {
 	r.mu.RLock()

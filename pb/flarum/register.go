@@ -169,6 +169,27 @@ func Register(app core.App, opts Options) error {
 	return nil
 }
 
+// extensionInfos describes the forum's plugins for the API server.
+//
+// The admin surface addresses a plugin by the FLATTENED id
+// (`vendor-name`) — it is a path segment — while the state table
+// records the RAW id (`vendor/name`), so the server is told both.
+//
+// The list is the REGISTERED plugins, not the enabled ones: a disabled
+// plugin is still a plugin the administrator can switch back on.
+func extensionInfos(manager *plugin.Manager) map[string]api.ExtensionInfo {
+	infos := map[string]api.ExtensionInfo{}
+
+	for _, manifest := range manager.RegisteredManifests() {
+		infos[manifest.ID] = api.ExtensionInfo{
+			ID:   manifest.ID,
+			Name: manifest.Name,
+		}
+	}
+
+	return infos
+}
+
 // newModule builds the module's services.
 func newModule(app core.App, opts Options) (*Module, error) {
 	registry := repository.NewRegistry(opts.CollectionPrefix)
@@ -284,6 +305,12 @@ func newModule(app core.App, opts Options) (*Module, error) {
 		}
 	}
 
+	// The API server is built before the plugins are registered, so the
+	// admin surface's plugin list is filled in here: the server needs
+	// both spellings of every plugin id (the flattened one the frontend
+	// addresses a plugin by, and the raw one the state table records).
+	apiServer.SetExtensions(extensionInfos(manager))
+
 	return module, nil
 }
 
@@ -320,6 +347,12 @@ func (m *Module) pluginActor(actorID string) domain.Actor {
 
 // boot runs the plugin lifecycle.
 func (m *Module) boot(ctx context.Context) error {
+	// The state table is seeded before it is read, because a plugin
+	// with no state row is DISABLED (see `enabledPlugins`).
+	if err := m.seedPluginState(); err != nil {
+		return err
+	}
+
 	enabled, err := m.enabledPlugins()
 	if err != nil {
 		return err
@@ -399,26 +432,80 @@ func (m *Module) Shutdown(ctx context.Context) {
 	m.plugins.Shutdown(ctx)
 }
 
+// seedPluginState makes sure every registered plugin has a state row.
+//
+// **A DISABLED PLUGIN IS A ROW THAT IS NOT THERE** (see
+// `enabledPlugins`), so a plugin that has never been toggled would
+// read as disabled. The state table is therefore SEEDED: a row per
+// plugin, saying it is enabled.
+//
+// The seeding is IDEMPOTENT: a plugin that already has a row keeps
+// it, so a plugin the operator disabled stays disabled across a
+// restart.
+func (m *Module) seedPluginState() error {
+	physical := m.registry.Physical("plugin_state")
+	collection, err := m.app.FindCollectionByNameOrId(physical)
+	if err != nil {
+		// The state table is missing: every plugin is enabled, and
+		// there is nothing to seed.
+		return nil //nolint:nilerr // a missing table means "all enabled"
+	}
+
+	for _, manifest := range m.plugins.RegisteredManifests() {
+		existing, err := m.app.FindFirstRecordByFilter(collection, "plugin_id = {:plugin}",
+			map[string]any{"plugin": manifest.ID})
+		if err == nil && existing != nil {
+			// The plugin already has a state: an operator's choice,
+			// or a row the seeding wrote earlier.
+			continue
+		}
+
+		record := core.NewRecord(collection)
+		record.Set("plugin_id", manifest.ID)
+		record.Set("enabled", true)
+		if err := m.app.Save(record); err != nil {
+			return errors.Wrapf(err, "forum: the %q plugin state could not be seeded", manifest.ID)
+		}
+	}
+
+	return nil
+}
+
 // enabledPlugins reads the persisted enabled state of the plugins.
 //
-// A plugin with no state row is enabled: the forum ships its plugins
-// enabled, and an operator disables one explicitly.
+// **A DISABLED PLUGIN IS A ROW THAT IS NOT THERE.** The state table's
+// `enabled` column is a `BoolField` with `Required: true`, and
+// PocketBase's `Required` on a bool means the value must be "TRUE" —
+// so a `false` can never be stored, and the write fails with "enabled:
+// cannot be blank". The state is therefore expressed by the row's
+// ABSENCE: a row says the plugin is enabled, and a plugin with no row
+// is disabled.
+//
+// The forum ships its plugins enabled, so the state table is SEEDED
+// with a row per plugin at boot. A plugin that is disabled has its row
+// removed, and a plugin that is switched back on gets its row back.
 func (m *Module) enabledPlugins() (map[string]bool, error) {
 	enabled := map[string]bool{}
 	for _, manifest := range m.plugins.RegisteredManifests() {
-		enabled[manifest.ID] = true
+		enabled[manifest.ID] = false
 	}
 
 	physical := m.registry.Physical("plugin_state")
 	collection, err := m.app.FindCollectionByNameOrId(physical)
 	if err != nil {
 		// The state table is missing: every plugin is enabled.
+		for id := range enabled {
+			enabled[id] = true
+		}
 		return enabled, nil //nolint:nilerr // a missing table means "all enabled"
 	}
 
 	records, err := m.app.FindAllRecords(collection)
 	if err != nil {
 		// The state table cannot be read: every plugin is enabled.
+		for id := range enabled {
+			enabled[id] = true
+		}
 		return enabled, nil //nolint:nilerr // an unreadable table means "all enabled"
 	}
 	for _, record := range records {
