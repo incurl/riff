@@ -27,6 +27,18 @@ const (
 	TypeNotification = "notifications"
 	// TypeTag is the tag resource.
 	TypeTag = "tags"
+	// TypePoll is the poll resource.
+	//
+	// It is upstream's `polls`, which the polls extension registers.
+	TypePoll = "polls"
+	// TypePollOption is the poll option resource.
+	//
+	// It is upstream's `poll_options`.
+	TypePollOption = "poll_options"
+	// TypePollVote is the poll vote resource.
+	//
+	// It is upstream's `poll_votes`.
+	TypePollVote = "poll_votes"
 )
 
 // timestamp renders a time as the RFC 3339 string JSON:API expects.

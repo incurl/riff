@@ -10,18 +10,22 @@ import (
 // tagRecord projects a tag record onto the domain model.
 func tagRecord(record *core.Record) *domain.Tag {
 	return &domain.Tag{
-		ID:              record.Id,
-		Name:            record.GetString("name"),
-		Slug:            record.GetString("slug"),
-		Description:     record.GetString("description"),
-		ParentID:        record.GetString("parent"),
-		Color:           record.GetString("color"),
-		Icon:            record.GetString("icon"),
-		Position:        record.GetInt("position"),
-		IsHidden:        record.GetBool("is_hidden"),
-		IsPrimary:       record.GetBool("is_primary"),
-		IsRestricted:    record.GetBool("is_restricted"),
-		DiscussionCount: record.GetInt("discussion_count"),
+		ID:                   record.Id,
+		Name:                 record.GetString("name"),
+		Slug:                 record.GetString("slug"),
+		Description:          record.GetString("description"),
+		ParentID:             record.GetString("parent"),
+		Color:                record.GetString("color"),
+		Icon:                 record.GetString("icon"),
+		Position:             record.GetInt("position"),
+		IsHidden:             record.GetBool("is_hidden"),
+		IsPrimary:            record.GetBool("is_primary"),
+		IsRestricted:         record.GetBool("is_restricted"),
+		DiscussionCount:      record.GetInt("discussion_count"),
+		DefaultSort:          record.GetString("default_sort"),
+		LastPostedAt:         record.GetDateTime("last_posted_at").Time(),
+		LastPostedDiscussion: record.GetString("last_posted_discussion"),
+		LastPostedUserID:     record.GetString("last_posted_user"),
 	}
 }
 
@@ -118,4 +122,268 @@ func detachTag(app core.App, discussionID, tagID string) error {
 		return nil //nolint:nilerr // an absent link is already detached
 	}
 	return app.Delete(record)
+}
+
+// createTag creates a tag.
+//
+// The position is assigned by the caller, because upstream's rule is
+// positional: a PRIMARY tag is placed after the last primary tag of
+// its parent, and a secondary tag has no position at all.
+func createTag(app core.App, physical string, tag *domain.Tag) (*domain.Tag, error) {
+	collection, err := app.FindCollectionByNameOrId(physical)
+	if err != nil {
+		return nil, errors.Wrapf(err, "tags: the %q collection is missing", physical)
+	}
+
+	record := core.NewRecord(collection)
+	applyTag(record, tag)
+
+	if err := app.Save(record); err != nil {
+		return nil, errors.Wrap(err, "tags: the tag could not be saved")
+	}
+
+	return tagRecord(record), nil
+}
+
+// updateTag writes a tag's fields.
+//
+// It returns the updated tag, and whether the tag was RESTRICTED and is
+// now not: upstream deletes the tag's scoped permission rows when it
+// stops being restricted, because those rows grant access to a scope
+// that no longer exists.
+func updateTag(app core.App, physical, tagID string, tag *domain.Tag) (*domain.Tag, bool, error) {
+	collection, err := app.FindCollectionByNameOrId(physical)
+	if err != nil {
+		return nil, false, errors.Wrapf(err, "tags: the %q collection is missing", physical)
+	}
+
+	record, err := app.FindRecordById(collection, tagID)
+	if err != nil {
+		return nil, false, errors.Wrap(errNotFound, "tags: the tag does not exist")
+	}
+
+	wasRestricted := record.GetBool("is_restricted")
+
+	applyTag(record, tag)
+
+	if err := app.Save(record); err != nil {
+		return nil, false, errors.Wrap(err, "tags: the tag could not be saved")
+	}
+
+	// A tag that stops being restricted keeps its scoped permission
+	// rows otherwise: the rows would grant a scope that no longer
+	// exists, and re-restricting the tag later would silently restore
+	// an old access list.
+	unrestricted := wasRestricted && !record.GetBool("is_restricted")
+
+	return tagRecord(record), unrestricted, nil
+}
+
+// deleteTag removes a tag.
+//
+// The discussion links are removed with it, and the tag's scoped
+// permission rows go too — upstream deletes them on delete, because a
+// scoped row for a tag that no longer exists is dead weight that
+// reappears if the id is ever reused.
+func deleteTag(app core.App, physical, tagID string) error {
+	collection, err := app.FindCollectionByNameOrId(physical)
+	if err != nil {
+		return errors.Wrapf(err, "tags: the %q collection is missing", physical)
+	}
+
+	record, err := app.FindRecordById(collection, tagID)
+	if err != nil {
+		return errors.Wrap(errNotFound, "tags: the tag does not exist")
+	}
+
+	if err := deleteTagLinks(app, tagID); err != nil {
+		return err
+	}
+
+	if err := app.Delete(record); err != nil {
+		return errors.Wrap(err, "tags: the tag could not be deleted")
+	}
+
+	return nil
+}
+
+// deleteTagLinks removes a tag's discussion links.
+func deleteTagLinks(app core.App, tagID string) error {
+	collection, err := app.FindCollectionByNameOrId("forum_discussion_tags")
+	if err != nil {
+		// The link table is missing: there is nothing to remove.
+		return nil //nolint:nilerr // a missing table means no links
+	}
+
+	records, err := app.FindRecordsByFilter(collection, "tag = {:tag}", "", 0, 0, map[string]any{"tag": tagID})
+	if err != nil {
+		return errors.Wrap(err, "tags: the discussion tags could not be read")
+	}
+
+	for _, record := range records {
+		if err := app.Delete(record); err != nil {
+			return errors.Wrap(err, "tags: the discussion tag could not be removed")
+		}
+	}
+
+	return nil
+}
+
+// applyTag writes a tag's fields onto a record.
+func applyTag(record *core.Record, tag *domain.Tag) {
+	record.Set("name", tag.Name)
+	record.Set("slug", tag.Slug)
+	record.Set("description", tag.Description)
+	record.Set("color", tag.Color)
+	record.Set("icon", tag.Icon)
+	record.Set("default_sort", tag.DefaultSort)
+	record.Set("is_hidden", tag.IsHidden)
+	record.Set("is_primary", tag.IsPrimary)
+	record.Set("is_restricted", tag.IsRestricted)
+
+	// An empty parent clears the relation: a root tag has no parent.
+	record.Set("parent", tag.ParentID)
+
+	// A PRIMARY tag carries a position; a secondary tag does not, and
+	// upstream's count rules are built on that distinction: a tag with
+	// a position is a primary tag.
+	// A primary tag carries a position; a secondary tag does not, and
+	// upstream's count rules are built on that distinction: a tag with
+	// a position IS a primary tag. The column is therefore cleared for
+	// a secondary tag rather than set to zero.
+	if tag.IsPrimary {
+		record.Set("position", tag.Position)
+	} else {
+		record.Set("position", nil)
+	}
+}
+
+// setTagPositions writes the position of every tag in a list.
+//
+// It is upstream's `POST /tags/order`: the admin drags the tags into
+// an order, and the whole list is written in one go.
+func setTagPositions(app core.App, physical string, order []string) error {
+	collection, err := app.FindCollectionByNameOrId(physical)
+	if err != nil {
+		return errors.Wrapf(err, "tags: the %q collection is missing", physical)
+	}
+
+	for index, tagID := range order {
+		record, err := app.FindRecordById(collection, tagID)
+		if err != nil {
+			// A tag that no longer exists is skipped rather than
+			// failing the whole reorder.
+			continue
+		}
+
+		record.Set("position", index)
+		if err := app.Save(record); err != nil {
+			return errors.Wrap(err, "tags: the position could not be saved")
+		}
+	}
+
+	return nil
+}
+
+// childTagIDs returns the ids of a tag's children.
+func childTagIDs(app core.App, physical, parentID string) ([]string, error) {
+	collection, err := app.FindCollectionByNameOrId(physical)
+	if err != nil {
+		return nil, errors.Wrapf(err, "tags: the %q collection is missing", physical)
+	}
+
+	records, err := app.FindAllRecords(collection, nil)
+	if err != nil {
+		return nil, errors.Wrap(err, "tags: the tags could not be read")
+	}
+
+	ids := make([]string, 0)
+	for _, record := range records {
+		if record.GetString("parent") == parentID {
+			ids = append(ids, record.Id)
+		}
+	}
+
+	return ids, nil
+}
+
+// nextPrimaryPosition returns the position a new primary tag takes.
+//
+// It is the position after the LAST primary tag of the same parent, so
+// a new primary tag lands at the end of its group.
+func nextPrimaryPosition(app core.App, physical, parentID string) (int, error) {
+	collection, err := app.FindCollectionByNameOrId(physical)
+	if err != nil {
+		return 0, errors.Wrapf(err, "tags: the %q collection is missing", physical)
+	}
+
+	records, err := app.FindAllRecords(collection, nil)
+	if err != nil {
+		return 0, errors.Wrap(err, "tags: the tags could not be read")
+	}
+
+	position := 0
+	for _, record := range records {
+		if !record.GetBool("is_primary") {
+			continue
+		}
+		if parentID != "" && record.GetString("parent") != parentID {
+			continue
+		}
+		if parentID == "" && record.GetString("parent") != "" {
+			continue
+		}
+		if record.GetInt("position") >= position {
+			position = record.GetInt("position") + 1
+		}
+	}
+
+	return position, nil
+}
+
+// setDiscussionTags replaces a discussion's tags.
+//
+// The relationship names the discussion's COMPLETE tag set, so a tag
+// the client left out is removed — upstream's `sync()`, which replaces
+// the pivot rows rather than adding to them.
+func setDiscussionTags(app core.App, discussionID string, tags []*domain.Tag) error {
+	collection, err := app.FindCollectionByNameOrId("forum_discussion_tags")
+	if err != nil {
+		return errors.Wrap(err, "tags: the discussion_tags collection is missing")
+	}
+
+	wanted := make(map[string]struct{}, len(tags))
+	for _, tag := range tags {
+		wanted[tag.ID] = struct{}{}
+	}
+
+	// The links the client left out are removed.
+	existing, err := app.FindRecordsByFilter(collection, "discussion = {:discussion}", "", 0, 0,
+		map[string]any{"discussion": discussionID})
+	if err != nil {
+		return errors.Wrap(err, "tags: the discussion tags could not be read")
+	}
+
+	for _, record := range existing {
+		tagID := record.GetString("tag")
+		if _, keep := wanted[tagID]; keep {
+			delete(wanted, tagID)
+			continue
+		}
+		if err := app.Delete(record); err != nil {
+			return errors.Wrap(err, "tags: the discussion tag could not be removed")
+		}
+	}
+
+	// The links the client named are created.
+	for tagID := range wanted {
+		record := core.NewRecord(collection)
+		record.Set("discussion", discussionID)
+		record.Set("tag", tagID)
+		if err := app.Save(record); err != nil {
+			return errors.Wrap(err, "tags: the discussion tag could not be attached")
+		}
+	}
+
+	return nil
 }

@@ -61,3 +61,24 @@ func RequireMethod(e *core.RequestEvent, expected string) error {
 	return newAPIError(http.StatusMethodNotAllowed, CodeValidationFailed,
 		"The method is not allowed for this route.", nil)
 }
+
+// WriteMethodError renders a method mismatch as a JSON:API error
+// document.
+//
+// It is the plugin-facing form of the core's `fail(e, err)` around
+// [RequireMethod]. The core's `fail` is unexported, and a plugin that
+// returned the raw error would fall through to PocketBase's default
+// handler — which answers a 400 with an empty body, so the client sees
+// a generic failure instead of the 405 the route deserves.
+//
+// The status is 405 and the `Allow` header names the method that IS
+// allowed, which is what RFC 9110 asks for.
+func WriteMethodError(e *core.RequestEvent, err error) error {
+	apiErr, ok := err.(*apiError)
+	if !ok {
+		return WriteError(e, http.StatusMethodNotAllowed, CodeValidationFailed,
+			"The method is not allowed for this route.")
+	}
+
+	return WriteError(e, apiErr.status, apiErr.code, apiErr.detail)
+}

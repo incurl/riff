@@ -405,12 +405,17 @@ func TestForum_ThePermissionMapHoldsOnlyGlobalGrants(t *testing.T) {
 	repo := testRepo(t, app)
 
 	// A scoped grant: it belongs to a tag, not to the grid.
-	require.NoError(t, repo.SetPermission(domain.GroupGuestID, domain.PermissionCreateTag, "some-tag", true))
+	//
+	// The permission is one that is NOT seeded globally, so the only
+	// row for it is the scoped one. A seeded permission (the tag
+	// administration powers, for instance) would be in the map anyway,
+	// and the check would prove nothing.
+	require.NoError(t, repo.SetPermission(domain.GroupGuestID, domain.PermissionCreateGroup, "some-tag", true))
 
 	permissions, err := repo.PermissionMap()
 	require.NoError(t, err)
 
-	require.NotContains(t, permissions, domain.PermissionCreateTag, "a scoped row is not a global grant")
+	require.NotContains(t, permissions, domain.PermissionCreateGroup, "a scoped row is not a global grant")
 
 	// The seeded global grants ARE in the map.
 	require.Contains(t, permissions, domain.PermissionViewForum)

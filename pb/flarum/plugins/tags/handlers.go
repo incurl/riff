@@ -14,7 +14,7 @@ import (
 // listTagsHandler serves GET /api/tags.
 //
 // The response is a JSON:API collection of tag resources.
-func listTagsHandler(e *core.RequestEvent) error {
+func (p *Plugin) listTagsHandler(e *core.RequestEvent) error {
 	physical := physicalName(e)
 	tags, err := listTags(e.App, physical)
 	if err != nil {
@@ -23,27 +23,66 @@ func listTagsHandler(e *core.RequestEvent) error {
 
 	resources := make([]api.Resource, 0, len(tags))
 	for _, tag := range tags {
-		resources = append(resources, tagResource(tag))
+		resource, err := p.tagResourceWithRelationships(e, tag)
+		if err != nil {
+			return api.WriteError(e, http.StatusInternalServerError, api.CodeInternal, "The tags could not be loaded.")
+		}
+		resources = append(resources, resource)
 	}
 
 	return api.WriteDocument(e, http.StatusOK, api.Document{Data: resources})
 }
 
+// tagResourceWithRelationships renders a tag with the plugin's
+// relationships.
+//
+// The relationships are contributed through the extender mechanism, so
+// the plugin resolves them itself: the CORE does not know about a
+// plugin's resource types, and the tag resource is the plugin's own.
+func (p *Plugin) tagResourceWithRelationships(e *core.RequestEvent, tag *domain.Tag) (api.Resource, error) {
+	resource := p.tagResourceFor(e, tag)
+
+	children, err := childTagIDs(e.App, physicalName(e), tag.ID)
+	if err != nil {
+		return api.Resource{}, err
+	}
+
+	childIdentifiers := make([]api.Identifier, 0, len(children))
+	for _, id := range children {
+		childIdentifiers = append(childIdentifiers, api.Identifier{Type: api.TypeTag, ID: id})
+	}
+
+	resource.Relationships["children"] = api.Relationship{Data: childIdentifiers}
+
+	if tag.LastPostedDiscussion != "" {
+		resource.Relationships["lastPostedDiscussion"] = api.Relationship{
+			Data: api.Identifier{Type: api.TypeDiscussion, ID: tag.LastPostedDiscussion},
+		}
+	}
+
+	return resource, nil
+}
+
 // showTagHandler serves GET /api/tags/{id}.
-func showTagHandler(e *core.RequestEvent) error {
+func (p *Plugin) showTagHandler(e *core.RequestEvent) error {
 	physical := physicalName(e)
 	tag, err := findTag(e.App, physical, e.Request.PathValue("id"))
 	if err != nil {
 		return api.WriteError(e, http.StatusNotFound, api.CodeNotFound, "That tag does not exist.")
 	}
-	return api.WriteDocument(e, http.StatusOK, api.Document{Data: tagResource(tag)})
+	resource, err := p.tagResourceWithRelationships(e, tag)
+	if err != nil {
+		return api.WriteError(e, http.StatusInternalServerError, api.CodeInternal, "The tag could not be loaded.")
+	}
+
+	return api.WriteDocument(e, http.StatusOK, api.Document{Data: resource})
 }
 
 // addTagHandler serves POST /api/discussions/{id}/tags.
 //
 // The body names the tag to attach. Attaching a tag the discussion
 // already carries succeeds without creating a second link.
-func addTagHandler(e *core.RequestEvent) error {
+func (p *Plugin) addTagHandler(e *core.RequestEvent) error {
 	_, err := api.CurrentActor(e)
 	if err != nil {
 		return api.WriteError(e, http.StatusUnauthorized, api.CodeNotAuthenticated, "You must be signed in to do that.")
@@ -104,6 +143,13 @@ func addTagHandler(e *core.RequestEvent) error {
 		}
 	}
 
+	// The count rules are checked AFTER the permission and BEFORE the
+	// write: attaching a tag that breaks them would leave the
+	// discussion in a state no editor could produce.
+	if err := p.checkCountsAfterAttaching(e, discussionID, tag); err != nil {
+		return err
+	}
+
 	if err := attachTag(e.App, discussionID, tag.ID); err != nil {
 		return api.WriteError(e, http.StatusInternalServerError, api.CodeInternal, "The tag could not be attached.")
 	}
@@ -112,7 +158,7 @@ func addTagHandler(e *core.RequestEvent) error {
 }
 
 // removeTagHandler serves DELETE /api/discussions/{id}/tags/{tagId}.
-func removeTagHandler(e *core.RequestEvent) error {
+func (p *Plugin) removeTagHandler(e *core.RequestEvent) error {
 	if _, err := api.CurrentActor(e); err != nil {
 		return api.WriteError(e, http.StatusUnauthorized, api.CodeNotAuthenticated, "You must be signed in to do that.")
 	}
@@ -133,6 +179,12 @@ func removeTagHandler(e *core.RequestEvent) error {
 		return api.WriteError(e, http.StatusForbidden, api.CodePermissionDenied, "You are not allowed to untag that discussion.")
 	}
 
+	// A removal may break the MINIMUM counts, and upstream refuses it:
+	// the rules are checked against the set that would result.
+	if err := p.checkCountsAfterDetaching(e, discussionID, tagID); err != nil {
+		return err
+	}
+
 	if err := detachTag(e.App, discussionID, tagID); err != nil {
 		return api.WriteError(e, http.StatusInternalServerError, api.CodeInternal, "The tag could not be removed.")
 	}
@@ -142,8 +194,16 @@ func removeTagHandler(e *core.RequestEvent) error {
 
 // tagResource renders a tag as a JSON:API resource.
 //
-// The attribute names match upstream Flarum's TagResource, which is
-// what the frontend's tag components read.
+// The attribute names match upstream Flarum's `TagResource`, which is
+// what the frontend's tag components read. The set is upstream's, in
+// upstream's order:
+//
+//	name, description, slug, storedSlug, color, icon, isHidden,
+//	isPrimary, isRestricted, discussionCount, position, defaultSort,
+//	isChild, lastPostedAt, canStartDiscussion, canAddToDiscussion
+//
+// The `can*` attributes carry the CALLER's capabilities, so they are
+// computed here rather than read off the tag.
 func tagResource(tag *domain.Tag) api.Resource {
 	return api.Resource{
 		Type: api.TypeTag,
@@ -159,11 +219,73 @@ func tagResource(tag *domain.Tag) api.Resource {
 			"isPrimary":       tag.IsPrimary,
 			"isRestricted":    tag.IsRestricted,
 			"discussionCount": tag.DiscussionCount,
+			"defaultSort":     tag.DefaultSort,
+			// A tag with a parent is a child, and upstream reports that
+			// as an attribute rather than a relationship alone: the
+			// frontend sorts on it.
+			"isChild": tag.ParentID != "",
+			// The stored slug is the RAW column value, and it is visible
+			// only to a caller who may edit the tag: it is what the
+			// admin page edits, and the public `slug` is the
+			// slug-driver's rendering of it.
+			"storedSlug": tag.Slug,
+			// The last time a discussion with this tag was posted. It
+			// is NULL until one is, and the attribute is always
+			// present: upstream's is a nullable DateTime, and the
+			// frontend reads the ABSENCE as "never posted" — which
+			// would be the same answer, but the shape would differ
+			// from upstream's.
+			"lastPostedAt": nil,
 		},
 		Relationships: map[string]api.Relationship{
 			"parent": {Data: identifierOrNil(api.TypeTag, tag.ParentID)},
 		},
 	}
+}
+
+// tagResourceFor renders a tag for a specific caller.
+//
+// It is the form the endpoints use, because the `can*` attributes and
+// the `storedSlug` visibility depend on WHO is asking.
+func (*Plugin) tagResourceFor(e *core.RequestEvent, tag *domain.Tag) api.Resource {
+	resource := tagResource(tag)
+
+	canStart, err := api.Can(e, domain.PermissionStartDiscussion, api.TypeTag, tag.ID)
+	if err != nil {
+		canStart = false
+	}
+
+	// A tag may be attached to a discussion by a caller who may start
+	// a discussion in it — upstream's `addToDiscussion`.
+	canAdd, err := api.Can(e, domain.PermissionStartDiscussion, api.TypeTag, tag.ID)
+	if err != nil {
+		canAdd = false
+	}
+
+	resource.Attributes["canStartDiscussion"] = canStart
+	resource.Attributes["canAddToDiscussion"] = canAdd
+
+	if !tag.LastPostedAt.IsZero() {
+		resource.Attributes["lastPostedAt"] = tag.LastPostedAt.UTC().Format("2006-01-02T15:04:05Z")
+	}
+
+	// The `storedSlug` is only visible to a caller who may edit the
+	// tag, which is upstream's rule.
+	canEdit, err := api.Can(e, domain.PermissionEditTag, api.TypeTag, tag.ID)
+	if err != nil {
+		canEdit = false
+	}
+	if !canEdit {
+		delete(resource.Attributes, "storedSlug")
+	}
+
+	if tag.LastPostedDiscussion != "" {
+		resource.Relationships["lastPostedDiscussion"] = api.Relationship{
+			Data: api.Identifier{Type: api.TypeDiscussion, ID: tag.LastPostedDiscussion},
+		}
+	}
+
+	return resource
 }
 
 // identifierOrNil builds a resource identifier, or nil.

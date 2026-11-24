@@ -12,8 +12,10 @@
 // NOTHING may touch `app.forum` or `app.session` at module scope: the
 // shell boots the extensions before `app.boot()` assigns them.
 import app from 'flarum/forum/app';
+import Extend from 'flarum/common/extenders';
 import { extend as extendMethod } from 'flarum/common/extend';
 import CommentPost from 'flarum/forum/components/CommentPost';
+import Post from 'flarum/common/models/Post';
 import Button from 'flarum/common/components/Button';
 import classList from 'flarum/common/utils/classList';
 
@@ -44,6 +46,19 @@ function saveVote(post, vote) {
 }
 
 export const extend = [
+  // The post's vote attributes have to be registered as MODEL METHODS.
+  //
+  // The server sends them as plain attributes, but `post.canSeeVotes()`
+  // is a method call: without the registration the method does not
+  // exist on the model and the render throws. The raw attributes alone
+  // do not create the methods.
+  new Extend.Model(Post)
+    .attribute('votes')
+    .attribute('canSeeVotes')
+    .attribute('canVote')
+    .attribute('hasUpvoted')
+    .attribute('hasDownvoted'),
+
   {
     extend() {
       extendMethod(CommentPost.prototype, 'actionItems', function (items) {

@@ -15,10 +15,12 @@
 // The extender only registers a hook, and the requests happen later, on
 // a click — long after the app is booted.
 import app from 'flarum/forum/app';
+import Extend from 'flarum/common/extenders';
 import { extend as extendMethod } from 'flarum/common/extend';
 import classList from 'flarum/common/utils/classList';
 import Icon from 'flarum/common/components/Icon';
 import CommentPost from 'flarum/forum/components/CommentPost';
+import Post from 'flarum/common/models/Post';
 
 // pending holds the post ids whose toggle request is in flight, so the
 // button can disable itself instead of accepting a double click.
@@ -46,7 +48,7 @@ function toggleLike(post) {
   pending.add(id);
   m.redraw();
 
-  const method = post.attribute('isLiked') ? 'DELETE' : 'POST';
+  const method = post.isLiked() ? 'DELETE' : 'POST';
 
   app
     .request({ method, url: app.forum.attribute('apiUrl') + '/posts/' + id + '/like' })
@@ -63,9 +65,9 @@ function toggleLike(post) {
  */
 function likeButton(post) {
   const id = post.id();
-  const count = post.attribute('likesCount') || 0;
-  const liked = !!post.attribute('isLiked');
-  const canLike = !!post.attribute('canLike');
+  const count = post.likesCount() || 0;
+  const liked = !!post.isLiked();
+  const canLike = !!post.canLike();
   const busy = pending.has(id);
 
   return (
@@ -85,6 +87,14 @@ function likeButton(post) {
 }
 
 export const extend = [
+  // The post carries the likes, the count and the flag.
+  //
+  // They have to be registered as MODEL METHODS: the server sends
+  // them as plain attributes, and `post.likesCount()` is a method
+  // call — without the registration the method does not exist on the
+  // model and the render throws.
+  new Extend.Model(Post).hasMany('likes').attribute('likesCount').attribute('canLike'),
+
   {
     extend() {
       extendMethod(CommentPost.prototype, 'footerItems', function (items) {

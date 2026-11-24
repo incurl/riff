@@ -132,6 +132,51 @@ type RelationshipRequest struct {
 	Type string
 }
 
+// RelationshipWriter contributes the WRITE side of a relationship.
+//
+// Upstream's JSON:API lets a client set a relationship by saving the
+// resource with it: `discussion.save({ relationships: { tags } })`. The
+// core does not know which relationships are writable — that is the
+// extension's business — so a plugin declares the write side here and
+// the core calls it when a request carries the relationship.
+//
+// It is the counterpart of [RelationshipContributor], which contributes
+// the READ side.
+type RelationshipWriter struct {
+	// Resource is the JSON:API resource type, e.g. "discussions".
+	Resource string
+	// Name is the relationship name, e.g. "tags".
+	Name string
+	// Write applies the relationship's identifiers to the record.
+	//
+	// The identifiers are the resource ids the client named. The
+	// contributor decides what to do with them: the core does not know
+	// whether a relationship is a set of links, a single foreign key
+	// or something else.
+	//
+	// It returns an error when the relationship cannot be applied, and
+	// the core turns that into a validation failure.
+	Write func(ctx context.Context, req *RelationshipWriteRequest) error
+}
+
+// RelationshipWriteRequest is what a relationship writer receives.
+type RelationshipWriteRequest struct {
+	// App is the PocketBase app.
+	App core.App
+	// ActorID is the id of the acting user, empty for anonymous.
+	ActorID string
+	// RecordID is the id of the record the relationship belongs to.
+	RecordID string
+	// Type is the JSON:API resource type.
+	Type string
+	// IDs are the related resource ids the client named.
+	IDs []string
+	// Creating reports whether the record is being created.
+	Creating bool
+	// Can reports whether the actor may perform an action on a subject.
+	Can func(action, subjectType, subjectID string) bool
+}
+
 // Identifier is a JSON:API resource identifier.
 type Identifier struct {
 	// Type is the JSON:API resource type.
@@ -190,6 +235,9 @@ type Extenders struct {
 	attributes []AttributeContributor
 	// relationships collects the plugin's relationship contributions.
 	relationships []RelationshipContributor
+	// relationshipWriters collects the plugin's relationship write
+	// contributions.
+	relationshipWriters []RelationshipWriter
 	// permissions collects the plugin's permission handlers.
 	permissions []PermissionHandler
 	// assets collects the plugin's frontend asset declarations.
@@ -291,6 +339,11 @@ func (e *Extenders) AddRelationship(contributor RelationshipContributor) {
 	e.relationships = append(e.relationships, contributor)
 }
 
+// AddRelationshipWriter declares the write side of a relationship.
+func (e *Extenders) AddRelationshipWriter(writer RelationshipWriter) {
+	e.relationshipWriters = append(e.relationshipWriters, writer)
+}
+
 // AddPermission declares a permission handler.
 func (e *Extenders) AddPermission(handler PermissionHandler) {
 	e.permissions = append(e.permissions, handler)
@@ -320,6 +373,10 @@ func (e *Extenders) Attributes() []AttributeContributor { return e.attributes }
 
 // Relationships returns the declared relationship contributions.
 func (e *Extenders) Relationships() []RelationshipContributor { return e.relationships }
+
+// RelationshipWriters returns the declared relationship write
+// contributions.
+func (e *Extenders) RelationshipWriters() []RelationshipWriter { return e.relationshipWriters }
 
 // Permissions returns the declared permission handlers.
 func (e *Extenders) Permissions() []PermissionHandler { return e.permissions }

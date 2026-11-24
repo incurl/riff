@@ -60,7 +60,7 @@ func (p *Plugin) Manifest() plugin.Manifest { return p.manifest }
 //
 // It creates the plugin's collection, contributes the tag relationship
 // on discussions, and registers the tag endpoints.
-func (*Plugin) Register(_ context.Context, ext *plugin.Extenders) error {
+func (p *Plugin) Register(_ context.Context, ext *plugin.Extenders) error {
 	physical := ext.Registry.Physical("tags")
 
 	// --- layer 1: the migration ---------------------------------------
@@ -92,27 +92,106 @@ func (*Plugin) Register(_ context.Context, ext *plugin.Extenders) error {
 		},
 	})
 
+	// The tag's own relationships. `children` is upstream's, and the
+	// frontend sorts on it.
+	ext.AddRelationship(plugin.RelationshipContributor{
+		Resource: api.TypeTag,
+		Name:     "children",
+		Type:     api.TypeTag,
+		Many:     true,
+		Resolve: func(_ context.Context, req *plugin.RelationshipRequest) ([]plugin.Identifier, error) {
+			ids, err := childTagIDs(req.App, physicalName(nil), req.RecordID)
+			if err != nil {
+				return nil, err
+			}
+			out := make([]plugin.Identifier, 0, len(ids))
+			for _, id := range ids {
+				out = append(out, plugin.Identifier{Type: api.TypeTag, ID: id})
+			}
+			return out, nil
+		},
+	})
+	ext.AddRelationship(plugin.RelationshipContributor{
+		Resource: api.TypeTag,
+		Name:     "lastPostedDiscussion",
+		Type:     api.TypeDiscussion,
+		Resolve: func(_ context.Context, req *plugin.RelationshipRequest) ([]plugin.Identifier, error) {
+			tag, err := findTag(req.App, physicalName(nil), req.RecordID)
+			if err != nil {
+				return nil, err
+			}
+			if tag.LastPostedDiscussion == "" {
+				return nil, nil
+			}
+			return []plugin.Identifier{{Type: api.TypeDiscussion, ID: tag.LastPostedDiscussion}}, nil
+		},
+	})
+
 	// The tag resource contributes its own attributes to the posts
 	// endpoint when a post's discussion carries a tag.
+	// The discussion's `tags` relationship is WRITABLE, the way
+	// upstream's is: the frontend saves the discussion with the
+	// relationship, and the extension validates the whole set.
+	ext.AddRelationshipWriter(plugin.RelationshipWriter{
+		Resource: api.TypeDiscussion,
+		Name:     "tags",
+		Write:    p.writeDiscussionTags,
+	})
+
 	ext.AddRoute(plugin.RouteDef{
 		Method:  "GET",
 		Path:    "/api/tags",
-		Handler: listTagsHandler,
+		Handler: p.listTagsHandler,
 	})
 	ext.AddRoute(plugin.RouteDef{
 		Method:  "GET",
 		Path:    "/api/tags/{id}",
-		Handler: showTagHandler,
+		Handler: p.showTagHandler,
+	})
+	ext.AddRoute(plugin.RouteDef{
+		Method:  "POST",
+		Path:    "/api/tags",
+		Handler: p.createTagHandler,
+	})
+	ext.AddRoute(plugin.RouteDef{
+		Method:  "PATCH",
+		Path:    "/api/tags/{id}",
+		Handler: p.updateTagHandler,
+	})
+	// The PATCH and the DELETE share ONE POST twin: the frontend
+	// rewrites every method other than GET and POST into a POST with
+	// the intended method in `X-HTTP-Method-Override`, and PocketBase's
+	// router matches on the REAL method before any handler runs — so a
+	// route registered only for PATCH (or only for DELETE) is
+	// UNREACHABLE from the frontend.
+	//
+	// They cannot have TWO POST routes: two patterns on the same path
+	// CONFLICT in Go's `http.ServeMux` and the panic takes the process
+	// down. The override header is what tells them apart.
+	ext.AddRoute(plugin.RouteDef{
+		Method:  "POST",
+		Path:    "/api/tags/{id}",
+		Handler: p.tagWriteHandler,
+	})
+	ext.AddRoute(plugin.RouteDef{
+		Method:  "DELETE",
+		Path:    "/api/tags/{id}",
+		Handler: p.deleteTagHandler,
+	})
+	ext.AddRoute(plugin.RouteDef{
+		Method:  "POST",
+		Path:    "/api/tags/order",
+		Handler: p.orderTagsHandler,
 	})
 	ext.AddRoute(plugin.RouteDef{
 		Method:  "POST",
 		Path:    "/api/discussions/{id}/tags",
-		Handler: addTagHandler,
+		Handler: p.addTagHandler,
 	})
 	ext.AddRoute(plugin.RouteDef{
 		Method:  "DELETE",
 		Path:    "/api/discussions/{id}/tags/{tagId}",
-		Handler: removeTagHandler,
+		Handler: p.removeTagHandler,
 	})
 
 	// --- the permission key --------------------------------------------
@@ -155,3 +234,61 @@ func (*Plugin) Shutdown(_ context.Context, _ *plugin.Extenders) error {
 
 // errNotFound reports a missing tag.
 var errNotFound = errors.New("tags: not found")
+
+// writeDiscussionTags applies a discussion's `tags` relationship.
+//
+// It is the WRITE side of the relationship, and it is what upstream's
+// frontend calls: `discussion.save({ relationships: { tags } })`.
+//
+// The count rules are enforced HERE and not on the attach route,
+// because this is where the whole set is visible at once — which is
+// where upstream validates them too (its `tags` relationship setter).
+// The attach route only checks the maximums, because a minimum is a
+// property of the FINISHED set.
+//
+// The tags are replaced, not merged: the relationship names the
+// discussion's COMPLETE tag set, so a tag the client left out is
+// removed.
+func (*Plugin) writeDiscussionTags(ctx context.Context, req *plugin.RelationshipWriteRequest) error {
+	// Two ways to change a discussion's tags, and upstream's
+	// `DiscussionPolicy::tag()` is the FIRST of them:
+	//
+	//   - the AUTHOR, while the `allow_tag_change` setting permits it;
+	//   - a MODERATOR, through the `discussion.tag` permission that
+	//     upstream's own migration seeds for the moderator group.
+	//
+	// The author rule needs the discussion and the setting, so it is
+	// the core's `canTagDiscussion` — the very same check the `canTag`
+	// attribute and the attach route use, so the flag and the write
+	// always agree.
+	allowed := req.Can(domain.PermissionTagDiscussion, api.TypeDiscussion, req.RecordID)
+	if !allowed {
+		var err error
+		allowed, err = api.CanTagDiscussionAs(ctx, req.ActorID, req.RecordID)
+		if err != nil {
+			return err
+		}
+	}
+	if !allowed {
+		return errors.New("you are not allowed to change that discussion's tags")
+	}
+
+	tags := make([]*domain.Tag, 0, len(req.IDs))
+	for _, id := range req.IDs {
+		tag, err := findTag(req.App, physicalName(nil), id)
+		if err != nil {
+			return errors.New("that tag does not exist")
+		}
+		tags = append(tags, tag)
+	}
+
+	// The count rules are upstream's `validateTagCount`, and they are
+	// skipped for a caller who may bypass them.
+	if !mayBypassTagCounts(req.Can) {
+		if err := validateTagCounts(req.App, tags); err != nil {
+			return err
+		}
+	}
+
+	return setDiscussionTags(req.App, req.RecordID, tags)
+}

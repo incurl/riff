@@ -53,6 +53,21 @@ func createTagsCollection(app core.App, physical string) error {
 	collection.Fields.Add(&core.NumberField{
 		Name: "discussion_count",
 	})
+	collection.Fields.Add(&core.TextField{
+		Name: "default_sort",
+		Max:  50,
+	})
+	collection.Fields.Add(&core.DateField{
+		Name: "last_posted_at",
+	})
+	collection.Fields.Add(&core.TextField{
+		Name: "last_posted_discussion",
+		Max:  15,
+	})
+	collection.Fields.Add(&core.TextField{
+		Name: "last_posted_user",
+		Max:  15,
+	})
 	collection.Fields.Add(&core.BoolField{
 		Name: "is_hidden",
 	})

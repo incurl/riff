@@ -339,6 +339,20 @@ func (m *Module) boot(ctx context.Context) error {
 				})
 			})
 		}
+		for _, writer := range extenders.RelationshipWriters() {
+			m.api.AddRelationshipWriter(writer.Resource, writer.Name,
+				func(ctx context.Context, req api.RelationshipWriteRequest) error {
+					return writer.Write(ctx, &plugin.RelationshipWriteRequest{
+						App:      m.app,
+						ActorID:  req.ActorID,
+						RecordID: req.RecordID,
+						Type:     req.Type,
+						IDs:      req.IDs,
+						Creating: req.Creating,
+						Can:      m.pluginCan(ctx, req.ActorID),
+					})
+				})
+		}
 		for _, relationship := range extenders.Relationships() {
 			m.api.AddRelationship(relationship.Resource, relationship.Name, relationship.Type, relationship.Many,
 				func(ctx context.Context, req api.RelationshipRequest) ([]api.Identifier, error) {

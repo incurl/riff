@@ -109,6 +109,13 @@ func (s *Server) createDiscussionHandler(e *core.RequestEvent) error {
 		return fail(e, err)
 	}
 
+	// A plugin may own a writable relationship on the discussion (the
+	// tags extension owns `tags`), so the relationships the request
+	// carries are applied after the discussion exists.
+	if err := s.writeRelationships(e, TypeDiscussion, discussion.ID, true, body.Data.Relationships); err != nil {
+		return fail(e, errValidation(err.Error()))
+	}
+
 	resource, err := s.discussionResource(e, discussion)
 	if err != nil {
 		return fail(e, errInternal("The discussion could not be created.", err))
@@ -289,6 +296,12 @@ func (s *Server) updateDiscussionHandler(e *core.RequestEvent) error {
 		if err := s.repo.UpdateDiscussionTitle(discussion.ID, title, actor.User.ID); err != nil {
 			return fail(e, errInternal("The discussion could not be updated.", err))
 		}
+	}
+
+	// A plugin may own a writable relationship on the discussion (the
+	// tags extension owns `tags`).
+	if err := s.writeRelationships(e, TypeDiscussion, discussion.ID, false, body.Data.Relationships); err != nil {
+		return fail(e, errValidation(err.Error()))
 	}
 
 	resource, err := s.discussionResource(e, discussion)

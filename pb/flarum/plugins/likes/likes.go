@@ -16,8 +16,10 @@ import (
 	"github.com/pocketbase/pocketbase/core"
 
 	"github.com/incurl/riff/pb/flarum/api"
+	flarumcore "github.com/incurl/riff/pb/flarum/core"
 	"github.com/incurl/riff/pb/flarum/domain"
 	"github.com/incurl/riff/pb/flarum/plugin"
+	"github.com/incurl/riff/pb/flarum/repository"
 )
 
 // PluginID is the plugin's id.
@@ -31,10 +33,22 @@ const Version = "1.0.0"
 // It matches upstream Flarum's `PostResourceFields::$maxLikes`.
 const MaxLikes = 4
 
+// SettingLikeOwnPost is the setting that governs whether an account
+// may like its own post.
+//
+// It is upstream's `flarum-likes.like_own_post`, and upstream's
+// default is TRUE: liking your own post is allowed unless an
+// administrator turns it off.
+const SettingLikeOwnPost = "flarum-likes.like_own_post"
+
 // Plugin is the Likes plugin.
 type Plugin struct {
 	// manifest is the plugin's manifest.
 	manifest plugin.Manifest
+	// bus is the forum's event bus, used to announce a like.
+	bus *flarumcore.EventBus
+	// repo is the forum's repository, used to write the notification.
+	repo *repository.Repository
 }
 
 // New returns the Likes plugin.
@@ -59,8 +73,16 @@ func New() *Plugin {
 func (p *Plugin) Manifest() plugin.Manifest { return p.manifest }
 
 // Register declares the plugin's extenders.
-func (*Plugin) Register(_ context.Context, ext *plugin.Extenders) error {
+func (p *Plugin) Register(_ context.Context, ext *plugin.Extenders) error {
 	physical := ext.Registry.Physical("likes")
+
+	// The bus announces a like, and the repository writes the
+	// notification it produces. Both come from the forum's own
+	// container, so a plugin does not build its own.
+	p.bus = ext.Bus
+	if repo, err := flarumcore.Resolve[*repository.Repository](ext.Container); err == nil {
+		p.repo = repo
+	}
 
 	// --- layer 1: the migration ---------------------------------------
 	ext.AddMigration(plugin.Migration{
@@ -94,7 +116,33 @@ func (*Plugin) Register(_ context.Context, ext *plugin.Extenders) error {
 		Resource: api.TypePost,
 		Name:     "canLike",
 		Value: func(_ context.Context, req *plugin.AttributeRequest) (any, error) {
-			return req.ActorID != "", nil
+			// The flag must answer the SAME question the write path
+			// answers: a signed-in account may like a post, unless
+			// the post is its own and the `like_own_post` setting
+			// forbids that.
+			//
+			// A flag that says "yes" where the endpoint says "no"
+			// is the control the reader clicks and the server
+			// refuses.
+			if req.ActorID == "" {
+				return false, nil
+			}
+
+			// The author's own post is not likeable unless the
+			// setting permits it — the same rule the write path
+			// enforces.
+			if !likeOwnPostAllowedAt(req.App, SettingLikeOwnPost, true) {
+				author, err := postAuthor(req.App, req.RecordID)
+				if err != nil {
+					// A post that cannot be read is a post that
+					// cannot be liked.
+					return false, nil //nolint:nilerr // an unreadable post is not likeable
+				}
+
+				return author != req.ActorID, nil
+			}
+
+			return true, nil
 		},
 	})
 	ext.AddRelationship(plugin.RelationshipContributor{
@@ -103,7 +151,11 @@ func (*Plugin) Register(_ context.Context, ext *plugin.Extenders) error {
 		Type:     api.TypeUser,
 		Many:     true,
 		Resolve: func(_ context.Context, req *plugin.RelationshipRequest) ([]plugin.Identifier, error) {
-			ids, err := likerIDs(req.App, req.RecordID, MaxLikes)
+			// The current user's like comes FIRST, so the frontend
+			// can tell which of the listed likers is the reader.
+			// That is upstream's ordering: it sorts the actor's own
+			// row to the front before the `created_at` order.
+			ids, err := likerIDs(req.App, req.RecordID, MaxLikes, req.ActorID)
 			if err != nil {
 				return nil, err
 			}
@@ -120,12 +172,12 @@ func (*Plugin) Register(_ context.Context, ext *plugin.Extenders) error {
 	ext.AddRoute(plugin.RouteDef{
 		Method:  "POST",
 		Path:    "/api/posts/{id}/like",
-		Handler: likeHandler,
+		Handler: p.likeHandler,
 	})
 	ext.AddRoute(plugin.RouteDef{
 		Method:  "DELETE",
 		Path:    "/api/posts/{id}/like",
-		Handler: unlikeHandler,
+		Handler: p.unlikeHandler,
 	})
 
 	// --- the permission key --------------------------------------------

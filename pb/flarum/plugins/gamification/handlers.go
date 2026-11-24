@@ -1,13 +1,11 @@
 package gamification
 
 import (
-	"encoding/json"
 	"net/http"
 	"strings"
 
 	"github.com/pkg/errors"
 	"github.com/pocketbase/pocketbase/core"
-	"github.com/pocketbase/pocketbase/tools/types"
 
 	"github.com/incurl/riff/pb/flarum/api"
 	"github.com/incurl/riff/pb/flarum/domain"
@@ -145,57 +143,7 @@ func settingBool(e *core.RequestEvent, key string, fallback bool) bool {
 		return fallback
 	}
 
-	return settingTruthy(value, fallback)
-}
-
-// settingTruthy reads a setting's value as a boolean.
-//
-// The settings table's `value` column is a JSON field, so a value written
-// as the string "0" comes back as RAW JSON BYTES, not as a Go string. A
-// type switch on the string case alone would therefore never match, and
-// every setting would read as its fallback — which is how "the setting is
-// not read" happens silently.
-func settingTruthy(value any, fallback bool) bool {
-	switch typed := value.(type) {
-	case bool:
-		return typed
-	case string:
-		return settingTruthyString(typed, fallback)
-	case []byte:
-		return settingTruthyString(string(typed), fallback)
-	case int:
-		return typed != 0
-	case int64:
-		return typed != 0
-	case float64:
-		return typed != 0
-	case json.RawMessage:
-		return settingTruthyString(string(typed), fallback)
-	case types.JSONRaw:
-		// The settings table's `value` column is a JSON field, so this is
-		// the type a stored setting actually arrives as.
-		return settingTruthyString(string(typed), fallback)
-	default:
-		return fallback
-	}
-}
-
-// settingTruthyString reads a setting's textual value.
-//
-// The JSON quotes are stripped first, because a JSON-encoded string
-// arrives as `"0"` — with the quotes — and a bare comparison against "0"
-// would miss it.
-func settingTruthyString(raw string, fallback bool) bool {
-	text := strings.Trim(strings.TrimSpace(raw), `"`)
-
-	switch strings.ToLower(text) {
-	case "1", "true", "yes", "on":
-		return true
-	case "0", "false", "no", "off", "":
-		return false
-	default:
-		return fallback
-	}
+	return api.SettingTruthy(value, fallback)
 }
 
 // errBadVote reports an unreadable vote value.

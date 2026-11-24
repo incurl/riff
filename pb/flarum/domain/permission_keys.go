@@ -81,12 +81,34 @@ var upstreamPermissionKeys = map[string]string{
 	"discussion.sticky": PermissionStickyDiscussion,
 	"user.suspend":      PermissionSuspendUser,
 
+	// The like powers. The likes extension registers
+	// `discussion.likePosts` and seeds it for the member group.
+	"discussion.likePosts": PermissionLikePost,
+
+	// The tag powers. The tags extension registers `discussion.tag`
+	// (seeded for the moderators) and `bypassTagCounts`, and its admin
+	// page sends the same names.
+	"discussion.tag":  PermissionTagDiscussion,
+	"bypassTagCounts": PermissionBypassTagCounts,
+
 	// The gamification powers. `fof/gamification` registers
 	// `votePosts` and `canSeeVotes` (its `Access\PostPolicy` reads both
 	// against a discussion), and its admin page sends the same names.
 	"votePosts":    PermissionVotePost,
 	"canSeeVotes":  PermissionSeeVoters,
 	"canSeeVoters": PermissionSeeVoters,
+
+	// The poll powers. `fof/polls` registers `polls.vote`,
+	// `polls.changeVote` and `polls.viewResultsWithoutVoting` (its
+	// `Access\PollPolicy` reads them against a discussion), and it
+	// registers the tag-scoped `discussion.polls.*` pair the tags
+	// extension's permission scoping uses.
+	"polls.vote":                                PermissionVotePoll,
+	"polls.changeVote":                          PermissionChangePollVote,
+	"polls.seeVoters":                           PermissionSeePollVoters,
+	"polls.viewResultsWithoutVoting":            PermissionSeePollVoteCount,
+	"discussion.polls.vote":                     PermissionVotePoll,
+	"discussion.polls.viewResultsWithoutVoting": PermissionSeePollVoteCount,
 }
 
 // forumPermissionKeys is the reverse of upstreamPermissionKeys: the
@@ -99,9 +121,17 @@ var forumPermissionKeys = reversePermissionKeys(upstreamPermissionKeys)
 // reversePermissionKeys inverts a permission-key table.
 //
 // A key that maps to itself (`viewForum`) is its own reverse. A key
-// that several upstream names map onto (there is none today, but the
-// table is free to grow) takes the FIRST upstream name in a stable
-// order, so the result does not depend on Go's map iteration order.
+// that several upstream names map onto takes the CANONICAL name —
+// the one the extension's own admin page sends — so the result does
+// not depend on Go's map iteration order.
+//
+// The canonical name wins over a tag-scoped spelling of the same
+// power: `polls.vote` is the name `fof/polls` registers, and
+// `discussion.polls.vote` is the tag-scoped variant the tags
+// extension's scoping uses. Both mean the same power, so the reverse
+// map must pick the canonical one — a reverse map that answered
+// `discussion.polls.vote` would write a name the extension's own
+// admin page does not show.
 func reversePermissionKeys(table map[string]string) map[string]string {
 	reverse := make(map[string]string, len(table))
 	for _, upstream := range sortedKeys(table) {
@@ -111,7 +141,26 @@ func reversePermissionKeys(table map[string]string) map[string]string {
 		}
 		reverse[forum] = upstream
 	}
+
+	// A canonical name overrides a tag-scoped one that sorted ahead of
+	// it.
+	for forum, upstream := range reverse {
+		if canonical, ok := canonicalPermissionKeys[forum]; ok && canonical != upstream {
+			reverse[forum] = canonical
+		}
+	}
+
 	return reverse
+}
+
+// canonicalPermissionKeys names the canonical upstream spelling of a
+// forum permission key.
+//
+// A key that appears here wins the reverse mapping even when a
+// tag-scoped spelling of the same power sorts ahead of it.
+var canonicalPermissionKeys = map[string]string{
+	PermissionVotePoll:         "polls.vote",
+	PermissionSeePollVoteCount: "polls.viewResultsWithoutVoting",
 }
 
 // sortedKeys returns a table's keys in a stable order.
@@ -123,6 +172,19 @@ func sortedKeys(table map[string]string) []string {
 	slices.Sort(keys)
 	return keys
 }
+
+// The tag scope prefix.
+//
+// Upstream encodes a tag's permission scope IN THE KEY: a row for a
+// restricted tag is `tag5.viewForum`, and the admin page writes that
+// spelling (see upstream's `addTagsPermissionScope.tsx`, which posts
+// `tag${tag.id()}.${permission}`).
+//
+// This forum has a separate `scope` COLUMN for the same thing, so the
+// key arrives carrying its scope and the two have to be split apart:
+// `ForumPermissionKey` returns the key and the scope, and the caller
+// stores them in their own places.
+const tagScopePrefix = "tag"
 
 // ForumPermissionKey translates an upstream permission key into the
 // forum's own.
@@ -139,6 +201,42 @@ func sortedKeys(table map[string]string) []string {
 // upstream name of", which is unambiguous because the two dialects
 // name disjoint sets of things.
 func ForumPermissionKey(upstream string) string {
+	return translatePermissionKey(upstream)
+}
+
+// ForumPermissionKeyAndScope translates an upstream permission key into
+// the forum's own, and splits off a tag scope.
+//
+// Upstream's tag-scoped key is `tag{id}.{permission}`, and the id
+// numbers the tag's permission scope. The forum stores the scope in
+// its own COLUMN, so the two are separated here: the key becomes the
+// forum's own name and the scope becomes the tag's id.
+//
+// A key that names no tag scope is returned with an empty scope.
+func ForumPermissionKeyAndScope(upstream string) (string, string) {
+	upstream = strings.TrimSpace(upstream)
+	if upstream == "" {
+		return "", ""
+	}
+
+	// A tag-scoped key: `tag5.viewForum`.
+	if rest, ok := strings.CutPrefix(upstream, tagScopePrefix); ok {
+		id, remainder, found := strings.Cut(rest, ".")
+		if found && id != "" && isNumeric(id) {
+			return translatePermissionKey(remainder), id
+		}
+	}
+
+	return translatePermissionKey(upstream), ""
+}
+
+// translatePermissionKey translates an upstream permission key into the
+// forum's own, without looking for a tag scope.
+//
+// It is the inner half of [ForumPermissionKeyAndScope]: the scope
+// search must not call back into it, or the two would recurse into
+// each other until the stack overflows.
+func translatePermissionKey(upstream string) string {
 	upstream = strings.TrimSpace(upstream)
 	if upstream == "" {
 		return ""
@@ -149,6 +247,20 @@ func ForumPermissionKey(upstream string) string {
 	}
 
 	return upstream
+}
+
+// isNumeric reports whether a string is made of digits only.
+//
+// It is the tag id in a scoped key, and PocketBase's ids are 15
+// characters of digits and letters — but upstream's tag ids are
+// integers, so the scope is numeric.
+func isNumeric(value string) bool {
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return value != ""
 }
 
 // UpstreamPermissionKey translates one of the forum's own permission

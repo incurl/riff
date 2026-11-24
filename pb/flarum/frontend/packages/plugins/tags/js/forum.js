@@ -16,20 +16,19 @@
 // The tag list comes from the plugin's own endpoint (`GET /api/tags`),
 // because a discussion's `tags` relationship carries only resource
 // identifiers — the tag names, colours and slugs are not included in
-// the discussion payload. The response is kept in this module's own map
-// rather than pushed into the store: the store only accepts resource
-// types that are registered as models, and `tags` is not one of them
-// (`pushObject` throws "Pushing object of type `tags` not allowed").
+// the discussion payload.
+//
+// The response is pushed into the STORE, and the `tags` type is
+// registered as a model, exactly as upstream's extension does
+// (`new Extend.Store().add('tags', Tag)`). Registering the type is
+// what makes the store accept it: `pushObject` throws "Pushing object
+// of type `tags` not allowed" for an unregistered type.
 import app from 'flarum/forum/app';
+import Extend from 'flarum/common/extenders';
 import { extend as extendMethod } from 'flarum/common/extend';
 import classList from 'flarum/common/utils/classList';
 import DiscussionListItem from 'flarum/forum/components/DiscussionListItem';
-
-// tagByID holds the loaded tags, keyed by their resource id.
-//
-// The values are the raw resource objects, so the badge reads
-// `tag.attributes.name` directly.
-const tagByID = new Map();
+import { Tag } from './models';
 
 // tagsRequest is the in-flight (or settled) tag-list request. It is a
 // single shared promise so a list of 20 discussions issues one request,
@@ -47,11 +46,7 @@ export function loadTags() {
     tagsRequest = app
       .request({ url: app.forum.attribute('apiUrl') + '/tags' })
       .then((payload) => {
-        const resources = Array.isArray(payload.data) ? payload.data : [];
-
-        for (const resource of resources) {
-          if (resource && resource.id) tagByID.set(resource.id, resource);
-        }
+        app.store.pushPayload(payload);
 
         return payload;
       })
@@ -68,15 +63,15 @@ export function loadTags() {
  * The tags of a discussion, in the order the server listed them.
  *
  * The relationship carries identifiers only, so each one is resolved
- * through the loaded tag map; a tag that has not loaded yet is skipped
- * rather than rendering as a blank badge.
+ * through the store; a tag that has not loaded yet is skipped rather
+ * than rendering as a blank badge.
  */
 function tagsOf(discussion) {
   const identifiers = discussion.data.relationships?.tags?.data;
 
   if (!Array.isArray(identifiers)) return [];
 
-  return identifiers.map((identifier) => tagByID.get(identifier.id)).filter(Boolean);
+  return identifiers.map((identifier) => app.store.getById('tags', identifier.id)).filter(Boolean);
 }
 
 /**
@@ -87,20 +82,24 @@ function tagsOf(discussion) {
  * the reader to the fallback page.
  */
 function tagLabel(tag) {
-  const attributes = tag.attributes || {};
-  const color = attributes.color;
-  const icon = attributes.icon;
+  const color = tag.color();
+  const icon = tag.icon();
 
   return (
-    <span className="TagsLabel-item" title={attributes.description || null}>
+    <span className="TagsLabel-item" title={tag.description() || null}>
       {color ? <span className="TagsLabel-dot" style={{ background: color }} /> : null}
       {icon ? <i className={icon} aria-hidden="true" /> : null}
-      {attributes.name}
+      {tag.name()}
     </span>
   );
 }
 
 export const extend = [
+  // The store needs to know the `tags` type, or it refuses the
+  // payload: `pushObject` throws "Pushing object of type `tags` not
+  // allowed" for a type that is not registered as a model.
+  new Extend.Store().add('tags', Tag),
+
   {
     extend() {
       extendMethod(DiscussionListItem.prototype, 'infoItems', function (items) {

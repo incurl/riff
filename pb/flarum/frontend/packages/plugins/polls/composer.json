@@ -1,0 +1,10 @@
+{
+  "name": "riff/polls",
+  "description": "Attach polls to posts and let the forum vote in them.",
+  "type": "flarum-extension",
+  "version": "1.0.0",
+  "license": "MIT",
+  "require": {
+    "flarum/core": "^2.0.0"
+  }
+}

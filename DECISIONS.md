@@ -5,6 +5,181 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## A LIKE IS NOTIFIED, OR IT DID NOT HAPPEN (2026-11-24)
+
+The likes plugin is aligned with upstream `flarum/likes` (the Flarum
+2.0 tree). The reference is upstream's `PostResourceFields` and
+`LikePostPolicy`.
+
+**THE `like_own_post` SETTING WAS READ BY NOTHING.** Upstream's policy
+denies the author of a post the right to like it UNLESS the
+`flarum-likes.like_own_post` setting is on, and upstream's default is
+ON. The port MENTIONED the setting in a comment and never read it, so
+an operator who turned it off was ignored — and an operator who left it
+alone got the opposite of upstream's default. The rule is now the
+policy's own, and the `canLike` attribute asks the SAME question the
+endpoint does: a flag that says "yes" where the endpoint says "no" is
+the control the reader clicks and the server refuses.
+
+**A SETTING IS NOT A STRING, AND A JSON FIELD IS NOT A `[]byte`.** The
+settings table's `value` column is a JSON field, so a stored setting
+arrives as `types.JSONRaw` — and a type switch that handles `string`
+and `[]byte` but not `JSONRaw` falls through to the default, reading
+every setting as its fallback. This is the third time this trap has
+appeared (the gamification and the polls plugins hit it too), and it
+is worth a shared helper rather than a third private copy.
+
+**THE LIKERS ARE LISTED WITH THE READER FIRST.** Upstream sorts the
+actor's own row to the FRONT of the `likes` relationship before the
+`created_at` order, so the frontend can tell which of the listed
+likers is the reader without a second lookup. The port sorted by date
+alone, which put the reader last — and the frontend's highlight fell
+on the wrong row.
+
+**A LIKE NOTIFIES THE POST'S AUTHOR, AND THE LIKER IS NOT NOTIFIED.**
+Upstream's `SendNotificationWhenPostIsLiked` notifies the author of
+the post and nobody else: a like on one's own post notifies nobody.
+The port had the `postLiked` notification TYPE and the
+`EventPostLiked`/`EventPostUnliked` events DECLARED, and never fired
+either — so a like was silent.
+
+**THE EVENT IS DISPATCHED BEFORE THE NOTIFICATION**, so a listener
+sees the like before the notification exists. And upstream's
+`SendNotificationWhenPostIsUnliked` DELETES the notification the like
+produced; this port does not remove a notification the reader has
+already seen, because a notification that vanishes is worse than one
+that is stale.
+
+**THE PERMISSION KEY IS UPSTREAM'S.** Upstream registers
+`discussion.likePosts` and seeds it for the member group; the port's
+own `likePost` was not in the translation table, so the admin's
+permission page could not grant it — the key it wrote was a key the
+forum never read.
+
+`go test -run 'TestLikes_' ./pb/flarum/` pins the attribute set, the
+`likes` relationship, the self-like setting (both ways), the flag
+against the endpoint, the liker ordering, the notification (and the
+absence of one for a self-like), and the permission-key translation.
+
+## THE TAGS RESOURCE IS UPSTREAM'S, ATTRIBUTE FOR ATTRIBUTE (2026-11-24)
+
+The tags plugin is aligned with upstream `flarum/tags` (the Flarum 2.0
+tree). The reference is upstream's `TagResource`, and the gap was real:
+the port served TEN attributes where upstream serves SIXTEEN, and the
+missing six were all SILENT — the frontend renders a tag with whatever
+it finds, so a missing `icon` or `isChild` is a badge that is slightly
+wrong, with nothing erroring.
+
+**THE ATTRIBUTE SET IS UPSTREAM'S, IN UPSTREAM'S ORDER.** `name`,
+`description`, `slug`, `storedSlug`, `color`, `icon`, `isHidden`,
+`isPrimary`, `isRestricted`, `discussionCount`, `position`,
+`defaultSort`, `isChild`, `lastPostedAt`, `canStartDiscussion`,
+`canAddToDiscussion`. The `can*` attributes carry the CALLER's
+capabilities, so they are computed per request rather than read off the
+tag.
+
+**`storedSlug` IS VISIBLE ONLY TO A CALLER WHO MAY EDIT THE TAG**, and
+`lastPostedAt` is always present (null until a discussion is posted) —
+upstream's rules, and the two that a naive implementation gets wrong.
+
+**A TAG-SCOPED PERMISSION CARRIES ITS SCOPE IN THE KEY.** Upstream
+writes `tag5.viewForum`, and the admin page posts that spelling. This
+forum keeps the scope in its own COLUMN, so `ForumPermissionKeyAndScope`
+splits the two apart: the key becomes the forum's own name and the
+scope becomes the tag's id. Without the split, a scoped grant would be
+stored as a GLOBAL one — and a restricted tag would grant access to
+everybody.
+
+**THE COUNT RULES BIND THE WHOLE SET, NOT ONE ATTACHMENT.** Upstream
+validates them in the `tags` relationship setter, where the complete
+set is visible at once. The attach route therefore checks only the
+MAXIMA (a minimum is a property of a FINISHED set, and checking it per
+attachment would refuse the first tag of a discussion that is about to
+get its second), and the relationship write path checks both. A
+tag is a PRIMARY PARENT when it has a position AND no parent — a CHILD
+carries a position of its own, so counting by position alone would let
+a child satisfy the primary minimum.
+
+**A RELATIONSHIP MAY BE WRITABLE, AND THE CORE DOES NOT HAVE TO KNOW
+WHICH.** Upstream's frontend saves a discussion with
+`discussion.save({ relationships: { tags } })`, so the `tags`
+relationship is WRITABLE — and the core cannot know that, because the
+relationship belongs to an extension. The plugin therefore declares
+the WRITE side (`plugin.RelationshipWriter`) and the core calls it when
+a request carries the relationship.
+
+**THE WRITE PATH IS WHERE THE COUNT RULES LIVE, SO IT NEEDS THE FORUM'S
+OWN ANSWERS.** The writer has no request event: it runs from the
+mutation handler. The server passes itself through the context, so the
+plugin asks the SAME `canTagDiscussion` the `canTag` attribute and the
+attach route ask — otherwise the flag would say "yes" and the write
+would say "no".
+
+## A POLL IS A SELECTION, NOT A DELTA (2026-11-24)
+
+`fof/polls` is now a plugin (`pb/flarum/plugins/polls/`).
+
+**THE VOTE CARRIES THE WHOLE SELECTION, NOT A DELTA.** The endpoint
+takes the set of option ids the voter has chosen, and an option that is
+not in the set loses its vote. That is upstream's `MultipleVotesPoll`,
+and it is the right shape: a delta ("add option 3") cannot express
+"change my mind from option 3 to option 4", so the client and the
+server would each have to keep a copy of the current selection to know
+what the delta means. The selection is self-describing, and a client
+that lost its state can still vote correctly.
+
+**THE COUNTS ARE RECOMPUTED, NEVER INCREMENTED.** Upstream increments
+an option's count when a vote lands and decrements it when one is
+removed. An increment drifts: a vote that was never counted (one cast
+before the option existed) breaks the arithmetic, and a decrement that
+is skipped leaves the count high forever. A recount is always right,
+and a poll has few enough options that the recount is cheap.
+
+**THE COUNT IS ABSENT, NOT ZERO, WHEN IT MAY NOT BE SEEN.** Upstream
+omits the `voteCount` attribute when the reader is not entitled to see
+it, and the frontend reads the ABSENCE as "hidden". A zero would read
+as "nobody has voted" — a different and wrong statement. The rule is
+upstream's `seeVoteCount`: the voter may always see the count of a poll
+they voted in, and so may the poll's author and a public poll.
+
+**THE UNIQUE INDEX IS ON (POLL, OPTION, USER), NOT (POLL, USER).** A
+poll that allows multiple votes holds one row per option, so the option
+is part of the identity — and changing an option's mind is a
+REPLACEMENT, not an accumulation. The index is the only place that
+guarantee holds against two concurrent requests.
+
+**A PERMISSION CANNOT EXPRESS "YOUR OWN", BUT THE VOTE IS NOT ONE.**
+Upstream asks for `polls.changeVote` only when the new selection
+DIFFERS from the old one, so a voter who submits the same selection
+twice is not refused for a vote they did not change. The check
+therefore compares the two sets before it asks, which is why the port
+does the same rather than asking on every submission.
+
+**THE ROUTE IS REGISTERED FOR PATCH AND FOR POST.** The frontend
+rewrites a PATCH into a POST with the method in `X-HTTP-Method-Override`,
+and PocketBase's router matches on the REAL method before any handler
+runs — so a route registered only for PATCH is UNREACHABLE from the
+frontend. The POST twin resolves the effective method itself and
+refuses a POST that names no override with a 405.
+
+**A PLUGIN CANNOT REUSE THE CORE'S ERROR RENDERER.** The core's `fail`
+is unexported, so a plugin that returned the raw error from
+`RequireMethod` fell through to PocketBase's default handler: a 400
+with an empty body, so the client saw a generic failure instead of the
+405 the route deserved. `api.WriteMethodError` is the plugin-facing
+form.
+
+**WHAT IS NOT PORTED.** Global (forum-wide) polls, poll groups, the
+poll image uploads, the scheduled publishing and its cron, the drafts
+workflow, and the polls directory page. Each is a surface of its own,
+and half of one is worse than none.
+
+`go test -run 'TestPolls_' ./pb/flarum/` pins the vote round trip, the
+idempotence (by the ROW COUNT), the changed vote, the withdrawn vote,
+the permission gate, the guest refusal, the plain POST refusal, the
+method override, the foreign option, the hidden count and the two
+permission-key translations.
+
 ## A SCORE IS A UNIQUE INDEX, NOT ARITHMETIC (2026-11-24)
 
 `fof/gamification` is now a plugin (`pb/flarum/plugins/gamification/`).

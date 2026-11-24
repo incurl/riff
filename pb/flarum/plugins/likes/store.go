@@ -46,8 +46,12 @@ func isLiked(app core.App, postID, userID string) (bool, error) {
 
 // likerIDs returns the ids of a post's likers.
 //
-// The current user's like comes first, so the frontend can highlight it.
-func likerIDs(app core.App, postID string, limit int) ([]string, error) {
+// The CURRENT USER'S like comes first, then the rest in `created_at`
+// order. That is upstream's ordering (its `likes` relationship scope
+// sorts the actor's own row to the front before the date order), and
+// it is what lets the frontend tell which of the listed likers is the
+// reader — without a second lookup.
+func likerIDs(app core.App, postID string, limit int, actorID string) ([]string, error) {
 	collection, err := likeCollection(app)
 	if err != nil {
 		return nil, err
@@ -57,13 +61,36 @@ func likerIDs(app core.App, postID string, limit int) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	ids := make([]string, 0, len(records))
+	actorFirst := ""
+
 	for _, record := range records {
-		ids = append(ids, record.GetString("user"))
+		userID := record.GetString("user")
+
+		// The actor's own like is held back and put first.
+		if actorID != "" && userID == actorID {
+			if actorFirst == "" {
+				actorFirst = userID
+			}
+			continue
+		}
+
+		ids = append(ids, userID)
 		if limit > 0 && len(ids) >= limit {
 			break
 		}
 	}
+
+	if actorFirst != "" {
+		ids = append([]string{actorFirst}, ids...)
+	}
+
+	// The limit counts the whole list, the actor's row included.
+	if limit > 0 && len(ids) > limit {
+		ids = ids[:limit]
+	}
+
 	return ids, nil
 }
 

@@ -15,7 +15,7 @@ import (
 // LikePostPolicy refuses a user who likes their own post unless the
 // `like_own_post` setting allows it. The forum's v1 scope allows it,
 // and the setting is read from the forum's settings table.
-func likeHandler(e *core.RequestEvent) error {
+func (p *Plugin) likeHandler(e *core.RequestEvent) error {
 	actor, err := api.CurrentActor(e)
 	if err != nil || !actor.IsAuthenticated() {
 		return api.WriteError(e, http.StatusUnauthorized, api.CodeNotAuthenticated, "You must be signed in to do that.")
@@ -37,9 +37,20 @@ func likeHandler(e *core.RequestEvent) error {
 		return api.WriteError(e, http.StatusForbidden, api.CodePermissionDenied, "You are not allowed to like that post.")
 	}
 
+	// Upstream's `LikePostPolicy::like()`: the author of a post may
+	// not like it unless the `like_own_post` setting permits it.
+	if err := refuseOwnLike(e, postID, actor.User.ID); err != nil {
+		return err
+	}
+
 	if err := addLike(e.App, postID, actor.User.ID); err != nil {
 		return api.WriteError(e, http.StatusInternalServerError, api.CodeInternal, "The like could not be recorded.")
 	}
+
+	// Upstream raises `PostWasLiked` and notifies the post's author.
+	// The event is dispatched FIRST, so a listener sees the like
+	// before the notification exists.
+	p.dispatchLiked(e, postID, actor.User.ID)
 
 	count, err := likeCount(e.App, postID)
 	if err != nil {
@@ -56,7 +67,7 @@ func likeHandler(e *core.RequestEvent) error {
 }
 
 // unlikeHandler serves DELETE /api/posts/{id}/like.
-func unlikeHandler(e *core.RequestEvent) error {
+func (p *Plugin) unlikeHandler(e *core.RequestEvent) error {
 	actor, err := api.CurrentActor(e)
 	if err != nil || !actor.IsAuthenticated() {
 		return api.WriteError(e, http.StatusUnauthorized, api.CodeNotAuthenticated, "You must be signed in to do that.")
@@ -70,9 +81,14 @@ func unlikeHandler(e *core.RequestEvent) error {
 		return api.WriteError(e, http.StatusUnprocessableEntity, api.CodeValidationFailed, "A post is required.")
 	}
 
+	// Removing a like is never gated by the self-like rule: the like
+	// exists, and taking it back is not a new like.
 	if err := removeLike(e.App, postID, actor.User.ID); err != nil {
 		return api.WriteError(e, http.StatusInternalServerError, api.CodeInternal, "The like could not be removed.")
 	}
+
+	// Upstream raises `PostWasUnliked`.
+	p.dispatchUnliked(e, postID, actor.User.ID)
 
 	count, err := likeCount(e.App, postID)
 	if err != nil {

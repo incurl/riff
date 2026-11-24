@@ -242,9 +242,18 @@ func (s *Server) setPermissionHandler(e *core.RequestEvent) error {
 	// (`discussion.reply`), and the forum stores its own flat names
 	// (`reply`). The key is translated on the way in, so the row the
 	// grid writes is a row the forum's handlers actually read.
-	permission = domain.ForumPermissionKey(permission)
+	//
+	// A TAG-SCOPED key carries its scope IN THE KEY (`tag5.viewForum`),
+	// because that is how upstream's tags extension writes it. The
+	// forum keeps the scope in its own column, so the two are split
+	// here. An explicit `scope` in the body wins over the key's, so a
+	// client that speaks the forum's dialect can scope a row directly.
+	permission, keyScope := domain.ForumPermissionKeyAndScope(permission)
 
 	scope := strings.TrimSpace(body.Scope)
+	if scope == "" {
+		scope = keyScope
+	}
 
 	// Every named group must exist. The rows are relations, so a row
 	// naming a group that is not there is a dangling pointer.

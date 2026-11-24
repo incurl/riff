@@ -113,6 +113,14 @@ var defaultPermissions = map[string][]string{
 		// The leaderboard is readable by any member; it holds nothing
 		// private, only who has been active.
 		permissionViewRankingPage,
+		// Voting in a poll is a participation power, exactly like
+		// voting on a post: upstream grants `polls.vote` to everybody
+		// who may take part in a discussion.
+		domain.PermissionVotePoll,
+		// Changing a vote that was already cast is a separate power
+		// upstream keeps apart (`polls.changeVote`), and a poll's own
+		// `allow_change_vote` setting can grant it to everybody.
+		domain.PermissionChangePollVote,
 	},
 	domain.GroupModeratorID: {
 		domain.PermissionViewForum,
@@ -145,6 +153,27 @@ var defaultPermissions = map[string][]string{
 		// The leaderboard is a whole surface, and upstream gates it with
 		// its own permission (`fof.gamification.viewRankingPage`).
 		permissionViewRankingPage,
+		// Changing a discussion's tags is a moderator power: upstream's
+		// `discussion.tag` is seeded for the moderator group, and the
+		// AUTHOR's own right to tag their discussion is a POLICY
+		// (upstream's `DiscussionPolicy::tag()`), not a group row.
+		domain.PermissionTagDiscussion,
+		// Bypassing the tag count minimums is a moderator power too.
+		domain.PermissionBypassTagCounts,
+		// The tag administration powers: creating, editing and
+		// deleting tags.
+		domain.PermissionCreateTag,
+		domain.PermissionEditTag,
+		domain.PermissionDeleteTag,
+		// Seeing WHO voted in a poll is a stricter power than voting,
+		// so it stays with the moderators — upstream keeps it apart for
+		// the same reason.
+		domain.PermissionSeePollVoters,
+		// Seeing a poll's results WITHOUT having voted in it is a third
+		// power: upstream lets a poll hide its results until somebody
+		// votes, and which of the two the reader gets is the
+		// operator's choice.
+		domain.PermissionSeePollVoteCount,
 	},
 }
 

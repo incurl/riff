@@ -227,6 +227,10 @@ type Tag struct {
 	// Icon is the tag's icon classes, empty when unset.
 	Icon string
 	// Position orders the tag among its siblings.
+	//
+	// A tag with NO position is a SECONDARY tag, and a tag with a
+	// position and no parent is a PRIMARY PARENT — upstream's
+	// distinction, and the one the count rules are built on.
 	Position int
 	// IsHidden keeps discussions with this tag out of the All list.
 	IsHidden bool
@@ -238,7 +242,27 @@ type Tag struct {
 	DiscussionCount int
 	// ChildIDs holds the ids of the tag's children.
 	ChildIDs []string
+	// DefaultSort is the sort a tag's discussion list opens with.
+	//
+	// It is stored as the ALIAS that appears in a URL rather than the
+	// API sort behind it, so that it round-trips through the dropdown
+	// unchanged — upstream's rule, and the reason a tag's sort survives
+	// an extension that comes and goes.
+	DefaultSort string
+	// LastPostedAt is when the tag's last discussion was posted.
+	LastPostedAt time.Time
+	// LastPostedDiscussion is the tag's last discussion.
+	LastPostedDiscussion string
+	// LastPostedUserID is the author of the tag's last discussion.
+	LastPostedUserID string
 }
+
+// HasPosition reports whether the tag carries a position.
+//
+// A tag with no position is a SECONDARY tag; a tag with a position is
+// a PRIMARY tag — and a primary tag with no parent is a PRIMARY PARENT,
+// which is what the count rules count.
+func (t *Tag) HasPosition() bool { return t.Position != 0 || t.IsPrimary }
 
 // Permission keys.
 //
@@ -273,6 +297,21 @@ const (
 	PermissionEditGroup = "editGroup"
 	// PermissionDeleteGroup allows deleting a group.
 	PermissionDeleteGroup = "deleteGroup"
+	// PermissionTagDiscussion allows changing a discussion's tags.
+	//
+	// It is upstream's `discussion.tag`, which the tags extension
+	// registers and seeds for the MODERATOR group.
+	//
+	// It is a separate power from the one that lets the discussion's
+	// AUTHOR change the tags, because the author rule is a POLICY and
+	// this is a permission: upstream's `DiscussionPolicy::tag()` asks
+	// for the policy first and falls back to the permission.
+	PermissionTagDiscussion = "tagDiscussion"
+	// PermissionBypassTagCounts allows starting a discussion without
+	// meeting the tag count minimums.
+	//
+	// It is upstream's `bypassTagCounts`.
+	PermissionBypassTagCounts = "bypassTagCounts"
 	// PermissionCreateTag allows creating a tag.
 	PermissionCreateTag = "createTag"
 	// PermissionEditTag allows editing a tag.
@@ -305,6 +344,37 @@ const (
 	// purpose: being able to vote is not the same as being entitled to see
 	// the list of voters.
 	PermissionSeeVoters = "seeVoters"
+	// PermissionVotePoll allows voting in a poll.
+	//
+	// It is upstream's `polls.vote`, which `fof/polls` registers and its
+	// `Access\PollPolicy::vote()` reads. It is separate from the post
+	// vote permission on purpose: a poll's vote is a different act with
+	// a different scope, and upstream scopes it to the discussion.
+	PermissionVotePoll = "votePoll"
+	// PermissionChangePollVote allows changing a vote that was already
+	// cast.
+	//
+	// It is upstream's `polls.changeVote`. It is separate from the vote
+	// permission because upstream asks for it ONLY when the new
+	// selection differs from the old one — so a voter who submits the
+	// same selection twice is not refused for a vote they did not
+	// change.
+	PermissionChangePollVote = "changePollVote"
+	// PermissionSeePollVoters allows seeing WHO voted in a poll.
+	//
+	// It is upstream's `polls.seeVoters`. Seeing the voters is a
+	// stricter power than seeing the counts, which is a third power
+	// (`PermissionSeePollVoteCount`).
+	PermissionSeePollVoters = "seePollVoters"
+	// PermissionSeePollVoteCount allows seeing a poll's counts without
+	// having voted in it.
+	//
+	// It is upstream's `polls.viewResultsWithoutVoting`. It is a
+	// separate power from the vote permission because upstream lets a
+	// poll hide its results until somebody has voted: the reader may
+	// vote OR see the results, and which one is granted is the
+	// operator's choice.
+	PermissionSeePollVoteCount = "seePollVoteCount"
 	// PermissionAdministrate allows administering the forum.
 	PermissionAdministrate = "administrate"
 )

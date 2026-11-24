@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/pkg/errors"
 
 	"github.com/pocketbase/pocketbase/core"
+	"github.com/pocketbase/pocketbase/tools/types"
 
 	"github.com/incurl/riff/pb/flarum/domain"
 	"github.com/incurl/riff/pb/flarum/session"
@@ -126,6 +128,90 @@ func SettingValue(e *core.RequestEvent, key string, fallback any) (any, error) {
 	return server.repo.SettingValue(key, fallback)
 }
 
+// SettingValueAt reads a forum setting without a request event.
+//
+// It is the form a plugin's write path uses: the relationship writer
+// runs from the mutation handler, and it has no request event of its
+// own, but it still needs the forum's settings.
+//
+// A missing setting returns the fallback, so a caller never has to
+// distinguish "unset" from "set to the default".
+func SettingValueAt(app core.App, key string, fallback any) (any, error) {
+	if app == nil {
+		return fallback, nil
+	}
+
+	collection, err := app.FindCollectionByNameOrId("forum_settings")
+	if err != nil {
+		return fallback, err
+	}
+
+	record, err := app.FindFirstRecordByFilter(collection, "key = {:key}", map[string]any{"key": key})
+	if err != nil {
+		// The setting is unset: the fallback is the answer.
+		return fallback, nil //nolint:nilerr // an unset setting falls back
+	}
+
+	value := record.Get("value")
+	if value == nil {
+		return fallback, nil
+	}
+
+	return value, nil
+}
+
+// SettingTruthy reads a setting's value as a boolean.
+//
+// The settings table's `value` column is a JSON field, so a value
+// written as the string "0" comes back as RAW JSON BYTES
+// (`types.JSONRaw`), not as a Go string. A type switch that handles
+// the string case alone therefore never matches, and every setting
+// reads as its fallback — which is how "the setting is not read"
+// happens silently.
+//
+// The `types.JSONRaw` case is the one that matters: it is the type a
+// STORED setting actually arrives as.
+func SettingTruthy(value any, fallback bool) bool {
+	switch typed := value.(type) {
+	case bool:
+		return typed
+	case string:
+		return settingTruthyString(typed, fallback)
+	case []byte:
+		return settingTruthyString(string(typed), fallback)
+	case types.JSONRaw:
+		return settingTruthyString(string(typed), fallback)
+	case json.RawMessage:
+		return settingTruthyString(string(typed), fallback)
+	case int:
+		return typed != 0
+	case int64:
+		return typed != 0
+	case float64:
+		return typed != 0
+	default:
+		return fallback
+	}
+}
+
+// settingTruthyString reads a setting's textual value.
+//
+// The JSON quotes are stripped first, because a JSON-encoded string
+// arrives as `"0"` — with the quotes — and a bare comparison against
+// "0" would miss it.
+func settingTruthyString(raw string, fallback bool) bool {
+	text := strings.Trim(strings.TrimSpace(raw), `"`)
+
+	switch strings.ToLower(text) {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return fallback
+	}
+}
+
 // DecodeBody decodes a request body into a map.
 //
 // It is the plugin-facing form of a JSON body read, for a plugin whose
@@ -207,6 +293,31 @@ func CanTagDiscussion(e *core.RequestEvent, discussionID string) (bool, error) {
 		return false, errUnauthenticated("The forum is not available.")
 	}
 	return server.canTagDiscussion(e, discussionID)
+}
+
+// CanTagDiscussionAs reports whether an ACCOUNT may change a
+// discussion's tags: the account that started it, while the
+// `allow_tag_change` setting permits it.
+//
+// It is the form a plugin's write path uses: the relationship writer
+// runs from the mutation handler, and it has no request event of its
+// own, but it still has to ask the same question the `canTag`
+// attribute answers — otherwise the flag and the write would disagree.
+//
+// The CONTEXT is what carries the server, so the caller passes the
+// request's own context.
+func CanTagDiscussionAs(ctx context.Context, actorID, discussionID string) (bool, error) {
+	server := serverFromContext(ctx)
+	if server == nil {
+		return false, errUnauthenticated("The forum is not available.")
+	}
+
+	actor, err := server.actorFor(actorID)
+	if err != nil {
+		return false, err
+	}
+
+	return server.canTagDiscussionAs(ctx, actor, discussionID)
 }
 
 // WriteDocument writes a JSON:API document.

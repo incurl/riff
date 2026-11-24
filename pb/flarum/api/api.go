@@ -53,6 +53,9 @@ type Server struct {
 	attributes map[string][]AttributeSource
 	// relationships holds the plugin-contributed relationships.
 	relationships map[string][]RelationshipSource
+	// relationshipWriters holds the plugin-contributed WRITE sides of
+	// the relationships.
+	relationshipWriters map[string][]RelationshipWriterSource
 	// renderer renders a post's Markdown source into the HTML the
 	// frontend displays.
 	renderer ContentRenderer
@@ -138,16 +141,17 @@ func NewServer(opts Options) *Server {
 	}
 	basePath := "/" + strings.Trim(opts.BasePath, "/")
 	return &Server{
-		app:           opts.App,
-		repo:          opts.Repository,
-		sessions:      opts.Sessions,
-		permissions:   opts.Permissions,
-		basePath:      basePath,
-		apiPath:       basePath + "/api",
-		logger:        logger,
-		renderer:      opts.Renderer,
-		attributes:    map[string][]AttributeSource{},
-		relationships: map[string][]RelationshipSource{},
+		app:                 opts.App,
+		repo:                opts.Repository,
+		sessions:            opts.Sessions,
+		permissions:         opts.Permissions,
+		basePath:            basePath,
+		apiPath:             basePath + "/api",
+		logger:              logger,
+		renderer:            opts.Renderer,
+		attributes:          map[string][]AttributeSource{},
+		relationships:       map[string][]RelationshipSource{},
+		relationshipWriters: map[string][]RelationshipWriterSource{},
 	}
 }
 
@@ -191,6 +195,118 @@ func (s *Server) AddRelationship(resourceType, name, relatedType string, many bo
 	})
 }
 
+// AddRelationshipWriter registers the write side of a
+// plugin-contributed relationship.
+//
+// The core does not know which relationships are writable — that is the
+// extension's business — so a plugin declares it here and the core
+// calls it when a request carries the relationship.
+func (s *Server) AddRelationshipWriter(resourceType, name string, write func(ctx context.Context, req RelationshipWriteRequest) error) {
+	s.relationshipWriters[resourceType] = append(s.relationshipWriters[resourceType], RelationshipWriterSource{
+		Name: name, Write: write,
+	})
+}
+
+// RelationshipWriterSource is a plugin's write side of a relationship.
+type RelationshipWriterSource struct {
+	// Name is the relationship name.
+	Name string
+	// Write applies the relationship's identifiers to the record.
+	Write func(ctx context.Context, req RelationshipWriteRequest) error
+}
+
+// RelationshipWriteRequest is what a relationship writer receives.
+type RelationshipWriteRequest struct {
+	// ActorID is the acting user's id, empty for anonymous.
+	ActorID string
+	// RecordID is the id of the record the relationship belongs to.
+	RecordID string
+	// Type is the JSON:API resource type.
+	Type string
+	// IDs are the related resource ids the client named.
+	IDs []string
+	// Creating reports whether the record is being created.
+	Creating bool
+}
+
+// writeRelationships applies the writable relationships a request
+// carries.
+//
+// It is called by the mutation handlers after the record is written,
+// because the relationship may name the record's own id (a discussion's
+// tags, for instance, can only be attached once the discussion exists).
+//
+// A relationship the request does not carry is left alone: the client
+// named no tags, so the discussion keeps the tags it has.
+func (s *Server) writeRelationships(e *core.RequestEvent, resourceType, recordID string, creating bool, relationships map[string]any) error {
+	writers := s.relationshipWriters[resourceType]
+	if len(writers) == 0 || len(relationships) == 0 {
+		return nil
+	}
+
+	for _, writer := range writers {
+		relationship, present := relationships[writer.Name].(map[string]any)
+		if !present {
+			continue
+		}
+
+		ids, err := relationshipIDs(relationship)
+		if err != nil {
+			return err
+		}
+
+		request := RelationshipWriteRequest{
+			ActorID:  s.actor(e).ID(),
+			RecordID: recordID,
+			Type:     resourceType,
+			IDs:      ids,
+			Creating: creating,
+		}
+		if err := writer.Write(s.serverContext(), request); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// relationshipIDs reads a relationship's identifiers from a request
+// body.
+//
+// The JSON:API shape is `{"data": [{"id": "…"}, …]}` for a to-many
+// relationship and `{"data": {"id": "…"}}` for a to-one one.
+func relationshipIDs(relationship map[string]any) ([]string, error) {
+	data, ok := relationship["data"]
+	if !ok {
+		return nil, nil
+	}
+
+	switch typed := data.(type) {
+	case []any:
+		ids := make([]string, 0, len(typed))
+		for _, item := range typed {
+			identifier, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			id, ok := identifier["id"].(string)
+			if !ok {
+				continue
+			}
+			ids = append(ids, id)
+		}
+		return ids, nil
+	case map[string]any:
+		id, ok := typed["id"].(string)
+		if !ok {
+			return nil, nil
+		}
+		return []string{id}, nil
+	default:
+		return nil, nil
+	}
+}
+
 // actor resolves the request's caller.
 //
 // A failure to resolve is not fatal: an anonymous caller is a valid
@@ -204,9 +320,46 @@ func (s *Server) actor(e *core.RequestEvent) session.Actor {
 	return actor
 }
 
+// serverContext returns a context carrying this server.
+//
+// The relationship writer is called BY the server, and a plugin's
+// writer has to ask the forum's own questions — the discussion's
+// author rule, the forum's settings — which live on the server. The
+// request's own context carries the server only for the PLUGIN routes
+// (the module's wrapper attaches it), so the core's own mutation
+// handlers cannot rely on it.
+func (s *Server) serverContext() context.Context {
+	return serverContext(context.Background(), s)
+}
+
+// actorFor builds a session actor for an account id.
+//
+// It is the form a plugin's write path uses: the relationship writer
+// runs from the mutation handler, and it knows WHO is writing but has
+// no request to resolve.
+func (s *Server) actorFor(actorID string) (session.Actor, error) {
+	if actorID == "" {
+		return session.Actor{}, nil
+	}
+
+	user, err := s.repo.UserByID(actorID)
+	if err != nil {
+		return session.Actor{}, err
+	}
+	if user == nil {
+		return session.Actor{}, nil
+	}
+
+	return session.Actor{User: user}, nil
+}
+
 // domainActor projects the session actor onto the domain actor.
 func (s *Server) domainActor(e *core.RequestEvent) domain.Actor {
-	actor := s.actor(e)
+	return s.domainActorOf(s.actor(e))
+}
+
+// domainActorOf projects a session actor onto the domain actor.
+func (s *Server) domainActorOf(actor session.Actor) domain.Actor {
 	if actor.User == nil {
 		return domain.Actor{}
 	}
@@ -479,6 +632,21 @@ func (s *Server) canTagDiscussion(e *core.RequestEvent, discussionID string) (bo
 		return false, nil
 	}
 
+	return s.canTagDiscussionAs(e.Request.Context(), actor, discussionID)
+}
+
+// canTagDiscussionAs reports whether an ACTOR may change a
+// discussion's tags.
+//
+// It is the form a plugin's write path uses: the relationship writer
+// runs from the mutation handler, and it has no request event of its
+// own, but it still has to ask the same question the `canTag`
+// attribute answers — otherwise the flag and the write would disagree.
+func (s *Server) canTagDiscussionAs(ctx context.Context, actor session.Actor, discussionID string) (bool, error) {
+	if !actor.IsAuthenticated() {
+		return false, nil
+	}
+
 	discussion, err := s.repo.FindDiscussion(discussionID)
 	if err != nil {
 		return false, err
@@ -491,7 +659,7 @@ func (s *Server) canTagDiscussion(e *core.RequestEvent, discussionID string) (bo
 
 	// The author must also be able to reply, which is upstream's
 	// condition on the policy.
-	canReply, err := s.permissions.Can(e.Request.Context(), s.domainActor(e), domain.PermissionReply, TypeDiscussion, discussionID)
+	canReply, err := s.permissions.Can(ctx, s.domainActorOf(actor), domain.PermissionReply, TypeDiscussion, discussionID)
 	if err != nil {
 		return false, err
 	}
