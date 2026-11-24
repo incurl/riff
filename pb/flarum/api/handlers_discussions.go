@@ -326,6 +326,42 @@ func (s *Server) listUsersHandler(e *core.RequestEvent) error {
 	return s.writeDocument(e, Document{Data: resources})
 }
 
+// settingTextOr reads a setting as text, with a fallback.
+//
+// The settings column is a PocketBase JSONField, so the value comes
+// back as `types.JSONRaw` (a []byte of JSON); a JSON string decodes to
+// the string it holds. [settingString] does the decoding.
+//
+// A setting that cannot be read falls back to the default, so a
+// missing or unreadable setting never blanks the forum document.
+func settingTextOr(settings map[string]any, key, fallback string) string {
+	value, ok := settingString(settings[key])
+	if !ok {
+		return fallback
+	}
+	return value
+}
+
+// assetURL builds the public URL of an uploaded asset.
+//
+// The paths are the forum's own upload paths (`logo_path` and
+// friends), which upstream serves from its assets directory. riff has
+// no asset upload endpoint for them, so an unset path yields an empty
+// URL — which is what the frontend expects for "no logo".
+func (s *Server) assetURL(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	if strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") {
+		return path
+	}
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	return s.basePath + "/assets" + path
+}
+
 // showUserHandler serves GET /api/users/{id}.
 func (s *Server) showUserHandler(e *core.RequestEvent) error {
 	id := e.Request.PathValue("id")
@@ -442,6 +478,23 @@ func (s *Server) ForumDocument(e *core.RequestEvent) (Resource, error) {
 		actorResource = s.userResourceWithGroups(actor.User, actor.User.Groups)
 	}
 
+	// The theme settings. Upstream carries them on the FORUM DOCUMENT
+	// (framework/core/src/Api/Resource/ForumResource.php:104-112), and
+	// the frontend reads them from there:
+	//
+	//	forumDefault ??= app.forum.attribute('colorScheme') ?? 'auto';
+	//
+	// They are SETTINGS, so they have to come from the settings table —
+	// an administrator's choice is what the forum shows, and a hard
+	// coded value would make the admin's Appearance page a no-op.
+	// The settings that could not be read are simply absent: the forum
+	// document then carries upstream's defaults, which is better than a
+	// blank document.
+	settings, err := s.repo.AllSettings()
+	if err != nil {
+		settings = map[string]any{}
+	}
+
 	attributes := map[string]any{
 		"title":                   "Forum",
 		"description":             "",
@@ -450,13 +503,13 @@ func (s *Server) ForumDocument(e *core.RequestEvent) (Resource, error) {
 		"baseOrigin":              "",
 		"apiUrl":                  s.apiPath,
 		"debug":                   false,
-		"welcomeTitle":            "",
-		"welcomeMessage":          "",
+		"welcomeTitle":            settingTextOr(settings, "welcome_title", ""),
+		"welcomeMessage":          settingTextOr(settings, "welcome_message", ""),
 		"showLanguageSelector":    false,
 		"showThemeSelector":       false,
 		"showPostSource":          false,
 		"allowSignUp":             false,
-		"defaultRoute":            "/",
+		"defaultRoute":            settingTextOr(settings, "default_route", "/"),
 		"canViewForum":            s.can(e, domain.PermissionViewForum, TypeForum, "1"),
 		"canStartDiscussion":      s.can(e, domain.PermissionStartDiscussion, TypeForum, "1"),
 		"canSearchUsers":          s.can(e, domain.PermissionSearchUsers, TypeForum, "1"),
@@ -468,6 +521,24 @@ func (s *Server) ForumDocument(e *core.RequestEvent) (Resource, error) {
 		"jsChunksBaseUrl":         s.basePath + "/assets/js",
 		"adminUrl":                s.basePath + "/admin",
 		"version":                 "2.0.0",
+
+		// The theme. `colorScheme` is the one the frontend reads for
+		// the default scheme, and the two colours are what the theme
+		// CSS is built from.
+		"colorScheme":         settingTextOr(settings, "color_scheme", "auto"),
+		"themePrimaryColor":   settingTextOr(settings, "theme_primary_color", "#4D698E"),
+		"themeSecondaryColor": settingTextOr(settings, "theme_secondary_color", "#4D698E"),
+
+		// The logos. They are settings too (`logo_path` and friends),
+		// and the Appearance page's upload buttons write them.
+		"logoUrl":         s.assetURL(settingTextOr(settings, "logo_path", "")),
+		"logoDarkModeUrl": s.assetURL(settingTextOr(settings, "logo_dark_mode_path", "")),
+		"faviconUrl":      s.assetURL(settingTextOr(settings, "favicon_path", "")),
+		"emailLogoUrl":    s.assetURL(settingTextOr(settings, "email_logo_path", "")),
+
+		// The custom header and footer.
+		"headerHtml": settingTextOr(settings, "custom_header", ""),
+		"footerHtml": settingTextOr(settings, "custom_footer", ""),
 	}
 
 	relationships := map[string]Relationship{

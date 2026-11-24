@@ -407,10 +407,21 @@ func (m *Module) adminSettings() map[string]any {
 		"slug_driver_Flarum\\User\\User": "default",
 		"theme_colored_header":           "0",
 		"color_scheme":                   "auto",
+		"allow_user_color_scheme":        "1",
+		"show_theme_selector":            "0",
 		"theme_primary_color":            "#4D698E",
 		"theme_secondary_color":          "#4D698E",
-		"welcome_message":                "",
-		"welcome_title":                  "",
+		// The uploaded assets. The Appearance page's upload buttons read
+		// these paths, and they are SETTINGS — so a stored value has to
+		// win over the default.
+		"logo_path":                "",
+		"logo_dark_mode_path":      "",
+		"favicon_path":             "",
+		"email_logo_path":          "",
+		"app_icon_path":            "",
+		"fontawesome_forced_style": "",
+		"welcome_message":          "",
+		"welcome_title":            "",
 	}
 
 	// The enabled plugins, as upstream's setting holds them: a JSON

@@ -5,6 +5,46 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## THE THEME SETTINGS TRAVEL ON THE FORUM DOCUMENT, not only in the admin payload (2026-11-24)
+
+An administrator picked a colour scheme in the Appearance page and it
+was not persisted: the forum kept rendering in light mode.
+
+**THE SETTINGS WERE SAVED.** The admin's save is upstream's command
+wire format (`POST /api/settings` with the flat map), the handler
+writes each key to the settings table, and the admin payload reads them
+back — the saved `color_scheme` was in `app.data.settings`, exactly
+where the Appearance page reads it from.
+
+**THE FORUM DOCUMENT DID NOT CARRY IT.** Upstream publishes the theme
+settings on the FORUM document
+(framework/core/src/Api/Resource/ForumResource.php:104-112):
+
+    Schema\Str::make('themePrimaryColor')
+        ->get(fn () => $this->settings->get('theme_primary_color')),
+    Schema\Str::make('colorScheme')
+        ->get(fn () => $this->settings->get('color_scheme')),
+
+and the frontend reads them from THERE
+(framework/core/js/src/common/Application.tsx:508):
+
+    forumDefault ??= app.forum.attribute('colorScheme') ?? 'auto';
+
+riff's forum document carried neither, so the forum fell back to
+`auto` — the setting was stored, the admin showed it, and the forum
+ignored it.
+
+The forum document now carries upstream's full set: `colorScheme`,
+`themePrimaryColor`, `themeSecondaryColor`, `logoUrl`,
+`logoDarkModeUrl`, `faviconUrl`, `emailLogoUrl`, `headerHtml` and
+`footerHtml` — each read from the SETTINGS, so an administrator's
+choice is what the forum shows.
+
+The admin payload carries the keys the Appearance page reads as well:
+the colour scheme, the two theme colours, the toggle settings and the
+uploaded asset paths (`logo_path` and its siblings), which the upload
+buttons read to show what is currently set.
+
 ## THE AUDIT: EVERY FRONTEND/SERVER CONTRACT, CHECKED AT ONCE (2026-11-24)
 
 Four bugs in a row had the same shape: **the frontend is upstream's
