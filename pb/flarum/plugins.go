@@ -5,6 +5,8 @@ import (
 	"github.com/incurl/riff/pb/flarum/plugins/chinese"
 	"github.com/incurl/riff/pb/flarum/plugins/likes"
 	"github.com/incurl/riff/pb/flarum/plugins/lock"
+	"github.com/incurl/riff/pb/flarum/plugins/markdown"
+	"github.com/incurl/riff/pb/flarum/plugins/statistics"
 	"github.com/incurl/riff/pb/flarum/plugins/sticky"
 	"github.com/incurl/riff/pb/flarum/plugins/suspend"
 	"github.com/incurl/riff/pb/flarum/plugins/tags"
@@ -35,6 +37,8 @@ func defaultPlugins() []plugin.Plugin {
 		lock.New(),
 		sticky.New(),
 		suspend.New(),
+		markdown.New(),
+		statistics.New(),
 		chinese.New(),
 	}
 }

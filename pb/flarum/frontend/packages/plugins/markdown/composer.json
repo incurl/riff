@@ -1,0 +1,10 @@
+{
+  "name": "riff/markdown",
+  "description": "Markdown formatting toolbar for the riff forum.",
+  "type": "flarum-extension",
+  "version": "1.0.0",
+  "license": "MIT",
+  "require": {
+    "flarum/core": "^2.0.0"
+  }
+}

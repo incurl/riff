@@ -227,14 +227,14 @@ func TestForum_ExtensionManifestIsServed(t *testing.T) {
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &manifest))
 	// Every first-party plugin that ships a frontend bundle is listed. The
 	// language pack is not: it declares a locale, not an asset bundle.
-	require.Len(t, manifest.Extensions, 6, "every bundled plugin must be listed")
+	require.Len(t, manifest.Extensions, 7, "every bundled plugin must be listed")
 
 	ids := []string{}
 	for _, extension := range manifest.Extensions {
 		ids = append(ids, extension["id"].(string))
 	}
 
-	for _, want := range []string{"riff/tags", "riff/likes", "riff/uploads", "flarum/lock", "flarum/sticky", "flarum/suspend"} {
+	for _, want := range []string{"riff/tags", "riff/likes", "riff/uploads", "flarum/lock", "flarum/sticky", "flarum/suspend", "flarum/markdown"} {
 		require.Contains(t, ids, want)
 	}
 }

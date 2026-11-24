@@ -5,6 +5,64 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## THE MARKDOWN PLUGIN ADDS SYNTAX, NOT A RENDERER (2026-11-24)
+
+`flarum/markdown` and `flarum/statistics` are now plugins
+(`pb/flarum/plugins/{markdown,statistics}/`).
+
+**THE FORMATTER WAS ALREADY HERE.** Upstream's extension does two things:
+register the Litedown formatter, and ship a composer toolbar.
+`pb/flarum/api/service.go`'s `renderContent` already calls riff's own
+`markdown.Service.RenderHTML` for every post, so the forum has been
+rendering with that engine all along — a second formatter would have been a
+second set of rules to keep in step. What the engine LACKED was one piece of
+upstream's syntax: the inline spoiler.
+
+So the plugin contributes the syntax and the toolbar, and no formatter. The
+spoiler (`markdown/extensions/spoiler.go`) is a goldmark inline parser
+modelled on `extension/strikethrough`: it claims a delimiter run of EXACTLY
+two pipes, because a single pipe is a table cell boundary. That detail is
+the whole risk in the change — an inline parser that claimed one pipe would
+eat every table in the forum, and the failure is silent (the cells vanish,
+nothing errors). `TestSpoiler_LeavesTablesAlone` pins it.
+
+The syntax is enabled on the shared `markdown.Service`, not on a
+forum-specific instance, because the two would otherwise diverge and a memo
+that wrote `||x||` would render differently in the two surfaces.
+
+The HTML is upstream's: `<span class="spoiler" data-spoiler="">`, which the
+plugin's stylesheet blurs and whose class the click handler removes.
+
+**STATISTICS IS THE ENDPOINT, NOT THE WIDGETS.** `GET /api/statistics`
+implements upstream's contract — `?period=lifetime` for the totals,
+`?model=<entity>` for a day series — and upstream's gate
+(`assertAdmin()`), answering 403 rather than the forum's usual 404 because
+the endpoint's existence is not the secret, the numbers are. A missing
+model is a validation error rather than an empty series: an empty chart
+reads as "no activity", which is a different and wrong statement.
+
+The plugin declares NO asset bundle. Upstream's charts are an admin-page
+feature and this port has no page for them; a bundle that drew nothing
+would be exactly the dead-tag problem the module's startup check exists to
+surface.
+
+The series is grouped in Go over a thirty-day window rather than in SQL:
+PocketBase's query API cannot express `GROUP BY` over a formatted date, and
+a raw query would pin the plugin to one driver.
+
+**`FriendsOfFlarum/polls` AND `FriendsOfFlarum/gamification` ARE NOT
+PORTED.** Both were surveyed (138 and 96 PHP files respectively) and both
+are larger than the four extensions already ported put together. Polls
+needs its own collection set (polls, options, per-option votes), a voting
+route with the change-vote rule, and a composer modal; gamification needs a
+points ledger, badge grants, a ranking query and an admin settings surface.
+Each is a feature in its own right, and half of one is worse than none —
+the same judgement as `flarum/mentions`.
+
+`go test -run 'TestMarkdown_|TestStatistics_' ./pb/flarum/` and
+`go test ./markdown/...` pin the rendering chain, the stored source, the
+admin gate, the two error shapes and the series shape.
+
 ## LOCK AND STICKY ARE TWO COLUMNS, AND A SUSPENDED ACCOUNT IS A GUEST (2026-11-24)
 
 `flarum/lock`, `flarum/sticky` and `flarum/suspend` are now plugins

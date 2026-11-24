@@ -126,6 +126,13 @@ func NewService(opts ...Option) Service {
 		extension.Strikethrough,
 		extension.TaskList,
 		extensions.NewGFMLinkify(),
+		// The inline spoiler (`||hidden||`) is upstream Flarum's
+		// `flarum/markdown` syntax, and the forum serves the rendered HTML.
+		// It is enabled for every consumer of this Service, not just the
+		// forum: the syntax is inert in a memo that does not use it, and a
+		// second goldmark instance would be a second set of rendering rules
+		// to keep in step.
+		extensions.SpoilerExtension,
 	}
 
 	// Add custom extensions based on config

@@ -1,0 +1,31 @@
+/* The inline spoiler, as rendered by markdown/extensions/spoiler.go
+   (`<span class="spoiler" data-spoiler="">`).
+
+   Upstream's extension replaces s9e's default template so the span carries
+   `data-spoiler`; its stylesheet blurs the text and the click handler
+   `removeAttribute('class')` reveals it. The two rules below do the same:
+   the attribute selector hides the text, and removing the class leaves the
+   span unstyled and readable. */
+
+.spoiler[data-spoiler] {
+  filter: blur(0.25em);
+  cursor: pointer;
+  transition: filter 0.1s ease-in-out;
+}
+
+.spoiler[data-spoiler]:hover {
+  filter: blur(0.15em);
+}
+
+/* The toolbar sits inside the composer's existing TextEditor-toolbar list. */
+.MarkdownToolbar-button {
+  background: none;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  padding: 0.25rem 0.4rem;
+}
+
+.MarkdownToolbar-button:hover {
+  opacity: 0.7;
+}
