@@ -5,6 +5,75 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## A SCORE IS A UNIQUE INDEX, NOT ARITHMETIC (2026-11-24)
+
+`fof/gamification` is now a plugin (`pb/flarum/plugins/gamification/`).
+
+**THE VOTE IS A ROUTE, NOT A WRITABLE FIELD.** Upstream writes the vote
+through a post UPDATE (`vote` is a writable field on the post resource).
+The permission that governs it is the extension's own `votePosts`, and the
+core's post update handler does not consult it — so a field would have been
+a permission with no enforcement. The vote is therefore a route
+(`POST /api/posts/{id}/vote`), exactly as the Likes plugin's like is: the
+check and the write belong together, and the `canVote` attribute is derived
+from the same permission.
+
+**THE UNIQUE INDEX ON (post, user) IS WHAT MAKES A VOTE IDEMPOTENT.**
+Upstream reaches the same result with an application-level check. This
+port puts it in the database instead, because that is the only place it can
+be enforced against two concurrent requests: a double-clicked button
+cannot add a second row, and the score cannot double. Nothing reports a
+doubled score, so the guarantee has to live below the application.
+
+**THE SCORE IS THE AUTHOR'S, AND A RANK IS THE HIGHEST ONE QUALIFIED.**
+The points an account holds are the votes RECEIVED on its posts, not the
+votes it cast (upstream's `Vote::updateUserVotes`). The singular `rank`
+attribute is this port's own addition — upstream attaches EVERY rank the
+account has passed and renders them as a stack — and it reports the
+HIGHEST one, because a badge that said "Rookie" to an account that had
+passed "Veteran" would be the opposite of what a badge is for.
+
+**A SETTING IS NOT A STRING.** The settings table's `value` column is a
+JSON field, so a value written as the string "0" comes back as RAW JSON
+BYTES (`types.JSONRaw`), not as a Go string. A type switch that only
+handles `string` therefore never matches, and every setting reads as its
+fallback — which is how "the setting is not read" happens SILENTLY. The
+same trap applies to `api.DecodeBody`, whose map argument has to be a
+POINTER: a map is a reference type, and passing it by value decodes into a
+copy the caller never sees.
+
+**THE COLLECTION NAMES CARRY NO HYPHEN.** PocketBase's collection-name rule
+is `^\w+$`, and the plugin slug of `fof/gamification` contains one — so
+`ExtensionPhysical` (which embeds the slug) produces a name the migration
+cannot create, and the failure is "name: must be in a valid format" at
+BOOT. The plugin uses the forum's own prefix, like every other plugin's.
+
+**THE LEADERBOARD IS COMPUTED, AND ITS ID NAMES THE RANKING.**
+`GET /api/leaderboard` answers upstream's four metrics (`posts`,
+`discussions`, `upvotes`, `votes`) over upstream's five calendar periods
+(`day`, `week`, `month`, `year`, `all`). The id composes the metric, the
+period AND the position: a bare position means entry "11" of the yearly
+board and entry "11" of the monthly one are the same record to a client
+store that caches by type and id, so switching metric or period hands back
+whichever was fetched first. A metric or period that does not exist is a
+validation failure rather than an empty board, because an empty board
+reads as "nobody has scored".
+
+The scores are computed in Go over the plugin's rows rather than in SQL:
+PocketBase's query API cannot express the grouped aggregates the metrics
+are defined by, and a raw query would pin the plugin to one driver.
+
+**WHAT IS NOT PORTED.** The trending score (a Reddit "hot" formula over a
+column this port does not need), the auto-assigned groups, the rankings
+page's charts, the votes page, the podium images and the votes-per-minute
+flooding rule. Each is a surface of its own, and half of one is worse than
+none.
+
+`go test -run 'TestGamification_' ./pb/flarum/` pins the vote round trip,
+the idempotence (by the ROW COUNT, not the arithmetic), the changed vote,
+the permission gate, the self-vote setting, the points-to-rank chain, the
+leaderboard's ordering and id, and the two error shapes.
+
 ## THE MARKDOWN PLUGIN ADDS SYNTAX, NOT A RENDERER (2026-11-24)
 
 `flarum/markdown` and `flarum/statistics` are now plugins

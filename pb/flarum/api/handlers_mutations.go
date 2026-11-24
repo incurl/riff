@@ -33,7 +33,7 @@ type requestResource struct {
 }
 
 // decodeBody reads the JSON:API request document.
-func decodeBody(e *core.RequestEvent) (*requestBody, error) {
+func decodeRequestBody(e *core.RequestEvent) (*requestBody, error) {
 	var body requestBody
 	if err := json.NewDecoder(e.Request.Body).Decode(&body); err != nil {
 		return nil, errValidation("The request body could not be read.")
@@ -89,7 +89,7 @@ func (s *Server) createDiscussionHandler(e *core.RequestEvent) error {
 		return fail(e, errForbidden("The request could not be verified."))
 	}
 
-	body, err := decodeBody(e)
+	body, err := decodeRequestBody(e)
 	if err != nil {
 		return fail(e, err)
 	}
@@ -137,7 +137,7 @@ func (s *Server) createPostHandler(e *core.RequestEvent) error {
 		return fail(e, errForbidden("The request could not be verified."))
 	}
 
-	body, err := decodeBody(e)
+	body, err := decodeRequestBody(e)
 	if err != nil {
 		return fail(e, err)
 	}
@@ -270,7 +270,7 @@ func (s *Server) updateDiscussionHandler(e *core.RequestEvent) error {
 		return fail(e, notFoundError("That discussion does not exist."))
 	}
 
-	body, err := decodeBody(e)
+	body, err := decodeRequestBody(e)
 	if err != nil {
 		return fail(e, err)
 	}
@@ -354,7 +354,7 @@ func (s *Server) updatePostHandler(e *core.RequestEvent) error {
 		return fail(e, errForbidden("You are not allowed to edit that post."))
 	}
 
-	body, err := decodeBody(e)
+	body, err := decodeRequestBody(e)
 	if err != nil {
 		return fail(e, err)
 	}
@@ -450,7 +450,7 @@ func (s *Server) updateUserHandler(e *core.RequestEvent) error {
 		return fail(e, errForbidden("You are not allowed to change that account."))
 	}
 
-	body, err := decodeBody(e)
+	body, err := decodeRequestBody(e)
 	if err != nil {
 		return fail(e, err)
 	}

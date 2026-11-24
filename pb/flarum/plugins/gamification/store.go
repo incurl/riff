@@ -1,0 +1,261 @@
+package gamification
+
+import (
+	"github.com/pkg/errors"
+	"github.com/pocketbase/pocketbase/core"
+
+	"github.com/incurl/riff/pb/flarum/plugin"
+)
+
+// The vote values, as upstream's `Vote` model uses them.
+const (
+	// VoteUp is an upvote.
+	VoteUp = 1
+	// VoteDown is a downvote.
+	VoteDown = -1
+)
+
+// postScore returns the sum of a post's votes.
+//
+// A post with no votes scores zero, which is what the frontend shows.
+func postScore(app core.App, physical, postID string) (int, error) {
+	collection, err := app.FindCollectionByNameOrId(physical)
+	if err != nil {
+		return 0, errors.Wrapf(err, "gamification: the %q collection is missing", physical)
+	}
+
+	records, err := app.FindAllRecords(collection, nil)
+	if err != nil {
+		return 0, errors.Wrap(err, "gamification: the votes could not be read")
+	}
+
+	score := 0
+	for _, record := range records {
+		if record.GetString("post") != postID {
+			continue
+		}
+		score += record.GetInt("value")
+	}
+
+	return score, nil
+}
+
+// hasVote reports whether the actor's vote on a post has the given sign.
+//
+// A caller with no session has no vote, which is false rather than an
+// error: the attribute is rendered on every post, including for a guest.
+func hasVote(app core.App, physical, postID, actorID string, value int) (bool, error) {
+	if actorID == "" {
+		return false, nil
+	}
+
+	collection, err := app.FindCollectionByNameOrId(physical)
+	if err != nil {
+		return false, errors.Wrapf(err, "gamification: the %q collection is missing", physical)
+	}
+
+	record, err := app.FindFirstRecordByFilter(collection, "post = {:post} && user = {:user}", map[string]any{
+		"post": postID,
+		"user": actorID,
+	})
+	if err != nil {
+		return false, nil //nolint:nilerr // no vote is not an error
+	}
+
+	return record.GetInt("value") == value, nil
+}
+
+// voterIDs returns the accounts that voted on a post with the given sign.
+func voterIDs(app core.App, physical, postID string, value int) ([]plugin.Identifier, error) {
+	collection, err := app.FindCollectionByNameOrId(physical)
+	if err != nil {
+		return nil, errors.Wrapf(err, "gamification: the %q collection is missing", physical)
+	}
+
+	records, err := app.FindAllRecords(collection, nil)
+	if err != nil {
+		return nil, errors.Wrap(err, "gamification: the votes could not be read")
+	}
+
+	ids := make([]plugin.Identifier, 0)
+	for _, record := range records {
+		if record.GetString("post") != postID || record.GetInt("value") != value {
+			continue
+		}
+		ids = append(ids, plugin.Identifier{Type: "users", ID: record.GetString("user")})
+	}
+
+	return ids, nil
+}
+
+// userScore returns the points an account has earned.
+//
+// It is the sum of the votes RECEIVED on the account's posts, which is
+// upstream's `Vote::updateUserVotes`: a post's author is scored by the
+// votes that post attracts, not by the votes they cast.
+func userScore(app core.App, physical, userID string) (int, error) {
+	collection, err := app.FindCollectionByNameOrId(physical)
+	if err != nil {
+		return 0, errors.Wrapf(err, "gamification: the %q collection is missing", physical)
+	}
+
+	records, err := app.FindAllRecords(collection, nil)
+	if err != nil {
+		return 0, errors.Wrap(err, "gamification: the votes could not be read")
+	}
+
+	posts, err := postsByAuthor(app, userID)
+	if err != nil {
+		return 0, err
+	}
+
+	score := 0
+	for _, record := range records {
+		if _, ok := posts[record.GetString("post")]; !ok {
+			continue
+		}
+		score += record.GetInt("value")
+	}
+
+	return score, nil
+}
+
+// userRank returns the name of the HIGHEST rank an account has earned.
+//
+// Upstream attaches EVERY rank whose threshold the account has passed
+// (`Rank::where('points', '<=', $user->votes)`) and its frontend renders
+// them all as a stack of badges. There is no stored "current rank", so it
+// is derived here: the rank with the largest `points` the account
+// qualifies for.
+//
+// The HIGHEST one is the singular answer. A lowest-first reading would
+// report "Rookie" for an account that has passed "Veteran", which is the
+// opposite of what the badge is for.
+func userRank(app core.App, ranksPhysical, votesPhysical, userID string) (string, error) {
+	collection, err := app.FindCollectionByNameOrId(ranksPhysical)
+	if err != nil {
+		return "", errors.Wrapf(err, "gamification: the %q collection is missing", ranksPhysical)
+	}
+
+	score, err := userScore(app, votesPhysical, userID)
+	if err != nil {
+		return "", err
+	}
+
+	records, err := app.FindAllRecords(collection, nil)
+	if err != nil {
+		return "", errors.Wrap(err, "gamification: the ranks could not be read")
+	}
+
+	name := ""
+	best := -1
+
+	for _, record := range records {
+		points := record.GetInt("points")
+
+		// A rank the account has not reached does not count, and a rank
+		// with FEWER points than the best one found does not either.
+		if points > score || points < best {
+			continue
+		}
+
+		// Equal points: the first by name wins, so the answer is stable
+		// whatever order the records come back in.
+		if points == best && name != "" && record.GetString("name") >= name {
+			continue
+		}
+
+		best = points
+		name = record.GetString("name")
+	}
+
+	return name, nil
+}
+
+// rankIDs returns the ranks an account has earned.
+func rankIDs(app core.App, ranksPhysical, votesPhysical, userID string) ([]plugin.Identifier, error) {
+	collection, err := app.FindCollectionByNameOrId(ranksPhysical)
+	if err != nil {
+		return nil, errors.Wrapf(err, "gamification: the %q collection is missing", ranksPhysical)
+	}
+
+	score, err := userScore(app, votesPhysical, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	records, err := app.FindAllRecords(collection, nil)
+	if err != nil {
+		return nil, errors.Wrap(err, "gamification: the ranks could not be read")
+	}
+
+	ids := make([]plugin.Identifier, 0)
+	for _, record := range records {
+		if record.GetInt("points") > score {
+			continue
+		}
+		ids = append(ids, plugin.Identifier{Type: TypeRank, ID: record.Id})
+	}
+
+	return ids, nil
+}
+
+// setVote records (or changes) a vote.
+//
+// It returns the vote's new value and whether a row was created, so the
+// caller can tell a first vote from a change.
+//
+// The unique index on (post, user) is what makes this safe: a concurrent
+// second vote for the same pair cannot add a second row.
+func setVote(app core.App, physical, postID, userID string, value int) (int, bool, error) {
+	collection, err := app.FindCollectionByNameOrId(physical)
+	if err != nil {
+		return 0, false, errors.Wrapf(err, "gamification: the %q collection is missing", physical)
+	}
+
+	record, err := app.FindFirstRecordByFilter(collection, "post = {:post} && user = {:user}", map[string]any{
+		"post": postID,
+		"user": userID,
+	})
+
+	created := false
+	if err != nil {
+		record = core.NewRecord(collection)
+		record.Set("post", postID)
+		record.Set("user", userID)
+		created = true
+	}
+
+	record.Set("value", value)
+
+	if err := app.Save(record); err != nil {
+		return 0, false, errors.Wrap(err, "gamification: the vote could not be saved")
+	}
+
+	return record.GetInt("value"), created, nil
+}
+
+// postsByAuthor returns the ids of the posts an account wrote.
+func postsByAuthor(app core.App, userID string) (map[string]struct{}, error) {
+	collection, err := app.FindCollectionByNameOrId("forum_posts")
+	if err != nil {
+		// The collection is looked up by its default name; an instance
+		// with a different prefix falls back to an empty set, which
+		// scores zero rather than failing the whole request.
+		return map[string]struct{}{}, nil //nolint:nilerr // a missing collection scores zero
+	}
+
+	records, err := app.FindAllRecords(collection, nil)
+	if err != nil {
+		return nil, errors.Wrap(err, "gamification: the posts could not be read")
+	}
+
+	ids := make(map[string]struct{})
+	for _, record := range records {
+		if record.GetString("user") == userID {
+			ids[record.Id] = struct{}{}
+		}
+	}
+
+	return ids, nil
+}

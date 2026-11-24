@@ -80,6 +80,13 @@ var upstreamPermissionKeys = map[string]string{
 	"discussion.lock":   PermissionLockDiscussion,
 	"discussion.sticky": PermissionStickyDiscussion,
 	"user.suspend":      PermissionSuspendUser,
+
+	// The gamification powers. `fof/gamification` registers
+	// `votePosts` and `canSeeVotes` (its `Access\PostPolicy` reads both
+	// against a discussion), and its admin page sends the same names.
+	"votePosts":    PermissionVotePost,
+	"canSeeVotes":  PermissionSeeVoters,
+	"canSeeVoters": PermissionSeeVoters,
 }
 
 // forumPermissionKeys is the reverse of upstreamPermissionKeys: the

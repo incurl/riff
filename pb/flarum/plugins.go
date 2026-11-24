@@ -3,6 +3,7 @@ package flarum
 import (
 	"github.com/incurl/riff/pb/flarum/plugin"
 	"github.com/incurl/riff/pb/flarum/plugins/chinese"
+	"github.com/incurl/riff/pb/flarum/plugins/gamification"
 	"github.com/incurl/riff/pb/flarum/plugins/likes"
 	"github.com/incurl/riff/pb/flarum/plugins/lock"
 	"github.com/incurl/riff/pb/flarum/plugins/markdown"
@@ -38,6 +39,7 @@ func defaultPlugins() []plugin.Plugin {
 		sticky.New(),
 		suspend.New(),
 		markdown.New(),
+		gamification.New(),
 		statistics.New(),
 		chinese.New(),
 	}

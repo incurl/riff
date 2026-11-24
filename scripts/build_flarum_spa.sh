@@ -20,7 +20,7 @@ TARGET="$ROOT/pb/flarum/frontend/ui/dist"
 # builds its own forum.js/admin.js bundle. The Go plugin declares those
 # paths in its AssetBundle (plugins/<name>/forum.js and friends), so a
 # missing build here is a 404 in the forum shell.
-PLUGINS="tags likes uploads lock sticky suspend markdown"
+PLUGINS="tags likes uploads lock sticky suspend markdown gamification"
 
 export PATH="$HOME/.local/bin:$PATH"
 

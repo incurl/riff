@@ -293,6 +293,18 @@ const (
 	//
 	// It is upstream's `user.suspend`, registered by `flarum/suspend`.
 	PermissionSuspendUser = "suspendUser"
+	// PermissionVotePost allows voting on a post.
+	//
+	// It is upstream's `votePosts`, which `fof/gamification` registers and
+	// its `Access\PostPolicy::vote()` reads.
+	PermissionVotePost = "votePost"
+	// PermissionSeeVoters allows seeing WHO voted.
+	//
+	// It is upstream's `canSeeVotes`/`canSeeVoters`, which the same
+	// extension registers. It is separate from the vote permission on
+	// purpose: being able to vote is not the same as being entitled to see
+	// the list of voters.
+	PermissionSeeVoters = "seeVoters"
 	// PermissionAdministrate allows administering the forum.
 	PermissionAdministrate = "administrate"
 )

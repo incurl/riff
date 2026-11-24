@@ -2,7 +2,10 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
+
+	"github.com/pkg/errors"
 
 	"github.com/pocketbase/pocketbase/core"
 
@@ -106,6 +109,48 @@ func Can(e *core.RequestEvent, action, subjectType, subjectID string) (bool, err
 // VerifyCSRF checks a mutating request's CSRF token.
 func VerifyCSRF(e *core.RequestEvent) error {
 	return session.VerifyCSRF(e)
+}
+
+// SettingValue reads a forum setting's raw value.
+//
+// It is the plugin-facing form of the core's setting reader: a plugin
+// reads the setting it was given, and the fallback applies when the
+// setting is unset. The value comes back as whatever the settings table
+// holds (a string in practice), so a caller that wants a boolean
+// interprets it.
+func SettingValue(e *core.RequestEvent, key string, fallback any) (any, error) {
+	server := serverFromContext(e.Request.Context())
+	if server == nil {
+		return fallback, nil
+	}
+	return server.repo.SettingValue(key, fallback)
+}
+
+// DecodeBody decodes a request body into a map.
+//
+// It is the plugin-facing form of a JSON body read, for a plugin whose
+// body shape is loose (the JSON:API envelope, or the flat form). The
+// framework's own `BindBody` targets a struct, which is the wrong shape
+// here.
+//
+// The map is taken by POINTER on purpose: a map is a reference type, so
+// passing it by value would decode into a copy the caller never sees —
+// and the body would read as empty.
+func DecodeBody(e *core.RequestEvent, into *map[string]any) error {
+	if e == nil || e.Request == nil || e.Request.Body == nil {
+		return nil
+	}
+
+	if into == nil {
+		return errors.New("forum: no destination for the body")
+	}
+
+	decoder := json.NewDecoder(e.Request.Body)
+	if err := decoder.Decode(into); err != nil {
+		return errors.Wrap(err, "forum: the body could not be read")
+	}
+
+	return nil
 }
 
 // CanEditPost reports whether the caller may edit a post: the account

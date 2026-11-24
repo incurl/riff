@@ -1,0 +1,47 @@
+/* The vote controls on a post. */
+
+.Post-vote {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.Post-vote-score {
+  font-weight: bold;
+  min-width: 1.5rem;
+  text-align: center;
+}
+
+.Post-vote-button {
+  background: none;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  padding: 0.1rem 0.2rem;
+}
+
+.Post-vote-button:hover:not(:disabled) {
+  opacity: 0.7;
+}
+
+.Post-vote-button:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.Post-vote-button--up.is-voted {
+  color: #e74c3c;
+}
+
+.Post-vote-button--down.is-voted {
+  color: #3498db;
+}
+
+/* The rank badge next to an account's name. */
+
+.Rank-badge {
+  border-radius: 0.25rem;
+  color: #fff;
+  font-size: 0.75em;
+  padding: 0.1rem 0.35rem;
+}

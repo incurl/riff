@@ -106,6 +106,13 @@ var defaultPermissions = map[string][]string{
 		domain.PermissionReply,
 		domain.PermissionLikePost,
 		domain.PermissionSearchUsers,
+		// Voting is a participation power, so it belongs to the member
+		// group: upstream's default permissions grant `votePosts` to
+		// everybody who can post.
+		domain.PermissionVotePost,
+		// The leaderboard is readable by any member; it holds nothing
+		// private, only who has been active.
+		permissionViewRankingPage,
 	},
 	domain.GroupModeratorID: {
 		domain.PermissionViewForum,
@@ -127,8 +134,28 @@ var defaultPermissions = map[string][]string{
 		domain.PermissionLockDiscussion,
 		domain.PermissionStickyDiscussion,
 		domain.PermissionSuspendUser,
+		// The gamification powers: `fof/gamification` registers
+		// `votePosts` and `canSeeVotes`, and both are moderator-tier —
+		// a member may vote, but seeing WHO voted is a separate,
+		// stricter permission upstream keeps apart.
+		domain.PermissionVotePost,
+		// Seeing WHO voted is a stricter power than voting, so it stays
+		// with the moderators.
+		domain.PermissionSeeVoters,
+		// The leaderboard is a whole surface, and upstream gates it with
+		// its own permission (`fof.gamification.viewRankingPage`).
+		permissionViewRankingPage,
 	},
 }
+
+// permissionViewRankingPage gates the leaderboard.
+//
+// It is upstream's own name (`fof.gamification.viewRankingPage`), and it
+// is NOT in the domain package because it belongs to the gamification
+// extension rather than to the forum's core — but the permission service
+// resolves permissions by name, so the seed has to write it under the name
+// the handler asks for.
+const permissionViewRankingPage = "viewRankingPage"
 
 // seedPermissions writes the default permission rows.
 //
