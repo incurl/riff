@@ -5,6 +5,61 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## EVERY WRITE ROUTE NEEDS A POST TWIN, because the method is part of the ROUTE MATCH (2026-11-24)
+
+The frontend's settings page answered 404 for a preferences save:
+
+    POST https://…/forum/api/users/vr6qkjeyzo0q8zg 404 (Not Found)
+
+The body was `{"errors":[{"status":"404","code":"not_found",
+"detail":"That resource does not exist."}]}` — the API's own 404, so the
+request DID reach the forum; it matched no route.
+
+**THE FRONTEND NEVER SENDS A PATCH OR A DELETE.** The vendored
+`Application.request` (framework/core/js/src/common/Application.tsx:673,
+byte-identical to upstream's) rewrites every method other than GET and
+POST into a POST with the intended method in the
+`X-HTTP-Method-Override` header:
+
+    if (options.method && !['GET', 'POST'].includes(options.method)) {
+      const method = options.method;
+
+      extend(configurable, 'config', (_: unknown, xhr: XMLHttpRequest) => {
+        xhr.setRequestHeader('X-HTTP-Method-Override', method);
+      });
+
+      options.method = 'POST';
+    }
+
+Upstream backs that with a `FakeHttpMethods` middleware, which rewrites
+the request's method BEFORE routing.
+
+**A GO MIDDLEWARE CANNOT DO THE SAME.** PocketBase bakes the method
+into the ServeMux pattern (`tools/router/router.go`: `pattern = v.Method
++ " "`), so the method is part of the ROUTE MATCH, and Go's `http.ServeMux`
+decides it before any handler or middleware runs. A route registered only
+for PATCH is therefore UNREACHABLE from the frontend: the request matches
+no pattern at all.
+
+This port already had the answer for the routes it had noticed — the
+notification-preferences reset and the group reorder each carry a POST
+twin, and `EffectiveMethod` (`pb/flarum/api/method_override.go`) reads
+the header back. **SIX WRITE ROUTES DID NOT HAVE ONE**: the discussion
+update and delete, the post update and delete, the user update and the
+notification read. Every one of them was unreachable, so a discussion
+edit, a post edit, a post delete and a preferences save all answered
+404.
+
+Each now carries a POST twin:
+
+- the user update and the notification read resolve the effective method
+  and refuse a POST that names no override (405, not a silent write);
+- the discussion and the post share ONE POST pattern for the update and
+  the delete, because the frontend sends BOTH to the same URL — the
+  OVERRIDE, not the URL, tells them apart.
+
+The uploads plugin had already done this for its own delete route.
+
 ## An administrator is a MEMBER OF THE ADMIN GROUP, not a superuser (2026-11-24)
 
 Upstream derives the administrator flag from **group membership** and

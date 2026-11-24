@@ -39,6 +39,20 @@ func (s *Server) Mount(r *router.Router[*core.RequestEvent]) {
 	r.GET(api+"/discussions/{id}", s.showDiscussionHandler)
 	r.PATCH(api+"/discussions/{id}", s.updateDiscussionHandler)
 	r.DELETE(api+"/discussions/{id}", s.deleteDiscussionHandler)
+	// The POST twin, because the frontend does not send a PATCH or a
+	// DELETE: it turns every method other than GET and POST into a POST
+	// with an `X-HTTP-Method-Override` header (see the core's
+	// `Application.request`). The handler resolves the effective method
+	// itself and dispatches on it.
+	//
+	// Without the POST twin the request matches no route at all and
+	// answers 404, so the frontend reports "That resource does not
+	// exist" for an edit that is perfectly ordinary.
+	//
+	// The update and the delete share ONE POST pattern because the
+	// frontend sends both to the same path: they are told apart by the
+	// override header, not by the URL.
+	r.POST(api+"/discussions/{id}", s.discussionWriteHandler)
 
 	// --- posts ---------------------------------------------------------
 	r.GET(api+"/posts", s.listPostsHandler)
@@ -46,11 +60,21 @@ func (s *Server) Mount(r *router.Router[*core.RequestEvent]) {
 	r.GET(api+"/posts/{id}", s.showPostHandler)
 	r.PATCH(api+"/posts/{id}", s.updatePostHandler)
 	r.DELETE(api+"/posts/{id}", s.deletePostHandler)
+	// The POST twin, for the same `X-HTTP-Method-Override` reason as
+	// the discussions above.
+	r.POST(api+"/posts/{id}", s.postWriteHandler)
 
 	// --- users ---------------------------------------------------------
 	r.GET(api+"/users", s.listUsersHandler)
 	r.GET(api+"/users/{id}", s.showUserHandler)
 	r.PATCH(api+"/users/{id}", s.updateUserHandler)
+	// The POST twin, for the same `X-HTTP-Method-Override` reason. This
+	// is the route the settings page writes through: `User.savePreferences`
+	// calls `Model.save()`, which sends a PATCH — and the frontend
+	// rewrites it to a POST, so without this twin the preferences save
+	// answered 404 ("That resource does not exist") and the user's
+	// settings silently never persisted.
+	r.POST(api+"/users/{id}", s.updateUserHandler)
 	// The reset is registered for POST as well as DELETE, because the
 	// frontend does not send a DELETE: it turns every method other than
 	// GET and POST into a POST with an `X-HTTP-Method-Override` header
@@ -77,6 +101,8 @@ func (s *Server) Mount(r *router.Router[*core.RequestEvent]) {
 	r.GET(api+"/notifications", s.listNotificationsHandler)
 	r.POST(api+"/notifications/read", s.readAllNotificationsHandler)
 	r.PATCH(api+"/notifications/{id}", s.readNotificationHandler)
+	// The POST twin, for the same `X-HTTP-Method-Override` reason.
+	r.POST(api+"/notifications/{id}", s.readNotificationHandler)
 
 	// --- settings ------------------------------------------------------
 	// The settings surface is NOT a JSON:API resource: upstream's

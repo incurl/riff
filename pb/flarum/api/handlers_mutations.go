@@ -209,6 +209,46 @@ func relationshipID(relationships map[string]any, name string) string {
 	return ""
 }
 
+// discussionWriteHandler serves the POST twin of the discussion write
+// routes.
+//
+// The frontend does not send a PATCH or a DELETE: it turns every method
+// other than GET and POST into a POST with an `X-HTTP-Method-Override`
+// header (see the core's `Application.request`), and PocketBase's router
+// matches on the REAL method before any handler runs. So the POST route
+// is the only one such a request reaches, and the effective method has
+// to be resolved here.
+//
+// The update and the delete share ONE path, so the override header — not
+// the URL — is what tells them apart.
+func (s *Server) discussionWriteHandler(e *core.RequestEvent) error {
+	switch EffectiveMethod(e) {
+	case http.MethodDelete:
+		return s.deleteDiscussionHandler(e)
+	case http.MethodPatch:
+		return s.updateDiscussionHandler(e)
+	default:
+		return fail(e, errMethodNotAllowed())
+	}
+}
+
+// postWriteHandler serves the POST twin of the post write routes.
+//
+// It is the twin of [Server.discussionWriteHandler], and the reasoning is
+// the same: the frontend rewrites a PATCH or a DELETE into a POST with
+// an `X-HTTP-Method-Override` header, and the router matches on the
+// real method.
+func (s *Server) postWriteHandler(e *core.RequestEvent) error {
+	switch EffectiveMethod(e) {
+	case http.MethodDelete:
+		return s.deletePostHandler(e)
+	case http.MethodPatch:
+		return s.updatePostHandler(e)
+	default:
+		return fail(e, errMethodNotAllowed())
+	}
+}
+
 // updateDiscussionHandler serves PATCH /api/discussions/{id}.
 func (s *Server) updateDiscussionHandler(e *core.RequestEvent) error {
 	actor, err := s.requireAuth(e)
@@ -372,7 +412,26 @@ func (s *Server) deletePostHandler(e *core.RequestEvent) error {
 //
 // The forum writes only its own profile extras; the shared account's
 // reserved fields are never touched.
+//
+// It is also registered for POST, because the frontend does not send a
+// PATCH: `User.savePreferences` calls `Model.save()`, which sends a
+// PATCH, and the core's `Application.request` rewrites every method
+// other than GET and POST into a POST carrying an
+// `X-HTTP-Method-Override` header. PocketBase's router matches on the
+// REAL method before any handler runs, so without the POST twin the
+// request matched no route at all and answered 404 — which the frontend
+// reported as "That resource does not exist" for a settings save that
+// was perfectly ordinary.
+//
+// The override is what makes the POST a PATCH, so a POST that names no
+// method is refused.
 func (s *Server) updateUserHandler(e *core.RequestEvent) error {
+	if e.Request.Method == http.MethodPost {
+		if err := RequireMethod(e, http.MethodPatch); err != nil {
+			return fail(e, err)
+		}
+	}
+
 	actor, err := s.requireAuth(e)
 	if err != nil {
 		return fail(e, err)
@@ -437,7 +496,16 @@ func (s *Server) updateUserHandler(e *core.RequestEvent) error {
 }
 
 // readNotificationHandler serves PATCH /api/notifications/{id}.
+//
+// It is also registered for POST, for the same `X-HTTP-Method-Override`
+// reason as the user update below.
 func (s *Server) readNotificationHandler(e *core.RequestEvent) error {
+	if e.Request.Method == http.MethodPost {
+		if err := RequireMethod(e, http.MethodPatch); err != nil {
+			return fail(e, err)
+		}
+	}
+
 	actor, err := s.requireAuth(e)
 	if err != nil {
 		return fail(e, err)

@@ -198,3 +198,19 @@ func errUnauthenticated(detail string) *apiError {
 func errValidation(detail string) *apiError {
 	return newAPIError(http.StatusUnprocessableEntity, CodeValidationFailed, detail, nil)
 }
+
+// errMethodNotAllowed builds a method-not-allowed apiError.
+//
+// It is used by the POST twins of the write routes, where the request
+// carries no usable override header: the frontend's method rewrite is
+// what makes those routes reachable at all, so a POST that names no
+// method is a client that does not speak the protocol, and a 405 says
+// so where a 404 would only say "not here".
+//
+// The `Allow` header is set by [RequireMethod], which is the one place
+// that knows how the answer is rendered; this helper only builds the
+// error.
+func errMethodNotAllowed() *apiError {
+	return newAPIError(http.StatusMethodNotAllowed, CodeValidationFailed,
+		"The method is not allowed for this route.", nil)
+}
