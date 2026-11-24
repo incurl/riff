@@ -257,7 +257,7 @@ func (m *Module) bootPayload(e *core.RequestEvent, admin bool) (frontend.BootPay
 		AssetsRevision: m.assets.Revision(),
 	}
 
-	document, err := m.forumDocument()
+	document, err := m.forumDocument(e)
 	if err != nil {
 		return payload, err
 	}
@@ -548,71 +548,20 @@ func (m *Module) IsAdmin(e *core.RequestEvent) bool {
 
 // forumDocument builds the forum resource the SPA boots with.
 //
-// It is the same document the API's GET /api/ returns, so the SPA and
-// the API cannot drift apart.
-func (m *Module) forumDocument() (map[string]any, error) {
-	attributes := map[string]any{
-		"title":                   "Forum",
-		"description":             "",
-		"baseUrl":                 m.opts.BasePath,
-		"basePath":                m.opts.BasePath,
-		"baseOrigin":              "",
-		"apiUrl":                  m.opts.BasePath + "/api",
-		"debug":                   false,
-		"welcomeTitle":            "",
-		"welcomeMessage":          "",
-		"showLanguageSelector":    false,
-		"showThemeSelector":       false,
-		"showPostSource":          false,
-		"allowSignUp":             false,
-		"defaultRoute":            "/",
-		"canViewForum":            true,
-		"canStartDiscussion":      false,
-		"canSearchUsers":          false,
-		"canCreateAccessToken":    false,
-		"canModerateAccessTokens": false,
-		"canEditUserCredentials":  false,
-		"serviceWorker":           false,
-		"assetsBaseUrl":           m.opts.BasePath + "/assets",
-		"jsChunksBaseUrl":         m.opts.BasePath + "/assets/js",
-		"adminUrl":                m.opts.BasePath + "/admin",
-		"version":                 CoreVersion,
-	}
-
-	groups, err := m.repo.ListGroups()
-	if err != nil {
-		return nil, err
-	}
-	groupIDs := make([]string, 0, len(groups))
-	for _, group := range groups {
-		groupIDs = append(groupIDs, group.ID)
-	}
-
-	return map[string]any{
-		"type":       api.TypeForum,
-		"id":         "1",
-		"attributes": attributes,
-		"relationships": map[string]any{
-			"groups": map[string]any{
-				"data": identifiers(api.TypeGroup, groupIDs),
-			},
-			"actor": map[string]any{
-				"data": nil,
-			},
-		},
-	}, nil
-}
-
-// identifiers builds a list of JSON:API identifiers.
-func identifiers(resourceType string, ids []string) []any {
-	out := make([]any, 0, len(ids))
-	for _, id := range ids {
-		if id == "" {
-			continue
-		}
-		out = append(out, map[string]any{"type": resourceType, "id": id})
-	}
-	return out
+// It is the API server's document, unchanged: the same document the
+// API's GET /api/ returns, so the SPA and the API cannot drift apart.
+//
+// It is PER-CALLER, because the `can*` attributes are the caller's
+// permissions. Upstream computes them the same way
+// (`ForumResource.php`: `$context->getActor()->can('startDiscussion')`),
+// and the frontend's own affordances are built on them: the "New
+// Discussion" button is disabled when `canStartDiscussion` is false.
+//
+// The two copies used to be separate, and the boot payload's copy
+// hardcoded the flags to false — so the button was disabled for every
+// signed-in account even though the API reported the right answer.
+func (m *Module) forumDocument(e *core.RequestEvent) (api.Resource, error) {
+	return m.api.ForumDocument(e)
 }
 
 // loginHandler serves POST {basePath}/login.

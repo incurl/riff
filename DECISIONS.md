@@ -5,6 +5,45 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## THE FORUM DOCUMENT IS BUILT IN ONE PLACE, because two copies DRIFTED (2026-11-24)
+
+The "New Discussion" button was disabled for every signed-in account.
+
+The frontend's rule is upstream's, byte for byte
+(`framework/core/js/src/forum/components/IndexSidebar.tsx:30,44`):
+
+    const canStartDiscussion = app.forum.attribute('canStartDiscussion') || !app.session.user;
+    ...
+    disabled={!canStartDiscussion}
+
+so the button is disabled when the forum document says the caller may
+not start a discussion. Upstream computes that attribute from the
+ACTOR (`framework/core/src/Api/Resource/ForumResource.php:132`):
+
+    Schema\Boolean::make('canStartDiscussion')
+        ->get(fn ($model, Context $context) => $context->getActor()->can('startDiscussion')),
+
+**AND THE BOOT PAYLOAD'S COPY OF THE DOCUMENT HARDCODED THE FLAGS TO
+`false`.** The API's `GET /api/` computed them correctly — the flags
+were already `s.can(e, domain.PermissionStartDiscussion, …)` there — but
+the SPA never reads the API: it reads the forum document out of the
+BOOT PAYLOAD (`Application.boot`: `this.store.pushPayload({ data:
+this.data.resources })` then `this.store.getById('forums', '1')`).
+
+So the API's correct answer never reached the button, and the two copies
+of the same document disagreed.
+
+There is now ONE document: `api.Server.ForumDocument(e)` builds it, the
+API's `GET /api/` serves it, and the boot payload asks for it. The
+duplication is gone rather than patched, because a second copy is what
+let the two drift.
+
+The document is therefore PER-CALLER, and the `can*` attributes are the
+caller's permissions — `canViewForum`, `canStartDiscussion` and
+`canSearchUsers`. The remaining three (`canCreateAccessToken`,
+`canModerateAccessTokens`, `canEditUserCredentials`) stay `false`:
+riff has no permission for them and no UI that reads them.
+
 ## EVERY WRITE ROUTE NEEDS A POST TWIN, because the method is part of the ROUTE MATCH (2026-11-24)
 
 The frontend's settings page answered 404 for a preferences save:

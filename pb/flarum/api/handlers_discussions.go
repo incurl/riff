@@ -342,11 +342,39 @@ func (s *Server) listNotificationsHandler(e *core.RequestEvent) error {
 // It is the frontend's boot document: the forum's attributes, the groups
 // the caller may see, and the caller itself.
 func (s *Server) showForumHandler(e *core.RequestEvent) error {
+	document, err := s.ForumDocument(e)
+	if err != nil {
+		return fail(e, errInternal("The forum could not be loaded.", err))
+	}
+
+	return s.writeDocument(e, Document{Data: document})
+}
+
+// ForumDocument builds the forum resource.
+//
+// It is EXPORTED because the module needs it too: the boot payload
+// carries the forum document, and the SPA reads the forum's attributes
+// out of it (`app.forum.attribute('canStartDiscussion')`).
+//
+// The `can*` attributes are the CALLER's permissions, exactly as
+// upstream computes them (`ForumResource.php`:
+// `$context->getActor()->can('startDiscussion')`). They are what the
+// frontend's own affordances are built on: the "New Discussion" button
+// is disabled when `canStartDiscussion` is false
+// (`IndexSidebar.tsx`).
+//
+// The document is therefore PER-CALLER, and a caller that resolves to
+// nobody gets the guest's answer. It is one document, built in one
+// place: the boot payload and the API's `GET /api/` used to build it
+// separately, and the copies drifted — the boot payload's copy
+// hardcoded the flags to false, so the button was disabled for every
+// signed-in account even though the API reported the right answer.
+func (s *Server) ForumDocument(e *core.RequestEvent) (Resource, error) {
 	actor := s.actor(e)
 
 	groups, err := s.repo.ListGroups()
 	if err != nil {
-		return fail(e, errInternal("The forum could not be loaded.", err))
+		return Resource{}, err
 	}
 
 	actorResource := any(nil)
@@ -387,14 +415,12 @@ func (s *Server) showForumHandler(e *core.RequestEvent) error {
 		"actor":  {Data: actorResource},
 	}
 
-	return s.writeDocument(e, Document{
-		Data: Resource{
-			Type:          TypeForum,
-			ID:            "1",
-			Attributes:    attributes,
-			Relationships: relationships,
-		},
-	})
+	return Resource{
+		Type:          TypeForum,
+		ID:            "1",
+		Attributes:    attributes,
+		Relationships: relationships,
+	}, nil
 }
 
 // groupIDs returns the ids of a group list.
