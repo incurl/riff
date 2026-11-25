@@ -5,6 +5,63 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## A TAG FILTER IS A CLAUSE, NOT A POST-FILTER (2026-11-25)
+
+Three gaps left in the tags alignment. One of them turned out to be a query
+bug rather than a missing feature.
+
+**`filter[tag]` FILTERED THE PAGE, NOT THE QUERY.** The listing fetched
+`limit` discussions ordered by last activity and then dropped the ones
+without the tag IN MEMORY. With a page of 20 and a tag on 3 of 50
+discussions, a tag page showed the tag's discussions only when they happened
+to be among the 20 most recent — and `meta.page.total` counted every
+discussion, because the COUNT query never sees the page. The filter is now
+the same kind of subquery the space rule uses — `id IN (SELECT discussion
+FROM forum_discussion_tags WHERE tag IN (…))` — applied to the count query
+and the page query alike, so rows, `total` and the pagination offsets agree.
+`DiscussionIDsWithTag` (the in-memory helper) is gone with it.
+
+**THE CLAUSES WERE JOINED WITH `&&`, WHICH IS NOT SQL.** `CountRecords` and
+`RecordQuery` take dbx expressions and hand them to the driver as written;
+PocketBase's filter grammar (`&&`, `fexpr` field resolution) is only parsed
+by the `*ByFilter` helpers. So a listing with TWO clauses reached SQLite as
+`WHERE user = ? && state != ?` and answered **500** with `near "&": syntax
+error`. A single clause happened to be accidental valid SQL, which is why it
+survived: `filter[user]` (a user clause plus the always-present state
+clause) and `filter[q]` both 500'd, and a plain listing did not. The join is
+`AND`, and `TestForum_ACombinedDiscussionFilterDoesNotFail` pins it.
+
+**A HIDDEN TAG HIDES ITS DISCUSSIONS, FROM THE UNFILTERED PAGE ONLY.**
+`is_hidden` was stored, editable and served, and had no consumer — hiding a
+tag changed nothing a reader could see. Upstream's
+`HideHiddenTagsFromAllDiscussionsPage` drops those discussions and does
+nothing once any filter (or a full-text search) is in play. The guard is
+what keeps the tag's OWN page from going blank the moment an operator hides
+the tag, so it is expressed as "no filter was asked for", not as "exclude
+always".
+
+**THE TAG'S `defaultSort` IS APPLIED ON THE CLIENT.** The stored value is a
+URL key (`latest`), not an API sort (`-lastPostedAt`), and
+`DiscussionListState.sortMap()` is the only place that knows the mapping —
+a server-side default would be a second copy of it that drifts. The catch is
+the COLD LOAD: `/t/<slug>` mounts before the tag list arrives, so the first
+request would go out unsorted, the list would render in the forum's order
+while the sort control said the tag's, and nothing would re-request it. The
+plugin therefore holds the first page of a tag route until `loadTags()`
+resolves (`forum.js::addTagFilter`). That is one extra small request on a
+cold navigation, and the only arrangement in which the control and the list
+cannot disagree. A reader's `?sort=` always wins over the tag's default.
+
+**THE PICKER OFFERS ONLY WHAT THE SERVER ACCEPTS.** Offering a forbidden tag
+is a dead affordance: the author chooses it, submits, and the save comes
+back refused. That became real when a restricted tag started asking the
+SCOPED permission (previous entry), so `js/utils/selectableTags` filters on
+`canStartDiscussion()` for a new discussion and on `canAddToDiscussion()`
+_OR_ the discussion's current tags for an existing one — a tag that may no
+longer be ADDED must still be REMOVABLE, or the author is stuck with it. The
+rule is a pure function with its own unit test, the same arrangement as the
+admin scope.
+
 ## STATISTICS: THE PRESENTATION HALF, AND WHY THE KEYS ARE UNIX SECONDS (2026-11-25)
 
 The previous entry recorded that `GET /api/statistics` was reachable while

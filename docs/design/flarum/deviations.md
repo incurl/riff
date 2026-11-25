@@ -569,23 +569,30 @@ filtering, and still open for authoring.
 - `extendRealtime` — there is no realtime extension to hook.
 - `addTagsHomePageOption` / `addTagSlugDriverLabels` — no "Tags" home-page option
   and no slug driver labels.
-- Upstream's `getSelectableTags` rule in the picker — it shows the tags whose
-  `canStartDiscussion()` / `canAddToDiscussion()` is true, so a tag the caller
-  may not use is never offered. The port's `TagSelectionModal` lists every tag,
-  so a restricted tag the caller may not use is OFFERED and the server then
-  refuses it.
-- A tag's `defaultSort`. The admin `TagsPage` can set it and
-  `DiscussionListState.sortMap()` exists, but nothing reads `tag.defaultSort()`
-  when a tag page opens, so the forum's own sort applies instead.
-- `isHidden`. The flag is stored, editable in admin and served as an attribute,
-  but no forum code reads it: upstream's `HideHiddenTagsFromAllDiscussionsPage`
-  drops discussions in hidden tags from the unfiltered discussion list, and the
-  port does not.
 - `filter[tag]` beyond one value. Upstream's `TagFilter` accepts comma-separated
   slug groups (OR), the `untagged` pseudo-slug and negation; the port resolves a
   single slug-or-id.
 - `TagSearcher` — upstream makes tags (and posts, via `PostTagFilter`) findable
   from the global search.
+
+**Now built** (they were listed here as gaps, and are recorded so the list stays
+honest about what a reader can expect to find in the code):
+
+- Upstream's `getSelectableTags` rule in the picker (`js/utils/selectableTags.js`):
+  a new discussion offers only the tags whose `canStartDiscussion()` is true, and
+  an existing one offers `canAddToDiscussion()` plus the tags it already carries
+  — so a restricted tag the caller may not use is not offered. This is
+  load-bearing rather than cosmetic, because a restricted tag's scoped
+  permission is really enforced server-side.
+- A tag's `defaultSort` (`helpers.js::tagDefaultSort`, wired in `addTagFilter`).
+  It stays CLIENT-side because the stored value is a URL key and
+  `DiscussionListState.sortMap()` is the only copy of that mapping; the tag
+  page's first request waits for the tag list, because `/t/<slug>` mounts before
+  `loadTags()` resolves.
+- `isHidden`, via upstream's `HideHiddenTagsFromAllDiscussionsPage`: the
+  unfiltered discussion list drops every discussion carrying a hidden tag, and
+  any filter turns the exclusion off — which is what keeps a hidden tag's own
+  page from going blank.
 
 `addTagsPermissionScope` IS ported: a restricted tag gets its own column in the
 admin permission grid, and the grant is stored with the tag's id as its scope.
