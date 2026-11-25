@@ -5,6 +5,70 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## LIVE REFRESH IS A POLL, NOT A WEBSOCKET (2026-11-25)
+
+The forum had no realtime at all: a new reply appeared only on a manual reload.
+Upstream's answer is `flarum/realtime` — a separate **websocket daemon** (a
+self-hosted Pusher), a **queue**, public *and* private channels, and a client
+extender (`RealtimeExtend().onDiscussionStreamEvent(…)`) whose events are small
+"something changed" signals that make the client refetch. This port runs one
+binary under supervisord, so the daemon-and-queue shape is not on the table;
+pushing on PocketBase's own realtime is possible but is a different design (see
+below). This entry records the deliberately smaller first step.
+
+**POLLING IS THE SMALLER STEP AND THE REVERSIBLE ONE.** While a page is
+visible it revalidates every 30 s, and it revalidates the moment a
+backgrounded tab comes back — which is the case that actually matters, because a
+reader returning to an idle tab is exactly who is staring at stale posts. One
+registry (`core/src/forum/utils/liveRefresh.ts`) owns ONE interval and ONE
+`visibilitychange` listener for the whole application: a timer per page would
+drift apart and fire in bursts, and two pages are never visible at once anyway.
+
+**REVALIDATE, DO NOT RELOAD.** `DiscussionListState.revalidate()` re-reads page
+1 and rebuilds `pages` in place, so scroll position, the open page number and
+the active filter (a tag page's tag, a search) all survive. The core already
+tuned this path for realtime (`extraDiscussions` is reconciled after a
+revalidation precisely so a returning reader does not see a duplicate), which is
+what makes it the right entry point here as well.
+
+**THE DISCUSSION PAGE'S ORDER IS LOAD-BEARING.** `catchUp()` captures
+`stream.viewingEnd()` BEFORE refetching the discussion: that predicate tolerates
+at most one post of drift, so after the discussion's post ids have grown it
+would answer "no" forever and the stream would never catch up. With the answer
+captured first, `syncEnd()` fetches only the posts the window is missing —
+`loadRange` slices the ids it already holds and asks for the rest **by id** — so
+ten new replies cost one request, not a discussion reload. A reader scrolled up
+in the middle of a long discussion is left alone; moving their window would lose
+their place.
+
+**A REFRESHER LIVES AS LONG AS ITS PAGE.** Registration happens in `oncreate`
+and the unsubscribe runs in `onremove`, and the last one out clears the
+interval — otherwise a page that has been navigated away from keeps polling
+behind the reader's back. A refresher that throws is swallowed and the rest still
+run: one broken page must not cost every other page its refresh. Nothing ticks
+while `document.hidden`.
+
+**THE NOTIFICATION BADGE IS NOT POLLED, ON PURPOSE.** `newNotificationCount` is
+a client-side counter — `NotificationListState.load()` zeroes it when the list is
+opened — so re-reading the user record would resurrect a badge the reader has
+already cleared. That needs a pushed `notificationCreated`, which is what the
+next step is for.
+
+**WHY NOT POCKETBASE'S REALTIME PROTOCOL.** Two reasons, both structural rather
+than stylistic. (1) PocketBase streams the **stored record**, while this SPA
+consumes JSON:API resources through `store.pushPayload` — rendered `contentHtml`,
+`avatarUrl`, `canReply`/`canEdit`, `contentType`. The forum's per-caller
+decisions live in the serializer, not in the collection rules, so a raw record is
+the wrong payload and the rules are the wrong gate: `forum_discussions`,
+`forum_posts` and `forum_likes` are all readable by everyone at the rule level.
+(2) PocketBase's realtime route lives at the **listener root**, and the deployed
+caddy layout proxies only `/memos`, `/wiki` and `/forum` — the same trap that
+keeps `/api/files` off the internet. If a pushed transport is ever wanted, it
+should reuse `app.SubscriptionsBroker()` behind the forum's OWN route (as
+`pb/hooks/realtime.go` + `pb/api/spa_sse.go` already do for the memos SPA), emit
+small Flarum-shaped "changed" events, and authorize in the handler — not adopt
+`/api/realtime`'s wire format.
+
 ## A LIKE IS A ROUTE HERE, AND THE SPA COULD ONLY EVER LIKE (2026-11-25)
 
 The likes plugin was audited against upstream `flarum/likes` 2.x and two of

@@ -570,7 +570,14 @@ filtering, and still open for authoring.
 
 - `app.tagList` (`TagListState`) — a shared, sorted, indexed tag list. The port
   reads the store directly, which is equivalent for the sizes involved.
-- `extendRealtime` — there is no realtime extension to hook.
+- `extendRealtime` — there is no realtime extension to hook. Upstream's
+  `flarum/realtime` is a separate websocket daemon plus a queue; this port runs
+  one binary. What it has instead is **live refresh**: while a page is visible it
+  revalidates on an interval, and it revalidates when a backgrounded tab comes
+  back (`core/src/forum/utils/liveRefresh.ts`, used by `IndexPage` and
+  `DiscussionPage`). It is not a transport — nothing is pushed, and the
+  notification badge deliberately stays stale until the list is opened, because
+  `newNotificationCount` is a client-side counter that a poll would resurrect.
 - `addTagsHomePageOption` / `addTagSlugDriverLabels` — no "Tags" home-page option
   and no slug driver labels.
 
