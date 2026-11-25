@@ -8,10 +8,15 @@
 #   1. The SPA is mounted at the ROOT. The Vite build under web/ emits
 #      root-relative asset URLs (/assets/index-*.js, /favicon.ico) and the
 #      Connect client posts to window.location.origin, so serving the app
-#      under a /community/* prefix answers its own asset requests with the
+#      under a /memos/* prefix answers its own asset requests with the
 #      index.html fallback and the app never boots. riff therefore owns the
 #      whole hostname, /_/ (admin UI), /api/*, /mcp, /file/* and /api/files/*
 #      included.
+#
+#      /memos/* and /community/* are therefore 308s that drop the prefix,
+#      not proxies: they exist so a URL from one of the two prefixed
+#      layouts (Caddyfile.fly.community and the old VPS/compose one) still
+#      lands on the right page.
 #   2. No TLS site block. An edge proxy (Fly's) already terminated HTTPS and
 #      forwards plain HTTP to this listener, and Caddy's automatic HTTPS would
 #      answer the edge's own health checks with a 301 they cannot follow.
@@ -46,12 +51,30 @@
 :80 {
 	encode zstd gzip
 
-	# Back-compat alias for the /community/… bookmarks the previous
-	# VPS/compose layout handed out. handle_path strips the prefix before
-	# proxying, so /community/api/health reaches riff's /api/health and
-	# /community/assets/x.js reaches the SPA bundle.
+	# Back-compat aliases for the prefixed URLs the other two layouts
+	# hand out: /memos/… (this layout's SPA prefix elsewhere) and
+	# /community/… (the prefix before that).
+	#
+	# In THIS layout riff owns the whole hostname and the SPA is built at
+	# the root (`base: "/"`), so both are a 308 that simply DROPS the
+	# prefix: /memos/auth lands on /auth, which is the SPA's real route.
+	# Proxying them instead would serve a shell whose asset URLs are
+	# root-relative, and the app would boot against the wrong base.
+	#
+	# {uri} carries the query string, which {path} would drop.
+	handle /memos {
+		redir * / 308
+	}
+	# handle_path strips the prefix BEFORE the block runs, so {uri} is
+	# already the remainder: /memos/auth -> /auth.
+	handle_path /memos/* {
+		redir * {uri} 308
+	}
+	handle /community {
+		redir * / 308
+	}
 	handle_path /community/* {
-		import proxy
+		redir * {uri} 308
 	}
 
 	# Everything else: the SPA, the PocketBase REST + Connect API, the
@@ -62,7 +85,7 @@
 	# need: riff mounts each module at its prefix on its own listener, and
 	# both SPAs build ABSOLUTE /wiki/... and /forum/... URLs from the base
 	# path the server hands them. Stripping a prefix here would break them,
-	# so only /community/* is ever rewritten (the back-compat alias above).
+	# so only the two back-compat aliases above are ever rewritten.
 	handle {
 		import proxy
 	}

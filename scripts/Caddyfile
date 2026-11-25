@@ -1,13 +1,20 @@
 # Caddy configuration for the riff deploy image.
 #
 # Routing:
-#   https://${SITE_DOMAIN}/community/...  ->  riff on localhost:8090
+#   https://${SITE_DOMAIN}/memos/...       ->  the Memos SPA, on riff at
+#                                             localhost:8090 (the prefix
+#                                             is STRIPPED: riff serves
+#                                             the SPA at its own root)
+#   https://${SITE_DOMAIN}/community/...   ->  308 to /memos/... (the
+#                                             prefix this layout used to
+#                                             serve, kept as a redirect
+#                                             so old bookmarks land)
 #   https://${SITE_DOMAIN}/wiki/...        ->  the wiki module, also on
 #                                             riff (a sibling of
-#                                             /community/, not a child)
+#                                             /memos/, not a child)
 #   https://${SITE_DOMAIN}/forum/...       ->  the forum module, also on
 #                                             riff (a sibling of
-#                                             /community/, not a child)
+#                                             /memos/, not a child)
 #   https://${SITE_DOMAIN}/youtube/...    ->  the user-facing download
 #                                             tree at /youtube/
 #   https://${SITE_DOMAIN}/...            ->  static site at /var/www/site/
@@ -34,16 +41,30 @@
 {$SITE_DOMAIN:example.com}, *.{$SITE_DOMAIN:example.com} {
 	encode zstd gzip
 
-	# /community/* is the riff SPA + Connect/gRPC surface. PocketBase's
-	# built-in routes (/, /_/, /api/*) all live under /community/ from
-	# the public host's perspective, so caddy just needs a single
-	# path-prefix matcher. We do NOT rewrite the path: riff's router
-	# already serves / and /_/ from the embedded SPA.
-	@community {
-		path /community
-		path /community/*
+	# /memos/* is the Memos SPA + Connect/gRPC surface. PocketBase's
+	# built-in routes (/, /_/, /api/*, /mcp) all live at the ROOT of
+	# riff's listener, so the prefix has to come OFF before the request
+	# reaches it — that is what `handle_path` does.
+	#
+	# The strip is load-bearing, not cosmetic. The SPA is built with
+	# `VITE_BASE_PATH=/memos/ pnpm release`, so it emits
+	# /memos/assets/index-*.js and posts Connect calls to
+	# `${origin}/memos/<service>`. Without the strip, riff would answer
+	# /memos/assets/index-*.js with its own SPA fallback — index.html
+	# served as JavaScript — and the app would never boot.
+	#
+	# `/memos` with no trailing slash gets a 308 of its own: `handle_path
+	# /memos/*` does not match the bare prefix, and serving the SPA from
+	# a parent-only URL makes its relative URL resolution look for
+	# /assets/... at the host root.
+	@memosBare {
+		path /memos
 	}
-	handle @community {
+	handle @memosBare {
+		redir * /memos/ 308
+	}
+
+	handle_path /memos/* {
 		reverse_proxy localhost:8090 {
 			# PocketBase uses X-Forwarded-For for the client IP; pass it
 			# through so the rate limiter and the SSRF guards see the
@@ -53,8 +74,27 @@
 		}
 	}
 
-	# /wiki/* is the wiki module, a SIBLING of /community/ — the public
-	# URL is https://<host>/wiki/, not https://<host>/community/wiki/.
+	# /community/* was this layout's prefix before the SPA moved to
+	# /memos/. It is a 308 rather than a second proxy: the SPA is built
+	# for exactly one base path, so a request under /community/ would
+	# load a shell whose asset URLs point at /memos/ — the redirect is
+	# what makes an old bookmark land somewhere coherent.
+	#
+	# {uri} carries the query string (e.g. /community/auth?redirect=%2F),
+	# which {path} would drop.
+	handle /community {
+		redir * /memos/ 308
+	}
+	# handle_path strips /community BEFORE the block runs, so {uri} is
+	# already the remainder: /community/auth -> /memos/auth. A plain
+	# `handle` would leave the prefix in {uri} and produce
+	# /memos/community/auth.
+	handle_path /community/* {
+		redir * /memos{uri} 308
+	}
+
+	# /wiki/* is the wiki module, a SIBLING of /memos/ — the public
+	# URL is https://<host>/wiki/, not https://<host>/memos/wiki/.
 	#
 	# The path is NOT rewritten: riff mounts the wiki at /wiki inside
 	# its own listener (pb/leafwiki's default prefix), so the prefix
@@ -72,8 +112,8 @@
 		}
 	}
 
-	# /forum/* is the forum module, a SIBLING of /community/ — the public
-	# URL is https://<host>/forum/, not https://<host>/community/forum/.
+	# /forum/* is the forum module, a SIBLING of /memos/ — the public
+	# URL is https://<host>/forum/, not https://<host>/memos/forum/.
 	#
 	# The path is NOT rewritten: riff mounts the forum at /forum on its
 	# own listener (RIFF_FORUM_BASE_PATH), and the SPA builds ABSOLUTE

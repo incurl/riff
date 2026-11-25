@@ -33,7 +33,7 @@ export function redirectOnAuthFailure(
   },
 ): void {
   // `window.location.pathname` carries the reverse-proxy mount prefix (e.g.
-  // "/community/setting") while the React Router `basename` strips that same
+  // "/memos/setting") while the React Router `basename` strips that same
   // prefix from `useLocation().pathname`. Without stripping, the auth-page
   // check below would never match a basename-mounted deployment, and the
   // encoded `redirect` target would be passed straight back to `navigate()`
@@ -58,7 +58,7 @@ export function redirectOnAuthFailure(
   // consult React Router. The destination must therefore be a full browser URL
   // — i.e. the router-level `/auth?…` produced by `buildAuthRoute` must be
   // prefixed with the basename so a sub-path deployment (Caddyfile.fly.community
-  // layout with `VITE_BASE_PATH=/community/`) lands on the SPA's auth page and
+  // layout with `VITE_BASE_PATH=/memos/`) lands on the SPA's auth page and
   // not on the static site's `file_server`. `withBasePath` is a no-op for
   // root-mounted builds.
   clearAccessToken();

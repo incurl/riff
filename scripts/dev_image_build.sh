@@ -22,7 +22,7 @@
 #   1. `server/frontend/dist/index.html` exists. The Dockerfile's
 #      `//go:embed all:dist` directive in server/frontend/embed.go fails at
 #      `go build` time without it. Build the SPA first with
-#      `cd web && VITE_BASE_PATH=/community/ pnpm release`
+#      `cd web && VITE_BASE_PATH=/memos/ pnpm release`
 #      (or `pnpm release` for the root-mounted layout).
 #   2. `pb/flarum/frontend/ui/dist/{forum,admin}.{js,css}` and the locale
 #      bundles exist. The forum's
@@ -147,7 +147,7 @@ The Dockerfile bakes server/frontend/dist into the riff binary via
 without it. Build the SPA first:
 
     cd web && pnpm release                  # root-mounted layout
-    cd web && VITE_BASE_PATH=/community/ pnpm release   # caddy /community/ sub-path
+    cd web && VITE_BASE_PATH=/memos/ pnpm release   # caddy /memos/ sub-path
 
 Then re-run this script.
 EOF

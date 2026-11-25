@@ -1,14 +1,14 @@
 # Caddy configuration for the riff image behind a TLS-terminating edge
 # proxy (Fly.io) when the host serves TWO things: the baked-in static site
-# at the ROOT, and the riff SPA + Connect/gRPC surface under /community/.
+# at the ROOT, and the riff SPA + Connect/gRPC surface under /memos/.
 #
 # This is the inverse of scripts/Caddyfile.fly, which mounts riff at the
-# root and treats /community/* as a back-compat alias. That layout
+# root and treats /memos/* as a back-compat alias. That layout
 # assumes the operator wants riff to own the hostname; this one assumes
 # the static site is the primary content and riff is one of several
 # sub-apps. The two files share a common ancestor in the ACME variant
 # (scripts/Caddyfile), where the host matcher picks the public DNS name
-# and /community/* is a normal path-prefix reverse-proxy.
+# and /memos/* is a normal path-prefix reverse-proxy.
 #
 # Why a third file instead of inverting the existing one:
 #   * scripts/Caddyfile.fly is documented in three places (its own header,
@@ -27,13 +27,19 @@
 #                                                the static site; the
 #                                                operator drops files in
 #                                                it to publish downloads)
-#   https://<host>/community/*              ->  riff on 127.0.0.1:8090
-#                                                (prefix is stripped by
-#                                                handle_path so riff sees
-#                                                its normal paths)
+#   https://<host>/memos/*                  ->  the Memos SPA + Connect
+#                                                surface, on riff at
+#                                                127.0.0.1:8090 (prefix
+#                                                stripped by handle_path
+#                                                so riff sees its normal
+#                                                paths)
+#   https://<host>/community/*              ->  308 to /memos/* (the
+#                                                prefix this layout used
+#                                                to serve, kept so old
+#                                                bookmarks land)
 #   https://<host>/wiki/*                  ->  the wiki module, ALSO on
 #                                                riff, but at the SAME
-#                                                level as /community/ (a
+#                                                level as /memos/ (a
 #                                                sibling, not a child).
 #                                                The path is NOT rewritten:
 #                                                riff mounts the wiki at
@@ -41,17 +47,17 @@
 #                                                prefix must reach it.
 #   https://<host>/forum/*                 ->  the forum module, ALSO on
 #                                                riff, a sibling of
-#                                                /community/ and /wiki/.
+#                                                /memos/ and /wiki/.
 #                                                The path is NOT rewritten,
 #                                                for the same reason: riff
 #                                                mounts the forum at /forum
 #                                                internally and the SPA
 #                                                builds absolute /forum/...
 #                                                URLs.
-#   https://<host>/community (no slash)     ->  308 redirect to /community/
+#   https://<host>/memos (no slash)         ->  308 redirect to /memos/
 #                                                so the SPA never boots
 #                                                against a parent-only URL
-#   https://<host>/<spa-path>               ->  308 to /community/<spa-path>
+#   https://<host>/<spa-path>               ->  308 to /memos/<spa-path>
 #                                                so a root-prefixed SPA URL
 #                                                (e.g. /auth, /u/peter)
 #                                                doesn't 404 against the
@@ -61,7 +67,7 @@
 #                                                placeholder, so a URL
 #                                                like /auth?redirect=%2F
 #                                                lands as
-#                                                /community/auth?redirect=%2F
+#                                                /memos/auth?redirect=%2F
 #                                                and the SPA picks up the
 #                                                intent. {path} would lose
 #                                                the query string, which is
@@ -73,14 +79,16 @@
 #                                                static site still serves
 #                                                as itself, not as a
 #                                                SPA redirect) and the
-#                                                /community/* tree
+#                                                /memos/* tree
 #                                                (covered by handle_path
 #                                                below, not by this block).
 #   anything else (e.g. a typo)             ->  404 (file_server misses)
 #
-# The riff SPA is built with VITE_BASE_PATH=/community/ pnpm release so
-# the emitted asset URLs and the connect-web baseUrl resolve under
-# /community/ (see web/vite.config.mts and web/src/connect.ts). The
+# The riff SPA is built with VITE_BASE_PATH=/memos/ pnpm release so the
+# emitted asset URLs and the connect-web baseUrl resolve under /memos/
+# (see web/vite.config.mts and web/src/connect.ts). `/community/` is a
+# 308 redirect to it: the SPA is built for exactly ONE base path, so a
+# second prefix cannot serve the same bundle. The
 # static site is whatever the ravine build context contains - today
 # the Jekyll _site/ tree at /home/peter/CLionProjects/ravine.1une.cc.
 #
@@ -100,15 +108,18 @@
 	encode zstd gzip
 
 	# Caddy evaluates handle blocks in declaration order; the first
-	# matcher that matches wins. We declare five, in this order:
-	#   1. exact /community      -> 308 to /community/, so the SPA's
+	# matcher that matches wins. We declare seven, in this order:
+	#   1. exact /memos         -> 308 to /memos/, so the SPA's
 	#                               relative URL resolution finds
-	#                               /community/assets/... instead of
+	#                               /memos/assets/... instead of
 	#                               /assets/... (which would hit the
 	#                               static site).
-	#   2. /community/*          -> reverse_proxy to riff (prefix
+	#   2. /memos/*             -> reverse_proxy to riff (prefix
 	#                               stripped by handle_path).
-	#   3. SPA-only paths        -> 308 to /community/<path>, so a
+	#   2a. /community, /community/* -> 308 to /memos/... (the
+	#                               prefix this layout used to
+	#                               serve).
+	#   3. SPA-only paths        -> 308 to /memos/<path>, so a
 	#                               root-prefixed SPA URL doesn't 404
 	#                               against the static site's
 	#                               file_server. Excluded are paths
@@ -124,21 +135,46 @@
 	# only when the previous four blocks do not match. Putting
 	# `redir` outside any `handle` block would be evaluated AFTER
 	# the catch-all and never see the request, because file_server
-	# would already have served a 404 for /community (no trailing
+	# would already have served a 404 for /memos (no trailing
 	# slash, no matching file in /var/www/site).
 
-	# 1. /community (no trailing slash) -> 308 to /community/.
-	handle /community {
-		redir * /community/ 308
+	# 1. /memos (no trailing slash) -> 308 to /memos/, so the SPA's
+	# relative URL resolution finds /memos/assets/... instead of
+	# /assets/... (which would hit the static site).
+	handle /memos {
+		redir * /memos/ 308
 	}
 
-	# 2. /community/* (and /community/ with the handle_path glob
-	# expansion Caddy applies): reverse_proxy to riff. handle_path
-	# strips the /community prefix before forwarding, so the requests
-	# riff sees are its normal /, /_/, /api/health, /mcp,
+	# 2. /memos/*: the Memos SPA + Connect/gRPC surface.
+	# handle_path strips the /memos prefix before forwarding, so the
+	# requests riff sees are its normal /, /_/, /api/health, /mcp,
 	# /memos.api.v1.*, etc.
-	handle_path /community/* {
+	#
+	# The strip is load-bearing: the SPA is built with
+	# `VITE_BASE_PATH=/memos/ pnpm release`, so it emits
+	# /memos/assets/index-*.js. Without the strip riff would answer
+	# that with its own SPA fallback — index.html served as
+	# JavaScript — and the app would never boot.
+	handle_path /memos/* {
 		import proxy
+	}
+
+	# 2a. /community: this layout's prefix before the SPA moved to
+	# /memos/. It is a 308 rather than a second proxy: the SPA is
+	# built for exactly one base path, so a request under /community/
+	# would load a shell whose asset URLs point at /memos/.
+	#
+	# {uri} carries the query string (e.g.
+	# /community/auth?redirect=%2F), which {path} would drop.
+	handle /community {
+		redir * /memos/ 308
+	}
+	# handle_path strips /community BEFORE the block runs, so {uri} is
+	# already the remainder: /community/auth -> /memos/auth. A plain
+	# `handle` would leave the prefix in {uri} and produce
+	# /memos/community/auth, which is the bug this form exists to avoid.
+	handle_path /community/* {
+		redir * /memos{uri} 308
 	}
 
 	# 2b. /wiki/*: the wiki module, mounted by riff at /wiki INSIDE the
@@ -148,9 +184,9 @@
 	# instead of /wiki/api/... (every wiki route is under /wiki:
 	# /wiki/api/tree, /wiki/api/pages, /wiki/static/…, /wiki/assets/…).
 	#
-	# This is what makes /wiki a SIBLING of /community rather than a
+	# This is what makes /wiki a SIBLING of /memos rather than a
 	# child: the public URL is https://<host>/wiki/, not
-	# https://<host>/community/wiki/. The wiki's SPA reads its mount
+	# https://<host>/memos/wiki/. The wiki's SPA reads its mount
 	# prefix from the base-path meta tag the server renders (pb/leafwiki
 	# substitutes {{__BASE_PATH__}} with the prefix it is mounted at),
 	# so it builds /wiki/api/... calls and /wiki/static/... asset URLs
@@ -163,7 +199,7 @@
 	}
 
 	# 2c. /forum/*: the forum module, mounted by riff at /forum INSIDE the
-	# listener — a SIBLING of /community, not a child of it, so the public
+	# listener — a SIBLING of /memos, not a child of it, so the public
 	# URL is https://<host>/forum/.
 	#
 	# Like /wiki this uses `handle`, NOT `handle_path`: the forum SPA
@@ -181,9 +217,9 @@
 		import proxy
 	}
 
-	# 3. SPA-only paths: redirect to /community/<path>. The named
+	# 3. SPA-only paths: redirect to /memos/<path>. The named
 	# matcher @spa excludes anything that already has a more specific
-	# handler above (/community, /community/*) and the static site's
+	# handler above (/memos, /memos/*) and the static site's
 	# top-level paths (so a future /blog under the static site still
 	# serves as itself).
 	#
@@ -191,37 +227,37 @@
 	# directories in /var/www/site/ as of the last build of the
 	# ravine Jekyll tree; if the static site adds a new top-level
 	# page (e.g. /blog, /changelog), add it here or it will be
-	# silently redirected to /community/blog and the SPA will 404
+	# silently redirected to /memos/blog and the SPA will 404
 	# on it. /assets is also excluded (favicon, CSS, JS for the
 	# static site). / and /index.html are excluded so the homepage
 	# of the static site still resolves.
 	#
 	# Note: the bare path `/` MUST be in the exclusion list. Without
-	# it, GET / falls into @spa and gets 308'd to /community/, which
+	# it, GET / falls into @spa and gets 308'd to /memos/, which
 	# sends the user to the SPA when they wanted the static site
 	# homepage. /index.html was already excluded; the prior version
 	# of this file listed `/` in this comment but not in the matcher,
 	# which is how the regression slipped in. Keep the two in sync.
 	#
 	# Caddy's redir {uri} placeholder preserves the query string,
-	# so /auth?redirect=%2F becomes /community/auth?redirect=%2F.
+	# so /auth?redirect=%2F becomes /memos/auth?redirect=%2F.
 	#
 	# /wiki and /wiki/* are also excluded. The wiki's own handle blocks
 	# above already catch them (Caddy evaluates handle blocks in
 	# declaration order and the first match wins), so this is
 	# belt-and-braces rather than the thing that makes it work — but if
 	# the wiki blocks are ever moved below this one, the exclusion is
-	# what keeps /wiki from being 308'd to /community/wiki.
+	# what keeps /wiki from being 308'd to /memos/wiki.
 	#
 	# /forum and /forum/* are excluded for the same reason: they are a
 	# sibling module with their own handle blocks above, and a 308 to
-	# /community/forum would both lose the prefix the SPA needs and land
+	# /memos/forum would both lose the prefix the SPA needs and land
 	# on the wrong app.
 	@spa {
-		not path / /community /community/* /wiki /wiki/* /forum /forum/* /assets /assets/* /docs /docs/* /download /download/* /firmware /firmware/* /hardware /hardware/* /reader /reader/* /workflow /workflow/* /youtube /youtube/* /favicon.svg /CNAME /index.html
+		not path / /memos /memos/* /community /community/* /wiki /wiki/* /forum /forum/* /assets /assets/* /docs /docs/* /download /download/* /firmware /firmware/* /hardware /hardware/* /reader /reader/* /workflow /workflow/* /youtube /youtube/* /favicon.svg /CNAME /index.html
 	}
 	handle @spa {
-		redir * /community{uri} 308
+		redir * /memos{uri} 308
 	}
 
 	# 4. /youtube/*: the user-facing download tree. A separate

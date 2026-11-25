@@ -52,9 +52,9 @@
 #                                            the baked-in static site
 #                                            serves at the root and
 #                                            riff is mounted under
-#                                            /community/. The SPA is
+#                                            /memos/. The SPA is
 #                                            built with
-#                                            VITE_BASE_PATH=/community/
+#                                            VITE_BASE_PATH=/memos/
 #                                            so the prefix lines up.
 #
 # Neither variant terminates TLS; Fly's edge does, hence force_https below.
@@ -101,17 +101,17 @@ swap_size_mb = 512
   # Which Caddyfile the caddy child loads. scripts/entrypoint-supervisord.sh
   # exports it before exec'ing supervisord. Two edge-proxy variants ship:
   #
-  #   * Caddyfile.fly             riff SPA at the root, /community/* alias
+  #   * Caddyfile.fly             riff SPA at the root, /memos/* alias
   #                               (the previous layout)
   #   * Caddyfile.fly.community   static site at the root, riff at
-  #                               /community/ (the layout this env var
+  #                               /memos/ (the layout this env var
   #                               selects)
   #
   # The caddy child is started with an explicit `--adapter caddyfile`
   # (scripts/supervisord.conf), which is what makes a non-`Caddyfile` file
   # name usable at all: caddy infers the adapter from the base name and
   # otherwise exits with "ambiguous config file format". The riff SPA
-  # under /community/ is built with VITE_BASE_PATH=/community/ pnpm
+  # under /memos/ is built with VITE_BASE_PATH=/memos/ pnpm
   # release (see web/vite.config.mts) so its asset URLs and the
   # connect-web baseUrl line up with the prefix the caddy layer strips.
   CADDYFILE = "Caddyfile.fly.community"
@@ -179,8 +179,8 @@ swap_size_mb = 512
 
   # PocketBase's own health endpoint, reached through caddy. With
   # CADDYFILE=Caddyfile.fly.community, the riff listener is reverse-proxied
-  # under /community/*; the prefix is stripped before forwarding, so
-  # /community/api/health hits riff's 127.0.0.1:8090/api/health and returns
+  # under /memos/*; the prefix is stripped before forwarding, so
+  # /memos/api/health hits riff's 127.0.0.1:8090/api/health and returns
   # {"message":"API is healthy.","code":200,"data":{}}. The root /api/health
   # would be served by caddy's file_server against the static site (404) and
   # the check would mark every machine critical, which Fly's edge proxy
@@ -191,7 +191,7 @@ swap_size_mb = 512
     timeout = "5s"
     grace_period = "30s"
     method = "GET"
-    path = "/community/api/health"
+    path = "/memos/api/health"
 
 # 1 shared CPU / 1 GB is the sizing the old manifest asked for and matches a
 # single-machine PocketBase + SQLite instance. Bump `size` (not `memory`

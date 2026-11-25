@@ -64,7 +64,7 @@ const fetchWithCredentials: typeof globalThis.fetch = (input, init) => {
 };
 
 // Connect/gRPC base URL. Vite's `base` config exposes the SPA's
-// mount path (e.g. "/community/") at import.meta.env.BASE_URL; the
+// mount path (e.g. "/memos/") at import.meta.env.BASE_URL; the
 // same value goes into index.html so the asset URLs and the connect
 // posts line up. Local dev (no VITE_BASE_PATH) leaves the default
 // "/" in place, which the URL constructor treats as a trailing-slash

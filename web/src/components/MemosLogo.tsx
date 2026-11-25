@@ -26,7 +26,7 @@ function MemosLogo(props: Props) {
   const title = instanceGeneralSetting.customProfile?.title || "Memos";
   // The fallback `/full-logo.webp` is a baked SPA asset that lives under the
   // basename; on a sub-path mount (Caddyfile.fly.community layout with
-  // VITE_BASE_PATH=/community/) the browser resolves a root-relative path
+  // VITE_BASE_PATH=/memos/) the browser resolves a root-relative path
   // against the document origin, which on that layout is the static site
   // (404). `toBasenameAwareUrl` prepends the SPA mount prefix for relative
   // paths and passes absolute URLs (https:, data:, //host/...) through

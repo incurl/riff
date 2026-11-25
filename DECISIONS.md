@@ -5,6 +5,63 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## THE MEMOS SPA MOVES TO `/memos/`, AND `/community/` BECOMES A 308 (2026-11-25)
+
+The Memos SPA now answers at `https://<host>/memos/` instead of
+`https://<host>/community/`. The prefix is a better name for what it
+serves, and it puts the SPA beside its siblings (`/wiki/`, `/forum/`)
+instead of behind a word that describes the audience rather than the
+app.
+
+**THE PREFIX HAS TO BE STRIPPED, AND THAT IS THE LOAD-BEARING PART.**
+riff serves the SPA at the ROOT of its own listener — `server/frontend`
+registers a method-less `/{path...}` catch-all, and every Connect
+endpoint, `/_/`, `/api/*` and `/mcp` are rooted there too. So the caddy
+block is `handle_path /memos/*`, never `handle /memos/*`: without the
+strip riff would answer `/memos/assets/index-*.js` with its own SPA
+fallback, i.e. `index.html` served as JavaScript, and the app would
+never boot.
+
+**ONE BUILD, ONE PREFIX.** `web/vite.config.mts` maps
+`VITE_BASE_PATH` onto Vite's `base`, and `web/src/connect.ts` reads
+`import.meta.env.BASE_URL` to build the Connect base URL as
+`${origin}${BASE_URL}`. Both are compile-time constants, so a bundle
+built for `/memos/` cannot also serve `/community/`: its asset URLs
+would point at `/memos/` while the page loaded from `/community/`.
+`/community/` is therefore a 308, not a second proxy — the redirect is
+what makes an old bookmark land on a coherent page. The build
+invocations that set the variable (`scripts/dev_image_build.sh`,
+`.github/workflows/release.yml`) both moved to `/memos/`; the default
+`pnpm release` still leaves the SPA at `/` for local dev and for the
+root-mounted `Caddyfile.fly` layout.
+
+**THE REDIRECT MUST STRIP BEFORE IT REBUILDS THE PATH.** The first
+version used `handle /community/* { redir * /memos{uri} 308 }` and
+turned `/community/auth?redirect=%2F` into
+`/memos/community/auth?redirect=%2F` — `{uri}` is the whole request
+URI, so a plain `handle` leaves the prefix in it. `handle_path` strips
+before the block runs, so `{uri}` is already the remainder. Measured
+against a real caddy container: `/community/auth?redirect=%2F` →
+`/memos/auth?redirect=%2F`, `/community/assets/x.js` →
+`/memos/assets/x.js`, `/community` → `/memos/`, `/memos` → `/memos/`,
+and `/wiki/*` / `/forum/*` still proxied verbatim.
+
+**A THIRD LAYOUT GETS AN ALIAS, NOT A PROXY.** `scripts/Caddyfile.fly`
+mounts the SPA at the ROOT (`base: "/"`), so `/memos/*` there is a 308
+that DROPS the prefix (`/memos/auth` → `/auth`). Proxying it would
+serve a shell whose asset URLs are root-relative and boot the app
+against the wrong base. `scripts/Caddyfile` also gained the strip it
+never had: its `/community/*` block proxied verbatim, which meant the
+SPA's own `/community/assets/...` requests were answered by the SPA
+fallback — the layout had been broken for as long as it existed, and
+the `/memos/` move is what surfaced it.
+
+The deploy smoke test moved with it: `fly.toml`'s
+`[[http_service.checks]] path`, `scripts/fly_deploy.sh`'s default
+`RIFF_FLY_SMOKE_PATH`, and its two case statements now assert
+`/memos/...`, because the check that catches an `@spa`-matcher
+regression has to name the prefix the redirect actually targets.
+
 ## AN AFFORDANCE THE FORUM CANNOT HONOUR IS REMOVED, NOT LEFT DEAD (2026-11-25)
 
 An audit of every endpoint the reused Flarum frontend calls, against

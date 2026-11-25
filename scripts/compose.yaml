@@ -8,7 +8,7 @@ services:
     volumes:
       - ~/.riff/:/var/opt/riff
     # caddy binds 80 and 443 inside the container and reverse-proxies
-    # /community/* to riff on the loopback 8090. 8090 is NOT
+    # /memos/* to riff on the loopback 8090. 8090 is NOT
     # published; only caddy's two ports are reachable from the host.
     ports:
       - "80:80"
@@ -29,7 +29,7 @@ services:
     environment:
       - SITE_DOMAIN=${SITE_DOMAIN:-example.com}
       - ACME_EMAIL=${ACME_EMAIL:-ops@example.com}
-      - RIFF_INSTANCE_URL=${RIFF_INSTANCE_URL:-https://example.com/community}
+      - RIFF_INSTANCE_URL=${RIFF_INSTANCE_URL:-https://example.com/memos}
       # RIFF_FTS=1 serves memo content search from the SQLite FTS5
       # index instead of a LIKE scan.
       #
@@ -59,7 +59,7 @@ services:
     # notification links, MCP origin allow-list, and webhook
     # callbacks. If unset, links fall back to relative paths.
     # environment:
-    #   - RIFF_INSTANCE_URL=https://riff.example.com/community
+    #   - RIFF_INSTANCE_URL=https://riff.example.com/memos
     # Optional: enable the FTS5-backed content search.
     # environment:
     #   - RIFF_FTS=1

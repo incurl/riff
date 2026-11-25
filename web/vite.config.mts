@@ -15,7 +15,7 @@ export default defineConfig({
   // The base path Vite injects into index.html and into
   // `import.meta.env.BASE_URL`. Defaults to "/" so local dev and a
   // root-mounted deployment work unchanged; override with
-  // VITE_BASE_PATH=/community/ pnpm release (see scripts/Dockerfile,
+  // VITE_BASE_PATH=/memos/ pnpm release (see scripts/Dockerfile,
   // which does NOT pass the env var by default). The companion
   // Connect transport in web/src/connect.ts reads BASE_URL at
   // runtime and concatenates it to window.location.origin, so the

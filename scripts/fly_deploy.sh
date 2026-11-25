@@ -29,10 +29,10 @@ set -eu
 # --- Configuration (env-overridable) -----------------------------------------
 : "${RIFF_FLY_APP:=ravine}"
 : "${RIFF_FLY_REGISTRY:=registry.fly.io/ravine:dev}"
-# `Caddyfile.fly.community` mounts riff under /community/; the default.
+# `Caddyfile.fly.community` mounts riff under /memos/; the default.
 # Override to `https://<app>.fly.dev/api/health` for the root-mounted
 # `Caddyfile.fly` layout (see the Caddyfile row in AGENTS.md).
-: "${RIFF_FLY_SMOKE_PATH:=/community/api/health}"
+: "${RIFF_FLY_SMOKE_PATH:=/memos/api/health}"
 : "${RIFF_FLY_SMOKE_HOST:=${RIFF_FLY_APP}.fly.dev}"
 # The forum is mounted at /forum on riff's own listener, so this path is
 # the same in EVERY caddy layout (it is a riff mount point, not a caddy
@@ -74,12 +74,12 @@ fly deploy -a "${RIFF_FLY_APP}" --image "${RIFF_FLY_REGISTRY}" -y
 #   1. The caddy-routed riff health endpoint (SPA sub-path mount is alive).
 #   2. The static site is reachable at the document root. `Caddyfile.fly.community`
 #      (the default) serves the baked Jekyll _site/ at /, so a GET / must
-#      return 200. A 308 to /community/ means the @spa exclusion list is
+#      return 200. A 308 to /memos/ means the @spa exclusion list is
 #      missing the bare path and a future Caddyfile edit has regressed the
 #      same bug as the "caddy redirects root visits" incident on 2026-10-14.
 #
 #   3. The forum module answers at /forum/ (a riff mount, so its prefix
-#      must reach riff UNCHANGED). A 308 to /community/forum means the
+#      must reach riff UNCHANGED). A 308 to /memos/forum means the
 #      @spa exclusion list in Caddyfile.fly.community lost /forum, and
 #      stripping the prefix would 404 every absolute /forum/assets/...
 #      bundle URL the SPA shell ships.
@@ -87,7 +87,7 @@ fly deploy -a "${RIFF_FLY_APP}" --image "${RIFF_FLY_REGISTRY}" -y
 # Checks 2 and 3 use -m timeout (not -fsS) because `-f` makes curl exit non-zero
 # on 3xx and we explicitly want to inspect the 308 to assert which
 # redirect target caddy chose. The case-statement below greps
-# %{redirect_url} for /community/ to distinguish the bug from a healthy
+# %{redirect_url} for /memos/ to distinguish the bug from a healthy
 # 308 elsewhere (e.g. a future `redir` that canonicalises trailing
 # slashes on the static site itself).
 
@@ -109,7 +109,7 @@ case "${_root_code}" in
     ;;
   3[0-9][0-9])
     case "${_root_redirect}" in
-      *"/community"*|*"/community/"*)
+      *"/memos"*|*"/memos/"*)
         echo "FAIL: / on ${RIFF_FLY_SMOKE_HOST} is being redirected to the SPA." >&2
         echo "      The Caddyfile.fly.community @spa matcher is missing the bare" >&2
         echo "      path '/' from its 'not path' exclusion list. Add it next to" >&2
@@ -142,7 +142,7 @@ case "${_forum_code}" in
     ;;
   3[0-9][0-9])
     case "${_forum_redirect}" in
-      *"/community"*)
+      *"/memos"*)
         echo "FAIL: ${RIFF_FLY_FORUM_PATH} on ${RIFF_FLY_SMOKE_HOST} is being redirected into the SPA." >&2
         echo "      The Caddyfile.fly.community @spa matcher is missing /forum and" >&2
         echo "      /forum/* from its 'not path' exclusion list, so the forum sibling" >&2
@@ -151,7 +151,7 @@ case "${_forum_code}" in
         ;;
       *)
         echo "FAIL: ${RIFF_FLY_FORUM_PATH} on ${RIFF_FLY_SMOKE_HOST} returned ${_forum_code} -> ${_forum_redirect}" >&2
-        echo "      (expected 200; the forum is a verbatim-proxied sibling of /community/)." >&2
+        echo "      (expected 200; the forum is a verbatim-proxied sibling of /memos/)." >&2
         exit 1
         ;;
     esac

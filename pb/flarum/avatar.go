@@ -26,7 +26,7 @@ const (
 // `/api/files/users/{id}/{file}` URL lives at the root of the riff
 // listener. The forum is mounted at a prefix (and behind a reverse proxy
 // under a sub-path layout), so that root URL would be answered by
-// whatever owns the root — the static site, in the `/community/` layout.
+// whatever owns the root — the static site, in the `/memos/` layout.
 // Streaming the bytes here keeps every URL the frontend builds relative
 // to the mount point, which is the same reason the wiki and the
 // attachment surface own their own file routes.
