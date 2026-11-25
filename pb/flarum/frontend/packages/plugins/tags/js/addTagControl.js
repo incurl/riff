@@ -27,12 +27,17 @@ import TagSelectionModal from './components/TagSelectionModal';
  */
 export function showTagControl(discussion) {
   app.modal.show(TagSelectionModal, {
+    // The discussion is passed along: it is what decides which tags may be
+    // OFFERED (the ones that may be added, plus the ones already there) —
+    // the server enforces `canAddToDiscussion` with the scoped permission.
+    discussion,
     // The discussion's CURRENT tags are the starting selection.
     selectedTags: (discussion.tags() || []).slice(0),
     title: 'Edit tags',
     onsubmit: (tags) => {
       discussion.save({ relationships: { tags } }).catch((error) => {
         app.modal.show(TagSelectionModal, {
+          discussion,
           selectedTags: (discussion.tags() || []).slice(0),
           title: 'Edit tags',
           onsubmit: (chosen) => {

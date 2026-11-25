@@ -350,3 +350,9 @@ li:not(.sortable-dragging) > .TagListItem-info:hover > .Button {
 .TagSelectionModal-hint--error {
   color: var(--error-color, #d83e3e);
 }
+
+.TagSelectionModal-empty {
+  padding: 6px 2px;
+  font-size: 13px;
+  color: var(--muted-color);
+}

@@ -20,6 +20,7 @@ import classList from 'flarum/common/utils/classList';
 import Button from 'flarum/common/components/Button';
 
 import { currentTag, loadTags, tagsLabel } from './helpers';
+import { selectableTags as filterSelectable } from './utils/selectableTags';
 import TagSelectionModal, { isPrimaryTag, tagLimits } from './components/TagSelectionModal';
 
 /**
@@ -58,7 +59,7 @@ export function setComposerTags(tags) {
  * @returns {object[]}
  */
 export function selectableTags() {
-  return (app.store.all('tags') || []).filter((tag) => tag.canStartDiscussion());
+  return filterSelectable(app.store.all('tags'), null);
 }
 
 /**

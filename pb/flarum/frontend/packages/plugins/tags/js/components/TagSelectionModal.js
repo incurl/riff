@@ -3,8 +3,9 @@
 // Upstream's `flarum/tags` has two modals: `TagSelectionModal` (the generic
 // picker, with limits, keyboard navigation and a filter) and
 // `TagDiscussionModal` (the discussion-specific wrapper). This is ONE modal
-// serving both, because the two differ only in the limits they apply and the
-// title they carry.
+// serving both, because the two differ only in the limits they apply, the
+// title they carry, and whether a discussion is being edited (which is what
+// decides which tags may be offered — see `utils/selectableTags`).
 //
 // It is a MODAL rather than an inline dropdown because the composer's header
 // has no room for a searchable list, and because the selection has to be
@@ -13,6 +14,11 @@
 // The LIMITS are the server's, read from the forum document: the server
 // enforces the same counts (`validateTagCounts`), so a modal that ignored
 // them would let an author compose a discussion the server then refuses.
+//
+// The LIST is filtered too, for the same reason: a tag the caller may not
+// use is not offered (`selectableTags`), because the server really does
+// refuse it — a restricted tag's permission is checked, so an unfiltered
+// picker produces a selection whose save comes back refused.
 import app from 'flarum/forum/app';
 import FormModal from 'flarum/common/components/FormModal';
 import Button from 'flarum/common/components/Button';
@@ -21,6 +27,7 @@ import classList from 'flarum/common/utils/classList';
 import Stream from 'flarum/common/utils/Stream';
 
 import { loadTags, sortTags, tagIcon } from '../helpers';
+import { selectableTags } from '../utils/selectableTags';
 
 /**
  * The limits on a selection.
@@ -84,10 +91,15 @@ export default class TagSelectionModal extends FormModal {
   content() {
     const tags = app.store.all('tags');
 
+    // The LOADING check is on the RAW list: filtering first would make "no
+    // tag is usable by this caller" look identical to "the list has not
+    // arrived", and the modal would spin forever instead of saying so.
     if (!tags.length) return <LoadingIndicator />;
 
+    const selectable = selectableTags(tags, this.attrs.discussion);
+
     const filter = this.filter().trim().toLowerCase();
-    const visible = sortTags(tags).filter((tag) => !filter || (tag.name() || '').toLowerCase().includes(filter));
+    const visible = sortTags(selectable).filter((tag) => !filter || (tag.name() || '').toLowerCase().includes(filter));
 
     return (
       <div className="TagSelectionModal-container">
@@ -103,17 +115,21 @@ export default class TagSelectionModal extends FormModal {
 
         {this.selected.length ? <div className="TagSelectionModal-selected">{this.selected.map((tag) => this.chip(tag))}</div> : null}
 
-        <ul className="TagSelectionModal-list">
-          {visible.map((tag) => (
-            <li className={classList('TagSelectionModal-item', this.isSelected(tag) && 'selected')}>
-              <button type="button" className="TagSelectionModal-button" onclick={() => this.toggle(tag)}>
-                {tagIcon(tag, { className: 'TagSelectionModal-icon' })}
-                <span className="TagSelectionModal-name">{tag.name()}</span>
-                {tag.description() ? <span className="TagSelectionModal-description">{tag.description()}</span> : null}
-              </button>
-            </li>
-          ))}
-        </ul>
+        {visible.length ? (
+          <ul className="TagSelectionModal-list">
+            {visible.map((tag) => (
+              <li className={classList('TagSelectionModal-item', this.isSelected(tag) && 'selected')}>
+                <button type="button" className="TagSelectionModal-button" onclick={() => this.toggle(tag)}>
+                  {tagIcon(tag, { className: 'TagSelectionModal-icon' })}
+                  <span className="TagSelectionModal-name">{tag.name()}</span>
+                  {tag.description() ? <span className="TagSelectionModal-description">{tag.description()}</span> : null}
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <div className="TagSelectionModal-empty">{selectable.length ? 'No tags match the filter.' : 'No tags are available to you here.'}</div>
+        )}
 
         {this.hint()}
       </div>
