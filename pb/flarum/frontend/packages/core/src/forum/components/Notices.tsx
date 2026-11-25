@@ -7,9 +7,6 @@ import Button from '../../common/components/Button';
 import Icon from '../../common/components/Icon';
 
 export default class Notices extends Component {
-  private loading: boolean = false;
-  private sent: boolean = false;
-
   view(): Mithril.Children {
     return <div className="App-notices">{this.items().toArray()}</div>;
   }
@@ -19,26 +16,33 @@ export default class Notices extends Component {
 
     const user = app.session.user;
 
-    if (user && !user.isEmailConfirmed()) {
-      items.add(
-        'emailConfirmation',
-        <Alert
-          dismissible={false}
-          controls={[
-            <Button className="Button Button--link" onclick={this.onclickEmailConfirmation.bind(this)} loading={this.loading} disabled={this.sent}>
-              {this.sent
-                ? [<Icon name={'fas fa-check'} />, ' ', app.translator.trans('core.forum.user_email_confirmation.sent_message')]
-                : app.translator.trans('core.forum.user_email_confirmation.resend_button')}
-            </Button>,
-          ]}
-          className="Alert--emailConfirmation"
-          containerClassName="container"
-        >
-          {app.translator.trans('core.forum.user_email_confirmation.alert_message', { email: <strong>{user.email()}</strong> })}
-        </Alert>,
-        100
-      );
-    }
+    // The email-confirmation prompt is NOT shown, and that is a
+    // decision rather than an omission.
+    //
+    // Upstream shows it for an account that has not confirmed its
+    // address, and the prompt is NOT dismissible: the account is
+    // expected to confirm, so dismissing the reminder would only hide
+    // something the reader still has to do. The prompt's button asks
+    // the server to send the confirmation again.
+    //
+    // This port has NEITHER half of that. The account's confirmation
+    // belongs to the host's auth layer — the forum has no `/register`,
+    // no `/confirm` and no `/send-confirmation` endpoint (see
+    // `docs/design/flarum/shared-users.md`) — and the user resource
+    // carries no `isEmailConfirmed` attribute, because reading
+    // PocketBase's reserved `verified` field is exactly what that
+    // document forbids.
+    //
+    // An ATTRIBUTE THAT IS ABSENT reads as `undefined`, and
+    // `!undefined` is `true`: the prompt would therefore be shown to
+    // EVERY signed-in member, it could not be dismissed, and its
+    // button would answer 404. An undismissable alert that asks for
+    // something the forum cannot give is the worst of the three
+    // outcomes, so the prompt is not rendered.
+    //
+    // The account's own address is still shown on its profile and in
+    // the admin's user list; nothing about the account is hidden by
+    // this.
 
     if (user && user.emailBouncedAt()) {
       items.add(
@@ -91,27 +95,5 @@ export default class Notices extends Component {
     }
 
     return items;
-  }
-
-  onclickEmailConfirmation() {
-    const user = app.session.user!;
-
-    this.loading = true;
-    m.redraw();
-
-    app
-      .request({
-        method: 'POST',
-        url: app.forum.attribute('apiUrl') + '/users/' + user.id() + '/send-confirmation',
-      })
-      .then(() => {
-        this.loading = false;
-        this.sent = true;
-        m.redraw();
-      })
-      .catch(() => {
-        this.loading = false;
-        m.redraw();
-      });
   }
 }

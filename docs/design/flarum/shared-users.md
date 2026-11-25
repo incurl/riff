@@ -40,6 +40,30 @@ Registration, email verification, password reset and credential rotation
 stay with the host's auth layer. The forum has no `/register`,
 `/forgot` or `/confirm` endpoint.
 
+**THE FORUM SHOWS NO EMAIL-CONFIRMATION PROMPT.** Upstream's notices
+area shows one for an account that has not confirmed its address, and
+the prompt is NOT dismissible — upstream's account is expected to
+confirm, so dismissing the reminder would only hide something the
+reader still has to do.
+
+This port has NEITHER half of that: the account's confirmation belongs
+to the host's auth layer, so the forum has no `/confirm` and no
+`/send-confirmation` endpoint; and the user resource carries no
+`isEmailConfirmed` attribute, because reading the reserved `verified`
+field is exactly what this document forbids.
+
+An ATTRIBUTE THAT IS ABSENT reads as `undefined`, and `!undefined` is
+`true` — so upstream's guard (`if (user && !user.isEmailConfirmed())`)
+would show the prompt to EVERY signed-in member. It could not be
+dismissed, and its button would answer 404: an undismissable alert
+asking for something the forum cannot give.
+
+The prompt is therefore not rendered. The notice area's OTHER alerts
+are untouched — the bounced-address notice, the maintenance-mode
+notice and the bisect notice all still show, because each of them asks
+for something the forum can deliver. Pinned by
+`Notices.test.ts`.
+
 ## The one forum-side exception
 
 The forum's group membership is stored in `forum_group_users`, which

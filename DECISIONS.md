@@ -5,6 +5,43 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## AN ALERT THE FORUM CANNOT ACT ON IS NOT RENDERED (2026-11-25)
+
+Every signed-in member was shown an email-confirmation alert they
+could not dismiss, and whose button answered 404.
+
+**AN UNDISMISSABLE ALERT ASKS FOR SOMETHING.** Upstream's notices area
+renders its alerts with `dismissible={false}` on purpose: the
+email-confirmation prompt, the bounced-address notice, the
+maintenance-mode notice. Each of them asks the reader to do something,
+so dismissing the reminder would only hide something they still have
+to do.
+
+**THE EMAIL-CONFIRMATION PROMPT ASKS FOR SOMETHING THE FORUM CANNOT
+GIVE.** The account's confirmation belongs to the host's auth layer —
+the forum has no `/register`, no `/confirm` and no
+`/send-confirmation` endpoint — and the user resource carries no
+`isEmailConfirmed` attribute, because reading PocketBase's reserved
+`verified` field is exactly what `docs/design/flarum/shared-users.md`
+forbids.
+
+**AN ATTRIBUTE THAT IS ABSENT READS AS `undefined`, AND
+`!undefined` IS `true`.** Upstream's guard is `if (user &&
+!user.isEmailConfirmed())`, so an absent attribute made EVERY member
+look unconfirmed. The prompt was then shown to everybody, it could not
+be dismissed, and its button called an endpoint that does not exist.
+
+The prompt is therefore not rendered. The OTHER notices are
+untouched: the bounced-address notice is guarded by a POSITIVE test
+(`user.emailBouncedAt()`), so an absent attribute does not trigger
+it — the opposite of the confirmation prompt's guard, and the reason
+one of them had to go and the other did not.
+
+**THE ALERT MANAGER ITSELF WAS FINE.** The dismissal was tested
+(`AlertManager.test.ts`): the button is rendered, the alert leaves the
+list, and the caller's own `ondismiss` runs as well. The vendored
+`Alert` and `AlertManager` are byte-identical to upstream's.
+
 ## AN EXTENSION PAGE IS A PAGE, NOT A SETTINGS LIST (2026-11-25)
 
 The tags plugin had no page to create a tag from: its admin bundle

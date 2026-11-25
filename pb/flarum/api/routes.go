@@ -124,6 +124,24 @@ func (s *Server) Mount(r *router.Router[*core.RequestEvent]) {
 	r.PATCH(api+"/extensions/{id}", s.updateExtensionHandler)
 	r.POST(api+"/extensions/{id}", s.updateExtensionHandler)
 
+	// --- the streaming check --------------------------------------------
+	// The admin dashboard asks the server for a few events a moment
+	// apart, and SEES whether they arrive apart too. It is how the
+	// dashboard tells a server that streams from one that a proxy
+	// holds back.
+	//
+	// The route is upstream's `CheckStreamingController`, and it
+	// answers with NDJSON rather than a JSON:API document — see
+	// pb/flarum/api/handlers_stream.go.
+	r.GET(api+"/streaming-check", s.streamingCheckHandler)
+
+	// The cache clear is a DELETE, and the frontend rewrites it into
+	// a POST with the method in `X-HTTP-Method-Override` — so the
+	// route is registered for both verbs, and the POST twin resolves
+	// the effective method itself.
+	r.DELETE(api+"/cache", s.clearCacheHandler)
+	r.POST(api+"/cache", s.clearCacheHandler)
+
 	// --- settings ------------------------------------------------------
 	// The settings surface is NOT a JSON:API resource: upstream's
 	// admin application posts a bare settings map and expects an empty

@@ -44,6 +44,7 @@ const PLUGIN_SETTINGS = {
 /** The plugins directory, relative to this test. */
 const PLUGINS_DIR = path.resolve(__dirname, '..', '..', '..', 'plugins');
 
+/** The setting key as it appears in a bundle: a quoted string. */
 /**
  * The setting key as it appears in a bundle.
  *
@@ -95,7 +96,7 @@ describe("the plugins' admin bundles", () => {
     expect(registeredSettings(source).sort()).toEqual([...config.keys].sort());
   });
 
-  it.each(Object.entries(PLUGIN_SETTINGS))('%s registers through the admin vocabulary', (plugin) => {
+  it.each(Object.entries(PLUGIN_SETTINGS))('%s registers through the admin vocabulary', (plugin, config) => {
     const bundle = fs.readFileSync(path.join(PLUGINS_DIR, plugin, 'js', 'admin.js'), 'utf8');
 
     // The bundle must register through the admin application's own
