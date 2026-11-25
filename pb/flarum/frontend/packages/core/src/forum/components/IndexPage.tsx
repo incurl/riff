@@ -14,6 +14,7 @@ import type Discussion from '../../common/models/Discussion';
 import PageStructure from './PageStructure';
 import IndexSidebar from './IndexSidebar';
 import PostsPage from './PostsPage';
+import { registerLiveRefresh } from '../utils/liveRefresh';
 
 export interface IIndexPageAttrs extends IPageAttrs {}
 
@@ -24,6 +25,15 @@ export interface IIndexPageAttrs extends IPageAttrs {}
 export default class IndexPage<CustomAttrs extends IIndexPageAttrs = IIndexPageAttrs, CustomState = {}> extends Page<CustomAttrs, CustomState> {
   static providesInitialSearch = true;
   lastDiscussion?: Discussion;
+
+  /**
+   * Drops this page's live-refresh registration.
+   *
+   * The list is shared (`app.discussions`), but the refresh belongs to the page:
+   * a reader on the discussion page or a user profile must not keep polling the
+   * index list behind the scene.
+   */
+  protected unregisterLiveRefresh: (() => void) | null = null;
 
   oninit(vnode: Mithril.Vnode<CustomAttrs, this>) {
     super.oninit(vnode);
@@ -97,6 +107,14 @@ export default class IndexPage<CustomAttrs extends IIndexPageAttrs = IIndexPageA
 
     this.setTitle();
 
+    // Keep the list current while the page is visible.
+    //
+    // It revalidates rather than reloads: page 1 is re-read and the pages are
+    // rebuilt in place, so the reader's scroll position, the open page number
+    // and the active filter (a tag page's tag, a search) all survive. Without
+    // this a new post only appeared on a manual reload.
+    this.unregisterLiveRefresh = registerLiveRefresh(() => app.discussions.revalidate());
+
     // Work out the difference between the height of this hero and that of the
     // previous hero. Maintain the same scroll position relative to the bottom
     // of the hero so that the sidebar doesn't jump around.
@@ -147,6 +165,9 @@ export default class IndexPage<CustomAttrs extends IIndexPageAttrs = IIndexPageA
 
   onremove(vnode: Mithril.VnodeDOM<CustomAttrs, this>) {
     super.onremove(vnode);
+
+    this.unregisterLiveRefresh?.();
+    this.unregisterLiveRefresh = null;
 
     $('#app').css('min-height', '');
   }

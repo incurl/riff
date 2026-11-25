@@ -15,6 +15,7 @@ import { ApiResponseSingle } from '../../common/Store';
 import PageStructure from './PageStructure';
 import Placeholder from '../../common/components/Placeholder';
 import RequestError from '../../common/utils/RequestError';
+import { registerLiveRefresh } from '../utils/liveRefresh';
 
 export interface IDiscussionPageAttrs extends IPageAttrs {
   id: string;
@@ -64,6 +65,11 @@ export default class DiscussionPage<CustomAttrs extends IDiscussionPageAttrs = I
 
   protected useBrowserScrollRestoration = true;
 
+  /**
+   * Drops this page's live-refresh registration.
+   */
+  protected unregisterLiveRefresh: (() => void) | null = null;
+
   oninit(vnode: Mithril.Vnode<CustomAttrs, this>) {
     super.oninit(vnode);
 
@@ -84,8 +90,17 @@ export default class DiscussionPage<CustomAttrs extends IDiscussionPageAttrs = I
     this.bodyClass = 'App--discussion';
   }
 
+  oncreate(vnode: Mithril.VnodeDOM<CustomAttrs, this>) {
+    super.oncreate(vnode);
+
+    this.unregisterLiveRefresh = registerLiveRefresh(() => this.catchUp());
+  }
+
   onremove(vnode: Mithril.VnodeDOM<CustomAttrs, this>) {
     super.onremove(vnode);
+
+    this.unregisterLiveRefresh?.();
+    this.unregisterLiveRefresh = null;
 
     // If we are indeed navigating away from this discussion, then disable the
     // discussion list pane. Also, if we're composing a reply to this
@@ -294,6 +309,51 @@ export default class DiscussionPage<CustomAttrs extends IDiscussionPageAttrs = I
       app.current.set('discussion', discussion);
       app.current.set('stream', this.stream);
     });
+  }
+
+  /**
+   * Catch this discussion up with the server.
+   *
+   * This is the stand-in for a pushed "post created" event: re-read the
+   * discussion — its `posts` relationship names every post number — and, if the
+   * reader was at the end of the stream, sync the window out to the new end.
+   *
+   * The ORDER matters. `viewingEnd()` tolerates one post of drift, so it is
+   * captured BEFORE the refetch: afterwards the discussion's post ids are longer
+   * than the window and the answer would always be "no". `syncEnd()` then asks
+   * for only the posts the window does not have — `loadRange` slices the ids it
+   * already holds and fetches the missing ones BY ID — so ten new replies cost
+   * one request for those ten, not a reload of the discussion.
+   *
+   * Nothing happens when the reader is scrolled up in a long discussion: moving
+   * their window would lose their place, and the new posts are one "go to last"
+   * away.
+   */
+  protected catchUp(): Promise<void> {
+    const discussion = this.discussion;
+    const stream = this.stream;
+
+    // The page may still be loading, or a navigation may have moved on between
+    // the tick and now.
+    if (!discussion || !stream || app.current.get('discussion') !== discussion) {
+      return Promise.resolve();
+    }
+
+    const wasViewingEnd = stream.viewingEnd();
+
+    return app.store
+      .find('discussions', discussion.id() as string)
+      .then(() => {
+        if (!wasViewingEnd) return;
+
+        return this.stream?.syncEnd();
+      })
+      .then(
+        () => {},
+        // A failed refresh is not the reader's to act on; what is on screen
+        // remains the best answer available.
+        () => {}
+      );
   }
 
   /**
