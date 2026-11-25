@@ -150,6 +150,70 @@ func TestTags_TagFilterNarrowsTheDiscussionList(t *testing.T) {
 	require.NotEqual(t, untaggedID, resource["id"])
 }
 
+// TestTags_TagFilterAcceptsTheSlug pins the spelling the FRONTEND sends.
+//
+// The tag page's URL is `/t/<slug>`, and upstream's `TagGambit` resolves a
+// slug, so the search param the extension forwards to `filter[tag]` is the
+// slug. The port's filter matched a tag RECORD ID only, so a tag page would
+// have listed nothing — silently, and under a heading that says the tag has
+// no discussions.
+func TestTags_TagFilterAcceptsTheSlug(t *testing.T) {
+	app, handler := newTestForum(t)
+	tag := seedTag(t, app, "Guides", "guides")
+
+	taggedID, _ := seedDiscussion(t, app, "Tagged by slug", "With a tag")
+	seedDiscussion(t, app, "Untagged by slug", "Without a tag")
+	attachTag(t, app, taggedID, tag.Id)
+
+	recorder := do(t, handler, http.MethodGet, "/forum/api/discussions?filter[tag]=guides", "", nil)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	document := decodeDocument(t, recorder)
+	resources, ok := document.Data.([]any)
+	require.True(t, ok, "the data should be a resource collection")
+	require.Len(t, resources, 1, "the slug must select the tagged discussion and only it")
+
+	resource, ok := resources[0].(map[string]any)
+	require.True(t, ok, "the resource should be an object")
+	require.Equal(t, taggedID, resource["id"])
+}
+
+// TestTags_TheTagListCarriesEveryTag pins what the LABELS resolve against.
+//
+// The frontend does not read a discussion's tags out of `included` — it cannot,
+// because a tag resource is serialised by the tags PLUGIN and the core's
+// `included` array only builds the resources it knows. The store is filled by
+// `GET /api/tags` instead, and `discussion.tags()` resolves the relationship's
+// identifiers against it. So the guarantee that matters is that the endpoint
+// returns the tag with its slug and colour, which is what a label renders.
+func TestTags_TheTagListCarriesEveryTag(t *testing.T) {
+	app, handler := newTestForum(t)
+	tag := seedTag(t, app, "Listed", "listed")
+
+	recorder := do(t, handler, http.MethodGet, "/forum/api/tags", "", nil)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	document := decodeDocument(t, recorder)
+	resources, ok := document.Data.([]any)
+	require.True(t, ok, "the data should be a resource collection")
+
+	found := false
+	for _, entry := range resources {
+		resource, ok := entry.(map[string]any)
+		if !ok || resource["id"] != tag.Id {
+			continue
+		}
+
+		attributes, ok := resource["attributes"].(map[string]any)
+		require.True(t, ok, "the tag must carry attributes")
+		require.Equal(t, "listed", attributes["slug"], "the label links by slug")
+
+		found = true
+	}
+
+	require.True(t, found, "the tag must be listed: %v", resources)
+}
+
 // TestLikes_MigrationCreatesTheCollection pins layer 1 for the Likes
 // plugin.
 func TestLikes_MigrationCreatesTheCollection(t *testing.T) {

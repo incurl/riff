@@ -4,8 +4,10 @@
 // `js/src/common/utils/sortTags.tsx`, so the admin page sorts and
 // renders tags the way upstream's does.
 
+import app from 'flarum/forum/app';
 import classList from 'flarum/common/utils/classList';
 import Icon from 'flarum/common/components/Icon';
+import Link from 'flarum/common/components/Link';
 
 /**
  * A tag's icon.
@@ -44,7 +46,12 @@ export function tagIcon(tag, attrs = {}, settings = {}) {
  * A secondary tag sorts by its discussion count, descending.
  */
 export function sortTags(tags) {
-  return tags.slice(0).sort((a, b) => {
+  // `hasMany` maps a relationship's identifiers through the store WITHOUT
+  // dropping the ones that have not arrived, so `discussion.tags()` can hold
+  // `undefined` entries. Sorting one would throw on `position()`, and the
+  // whole discussion list would fail to render — a much worse outcome than a
+  // missing badge.
+  return (tags || []).filter(Boolean).slice(0).sort((a, b) => {
     const aPos = a.position();
     const bPos = b.position();
 
@@ -72,4 +79,107 @@ export function sortTags(tags) {
 
     return 0;
   });
+}
+
+/**
+ * A tag's page path.
+ *
+ * It is the ROUTE PATH, not `app.route('tag', ...)`: the Link component renders
+ * through `m.route.Link`, which prepends the router's own prefix. Passing the
+ * already-prefixed URL would double the base path on a sub-path deploy.
+ *
+ * @param {object} tag
+ * @returns {string}
+ */
+export function tagPath(tag) {
+  return '/t/' + tag.slug();
+}
+
+/**
+ * One tag, as a label.
+ *
+ * Upstream's `common/helpers/tagsLabel`:
+ *
+ *	tagLabel(tag, { link }) -> <span class="TagsLabel-item">…</span>
+ *
+ * The colour is a DOT rather than the text colour, so a pale tag colour stays
+ * readable; the icon is the tag's own Font Awesome class.
+ *
+ * @param {object} tag
+ * @param {{link?: boolean}} options
+ * @returns {object}
+ */
+export function tagLabel(tag, { link = false } = {}) {
+  const children = [
+    tag.color() ? <span className="TagsLabel-dot" style={{ background: tag.color() }} /> : null,
+    tagIcon(tag, { className: 'TagsLabel-icon' }),
+    tag.name(),
+  ];
+
+  const attrs = {
+    className: 'TagsLabel-item',
+    title: tag.description() || null,
+    'data-tag-id': tag.id(),
+  };
+
+  return link ? (
+    <Link {...attrs} href={tagPath(tag)}>
+      {children}
+    </Link>
+  ) : (
+    <span {...attrs}>{children}</span>
+  );
+}
+
+/**
+ * A list of tags, as one label group.
+ *
+ * Upstream renders the tags SORTED, so the primary tag leads — the order is
+ * what makes the first tag's colour the hero's colour.
+ *
+ * @param {object[]} tags
+ * @param {{link?: boolean}} options
+ * @returns {object}
+ */
+export function tagsLabel(tags, { link = false, className } = {}) {
+  return (
+    <span className={classList('TagsLabel', className)}>
+      {sortTags(tags).map((tag) => tagLabel(tag, { link }))}
+    </span>
+  );
+}
+
+// The in-flight (or settled) tag-list request.
+//
+// It is a single shared promise so a list of 20 discussions issues one request,
+// not 20 — and so `/tags`, the labels and the sidebar all read the same payload.
+let tagsRequest = null;
+
+/**
+ * Load the tag list into the store.
+ *
+ * A failure is not fatal: the discussions still render, just without tags. The
+ * promise is cleared on failure so a later redraw retries.
+ *
+ * It lives here rather than in `forum.js` because the labels, the tag page and
+ * the filter all need it, and a second copy would be a second request.
+ *
+ * @returns {Promise<object>}
+ */
+export function loadTags() {
+  if (!tagsRequest) {
+    tagsRequest = app
+      .request({ url: app.forum.attribute('apiUrl') + '/tags' })
+      .then((payload) => {
+        app.store.pushPayload(payload);
+
+        return payload;
+      })
+      .catch((error) => {
+        tagsRequest = null;
+        throw error;
+      });
+  }
+
+  return tagsRequest;
 }

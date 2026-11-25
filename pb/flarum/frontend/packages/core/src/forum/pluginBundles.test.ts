@@ -76,6 +76,22 @@ describeIfBuilt('the first-party plugin bundles', () => {
     // The core bundle registers its modules on `flarum.reg` and the
     // plugin bundles assign themselves onto `flarum.extensions`.
     (global as any).flarum = { extensions: {}, reg: { all: () => [] } };
+
+    // The extenders are handed `globalThis` as their application, so the
+    // harness supplies the surface the first-party bundles actually touch: a
+    // model registry (`Extend.Store`), the route table and its helper map
+    // (`Extend.Routes`), and the boot hook. Without these the FIRST extender
+    // that registers a model throws and the test never reaches the rest —
+    // which is how it hid a bundle that registered nothing at all.
+    (global as any).store = { models: {} };
+    (global as any).routes = {};
+    (global as any).route = () => '';
+    (global as any).beforeMount = () => {};
+    // The component registries: `Extend.PostTypes` adds to
+    // `postComponents`, and `Extend.Notification` adds to
+    // `notificationComponents`.
+    (global as any).postComponents = {};
+    (global as any).notificationComponents = {};
   });
 
   it('register themselves on flarum.extensions under their own id', () => {

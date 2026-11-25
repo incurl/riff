@@ -735,7 +735,7 @@ func (s *Server) canTagDiscussionAs(ctx context.Context, actor session.Actor, di
 		return false, nil
 	}
 
-	allow, err := s.settingValue(allowTagChangeSetting)
+	allow, err := s.settingValue(AllowTagChangeSetting)
 	if err != nil {
 		return false, err
 	}
@@ -759,11 +759,11 @@ func (s *Server) canTagDiscussionAs(ctx context.Context, actor session.Actor, di
 	return time.Since(discussion.CreatedAt) < time.Duration(minutes)*time.Minute, nil
 }
 
-// allowTagChangeSetting is the setting that governs whether the
+// AllowTagChangeSetting is the setting that governs whether the
 // author of a discussion may change its tags.
 //
 // The name is upstream's.
-const allowTagChangeSetting = "allow_tag_change"
+const AllowTagChangeSetting = "allow_tag_change"
 
 // SettingString reads a setting's value as a string.
 //
@@ -825,7 +825,7 @@ var upstreamSettingDefaults = map[string]string{
 	allowRenamingSetting:     "10",
 	allowPostEditingSetting:  "reply",
 	allowHideOwnPostsSetting: "reply",
-	allowTagChangeSetting:    "0",
+	AllowTagChangeSetting:    "0",
 }
 
 // settingValue reads a setting, falling back to upstream's installed

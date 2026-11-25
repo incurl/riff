@@ -35,6 +35,38 @@ func (r *Repository) countRecords(collection *core.Collection, filter string, pa
 	return int(total), nil
 }
 
+// TagIDBySlug resolves a tag's record id from its slug.
+//
+// It exists because `filter[tag]` arrives in TWO spellings and both are
+// legitimate:
+//
+//   - the FRONTEND sends a slug. Upstream's `TagGambit` resolves slugs, and the
+//     tag page's URL is `/t/<slug>`, so the search param it forwards is the
+//     slug. A tag page that sent its slug and got nothing back would render as
+//     "this tag has no discussions", which is a wrong statement rather than an
+//     error;
+//   - an API client (and the existing tests) send the record id.
+//
+// An unknown value is returned unchanged: the caller then filters by it and
+// gets an empty list, which is the same answer a bogus id has always got.
+func (r *Repository) TagIDBySlug(slug string) (string, error) {
+	collection, err := r.collection("tags")
+	if err != nil {
+		return "", err
+	}
+
+	records, err := r.app.FindRecordsByFilter(collection, "slug = {:slug}", "", 1, 0, map[string]any{"slug": slug})
+	if err != nil {
+		return "", err
+	}
+
+	if len(records) == 0 {
+		return "", nil
+	}
+
+	return records[0].Id, nil
+}
+
 // DiscussionIDsWithTag returns the ids of the discussions carrying a tag.
 //
 // The tag relationship lives in its own collection, so the filter is

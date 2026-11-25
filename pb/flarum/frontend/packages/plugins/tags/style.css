@@ -146,3 +146,93 @@ li:not(.sortable-dragging) > .TagListItem-info:hover > .Button {
 .EditTagModal-delete {
   margin-left: auto;
 }
+
+/* --- the tag page's hero --------------------------------------------- */
+
+.TagHero-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.TagHero-description {
+  margin-top: 8px;
+  max-width: 700px;
+}
+
+.TagHero-meta {
+  margin-top: 8px;
+  font-size: 12px;
+  opacity: 0.8;
+}
+
+/* The hero takes the tag's colour, which the extension sets as `--hero-bg`. */
+.Hero.TagHero,
+.DiscussionHero--colored {
+  background: var(--hero-bg, var(--header-bg));
+  color: var(--hero-color, inherit);
+}
+
+/* --- /tags ------------------------------------------------------------ */
+
+.TagsPage-content {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.TagsPage-children {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+  padding-left: 16px;
+}
+
+.TagsPage-empty {
+  padding: 24px 0;
+  color: var(--muted-color);
+}
+
+.TagTile {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: var(--border-radius, 4px);
+  background: var(--control-bg);
+  color: inherit;
+  text-decoration: none;
+  border-left: 3px solid var(--tag-color, transparent);
+}
+
+.TagTile:hover {
+  background: var(--control-bg-dark, var(--control-bg));
+}
+
+.TagTile--primary .TagTile-name {
+  font-weight: 600;
+}
+
+.TagTile-count {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--muted-color);
+}
+
+.TagTile-description {
+  flex-basis: 100%;
+  font-size: 12px;
+  color: var(--muted-color);
+}
+
+/* --- the "start a discussion" button on a tag page -------------------- */
+
+.Button--tagColored {
+  background: var(--color);
+  border-color: var(--color);
+}
+
+.TagsLabel-icon {
+  margin-right: 4px;
+}

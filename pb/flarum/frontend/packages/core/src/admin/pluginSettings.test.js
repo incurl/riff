@@ -35,7 +35,17 @@ const PLUGIN_SETTINGS = {
   likes: { keys: ['flarum-likes.like_own_post'] },
   gamification: { keys: ['fof-gamification.allowSelfVotes', 'fof-gamification.defaultMetric', 'fof-gamification.defaultPeriod'] },
   tags: {
-    keys: ['flarum-tags.min_primary_tags', 'flarum-tags.max_primary_tags', 'flarum-tags.min_secondary_tags', 'flarum-tags.max_secondary_tags'],
+    // `allow_tag_change` is upstream's FLAT key (no `flarum-tags.` prefix):
+    // the server reads it by that name (api.AllowTagChangeSetting) and the
+    // admin payload publishes it there, so the control binds to the same
+    // string the reader uses.
+    keys: [
+      'flarum-tags.min_primary_tags',
+      'flarum-tags.max_primary_tags',
+      'flarum-tags.min_secondary_tags',
+      'flarum-tags.max_secondary_tags',
+      'allow_tag_change',
+    ],
     page: 'admin/TagsPage.js',
   },
 };

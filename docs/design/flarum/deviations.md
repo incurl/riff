@@ -529,6 +529,66 @@ The following are **roadmap**, not v1:
   sticky, suspend, polls, gamification, statistics, markdown and uploads
   are all built; subscriptions is the remaining first-party extension.
 
+### 16b. What `tags` implements in the SPA, and what it does not
+
+Upstream's `flarum/tags` is the largest first-party front end here, and it was
+the least aligned: the port registered ONE extender where upstream registers
+six plus a route model. The gap is now closed for navigation, labelling and
+filtering, and still open for authoring.
+
+**Built** (upstream's names, adapted where the port's core differs):
+
+- `Extend.Routes()` — `tags` at `/tags` (the taxonomy as tiles) and `tag` at
+  `/t/:slug` (the ordinary index page filtered to one tag), plus `helper('tag')`
+  so every link uses the pretty URL. Before this there was no tag page at all,
+  and the label was deliberately a non-link.
+- `addTagLabels()` — all three halves: labels on a list item, a linked tag stack
+  above a discussion's title, and the hero's colour from the first tag.
+- `addTagFilter()` — the route param reaches the search state, the request sends
+  `filter[tag]`, and the page wears the tag's hero, title and button colour.
+- `Extend.Model(Discussion).hasMany('tags').attribute('canTag')` — so
+  `discussion.tags()` is the model method upstream's code calls.
+- The `allow_tag_change` setting, which the server READ but nothing could set.
+
+**Not built**, and why each is a real absence rather than an oversight:
+
+- `addTagComposer()` / `TagSelectionModal` — without it a discussion cannot be
+  given tags from the UI. This is the most significant remaining gap: the API
+  accepts tags on create, and the composer never offers them.
+- `addTagControl()` — the tag button on a discussion page (change a
+  discussion's tags after posting).
+- `discussionTagged` PostTypes — a rename or tag change is stored as a post of
+  that type, and the port renders no component for it, so a stream shows those
+  events as ordinary posts.
+- `app.tagList` (`TagListState`) — a shared, sorted, indexed tag list. The port
+  reads the store directly, which is equivalent for the sizes involved.
+- `extendRealtime` — there is no realtime extension to hook.
+- `addTagsPermissionScope` / `addTagsHomePageOption` / `addTagSlugDriverLabels`
+  — no per-tag scope on the admin permission grid (the Go layer enforces
+  scopes; the grid cannot grant one), no "Tags" home-page option, and no slug
+  driver labels.
+
+Two adaptations worth recording, because the upstream code would NOT work here
+if copied:
+
+1. **The hero colour.** Upstream's `addTagLabels` writes `view.attrs.style` and
+   mutates `view.attrs.className`. This port's `Hero.view()` renders
+   `style={this.style()}` and `classList('Hero', this.className())`, so the
+   attrs are never consulted — the extension overrides `style()` and
+   `className()` instead.
+2. **`include=tags`.** Upstream pushes `tags,parent` into the list request's
+   `include`. This port's `included` array only builds the resources the CORE
+   knows (users, posts, groups); a tag resource belongs to the plugin's own
+   serialiser. The store is filled by `GET /api/tags` instead, which loads every
+   tag once per page load, and `discussion.tags()` resolves against it. Asking
+   for an include the server cannot answer would be a silent half-answer —
+   which is exactly what an earlier attempt at `filter[tag]` produced.
+
+That last one is the reason `discussion.tags()` is guarded: `Model.hasMany` maps
+a relationship's identifiers through the store WITHOUT dropping the ones that
+have not arrived, so `sortTags` filters falsy entries rather than throwing on
+`position()` and taking the whole list down with it.
+
 ## 16a. The endpoints the admin and forum call that are not routed
 
 The reused Flarum frontend calls a fixed set of endpoints, and an

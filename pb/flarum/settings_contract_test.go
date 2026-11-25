@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/incurl/riff/pb/flarum/api"
 	"github.com/incurl/riff/pb/flarum/plugins/gamification"
 	"github.com/incurl/riff/pb/flarum/plugins/likes"
 	"github.com/incurl/riff/pb/flarum/plugins/tags"
@@ -250,6 +251,12 @@ func TestForum_TheAdminBundlesCarryNoDeadSettings(t *testing.T) {
 		gamification.SettingAllowSelfVotes: true,
 		gamification.SettingDefaultMetric:  true,
 		gamification.SettingDefaultPeriod:  true,
+		// The tags extension's `allow_tag_change` is upstream's FLAT key, not a
+		// `flarum-tags.`-prefixed one, because the server reads it by that name
+		// (`api.AllowTagChangeSetting`) and the admin payload publishes it there.
+		// Naming the CONSTANT rather than spelling the string means this entry
+		// tracks the reader: change the reader's key and this map changes with it.
+		api.AllowTagChangeSetting: true,
 	}
 
 	// The setting key as it appears in a bundle: a quoted string.

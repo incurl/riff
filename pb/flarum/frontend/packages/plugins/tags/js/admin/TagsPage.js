@@ -208,6 +208,32 @@ export default class TagsPage extends ExtensionPage {
       100
     );
 
+    // Upstream's `addTagChangePermission` puts this on the PERMISSION GRID,
+    // as a `<SettingDropdown key="allow_tag_change">`. This port has no tag
+    // section on the grid, so the control lives on the extension's own page —
+    // but the KEY is upstream's flat one, not a `flarum-tags.`-prefixed key,
+    // because the server reads the flat name (`api.go`'s
+    // `allowTagChangeSetting`) and the admin payload publishes it there too.
+    //
+    // The options and their values are upstream's. The default is "0"
+    // (never), which is also the server's fallback: an unset setting permits
+    // nothing, and a setting that silently permitted everything would be a
+    // hole.
+    items.add(
+      'tag-change',
+      <div className="Form-group">
+        <label>Allow tag change</label>
+        <div className="helpText">When an author may still change a discussion’s tags after posting it.</div>
+        <select className="FormControl TagSettings-select" bidi={this.setting('allow_tag_change', '0')}>
+          <option value="-1">Allow indefinitely</option>
+          <option value="10">Allow for 10 minutes</option>
+          <option value="reply">Allow until the first reply</option>
+          <option value="0">Never</option>
+        </select>
+      </div>,
+      90
+    );
+
     items.add(
       'requirements-secondary',
       <div className="Form-group">

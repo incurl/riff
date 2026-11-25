@@ -18,9 +18,18 @@ func (s *Server) listDiscussionsHandler(e *core.RequestEvent) error {
 	limit, offset := pageParams(e)
 	query := e.Request.URL.Query()
 
+	// `filter[tag]` arrives as a SLUG from the frontend (the tag page's URL is
+	// `/t/<slug>`, and upstream resolves slugs) and as a record ID from an API
+	// client. Both are accepted; an unknown value filters to nothing, which is
+	// what a bogus id has always done.
+	tagID, err := s.resolveTagFilter(query.Get("filter[tag]"))
+	if err != nil {
+		return fail(e, errInternal("The discussions could not be loaded.", err))
+	}
+
 	filter := repository.DiscussionFilter{
 		UserID: query.Get("filter[user]"),
-		TagID:  query.Get("filter[tag]"),
+		TagID:  tagID,
 		State:  query.Get("filter[state]"),
 		Search: strings.TrimSpace(query.Get("filter[q]")),
 		// The sort is upstream's: a bare name sorts ascending, a leading
@@ -44,6 +53,28 @@ func (s *Server) listDiscussionsHandler(e *core.RequestEvent) error {
 
 	meta, links := pagination(e, total, limit, offset)
 	return s.writeDocumentWithIncluded(e, resources, meta, links)
+}
+
+// resolveTagFilter turns `filter[tag]` into a tag record id.
+//
+// A value that already IS an id (or that matches no slug) is returned
+// unchanged, so the two spellings are one code path: the repository always
+// filters by id.
+func (s *Server) resolveTagFilter(value string) (string, error) {
+	if value == "" {
+		return "", nil
+	}
+
+	id, err := s.repo.TagIDBySlug(value)
+	if err != nil {
+		return "", err
+	}
+
+	if id != "" {
+		return id, nil
+	}
+
+	return value, nil
 }
 
 // writeDocumentWithIncluded writes a document and the resources its
