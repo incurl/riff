@@ -190,32 +190,49 @@ func TestForum_TheAdminBundlesRegisterTheUpstreamSettings(t *testing.T) {
 	for _, tc := range []struct {
 		plugin   string
 		settings []string
+		// page names the file the settings live in when the plugin
+		// registers a CUSTOM page. The admin application renders a
+		// custom page INSTEAD of the plain settings list, so the
+		// form is in the page and not in the bundle.
+		page string
 	}{
-		{"likes", []string{likes.SettingLikeOwnPost}},
-		{"mentions", []string{mentions.SettingAllowUsernameFormat}},
-		{"tags", []string{
-			tags.SettingMinPrimaryTags,
-			tags.SettingMaxPrimaryTags,
-			tags.SettingMinSecondaryTags,
-			tags.SettingMaxSecondaryTags,
-		}},
-		{"gamification", []string{
+		{plugin: "likes", settings: []string{likes.SettingLikeOwnPost}},
+		{plugin: "mentions", settings: []string{mentions.SettingAllowUsernameFormat}},
+		{
+			plugin: "tags",
+			settings: []string{
+				tags.SettingMinPrimaryTags,
+				tags.SettingMaxPrimaryTags,
+				tags.SettingMinSecondaryTags,
+				tags.SettingMaxSecondaryTags,
+			},
+			page: "admin/TagsPage.js",
+		},
+		{plugin: "gamification", settings: []string{
 			gamification.SettingAllowSelfVotes,
 			gamification.SettingDefaultMetric,
 			gamification.SettingDefaultPeriod,
 		}},
 	} {
+		settingsFile := "js/admin.js"
+		if tc.page != "" {
+			settingsFile = "js/" + tc.page
+		}
+
 		source := readVendoredFrontendFile(t,
-			filepath.Join("pb/flarum/frontend/packages/plugins", tc.plugin, "js/admin.js"))
+			filepath.Join("pb/flarum/frontend/packages/plugins", tc.plugin, settingsFile))
 
 		for _, key := range tc.settings {
 			require.Contains(t, source, key,
-				"the %s admin bundle must register the setting %q", tc.plugin, key)
+				"the %s admin form must register the setting %q", tc.plugin, key)
 		}
 
 		// The bundle must use the admin application's own vocabulary,
 		// or the form renders the wrong control.
-		require.Contains(t, source, "Extend.Admin()",
+		bundle := readVendoredFrontendFile(t,
+			filepath.Join("pb/flarum/frontend/packages/plugins", tc.plugin, "js/admin.js"))
+
+		require.Contains(t, bundle, "Extend.Admin()",
 			"the %s admin bundle must register through Extend.Admin()", tc.plugin)
 	}
 }
@@ -241,15 +258,33 @@ func TestForum_TheAdminBundlesCarryNoDeadSettings(t *testing.T) {
 	}
 
 	// The setting key as it appears in a bundle: a quoted string.
-	keyPattern := regexp.MustCompile(`setting:\s*'([^']+)'`)
+	//
+	// Two shapes: the registry's `setting: 'key'` (the plain settings
+	// list) and a custom page's `this.setting('key', ...)` (the page's
+	// own settings streams).
+	keyPattern := regexp.MustCompile(`(?:setting:\s*|\.setting\()'([^']+)'`)
 
-	for _, plugin := range []string{"likes", "mentions", "tags", "gamification"} {
-		source := readVendoredFrontendFile(t,
-			filepath.Join("pb/flarum/frontend/packages/plugins", plugin, "js/admin.js"))
+	// The forms each plugin registers: the admin bundle, and the
+	// custom page a plugin may register INSTEAD of the plain settings
+	// list.
+	forms := map[string][]string{
+		"likes":        {"js/admin.js"},
+		"mentions":     {"js/admin.js"},
+		"gamification": {"js/admin.js"},
+		// The tags plugin registers the tag TREE page, and the count
+		// settings live on its second tab.
+		"tags": {"js/admin.js", "js/admin/TagsPage.js"},
+	}
 
-		for _, match := range keyPattern.FindAllStringSubmatch(source, -1) {
-			require.True(t, read[match[1]],
-				"the %s admin bundle registers the setting %q, but nothing reads it", plugin, match[1])
+	for plugin, files := range forms {
+		for _, file := range files {
+			source := readVendoredFrontendFile(t,
+				filepath.Join("pb/flarum/frontend/packages/plugins", plugin, file))
+
+			for _, match := range keyPattern.FindAllStringSubmatch(source, -1) {
+				require.True(t, read[match[1]],
+					"the %s admin form registers the setting %q, but nothing reads it", plugin, match[1])
+			}
 		}
 	}
 }

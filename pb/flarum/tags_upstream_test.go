@@ -493,6 +493,122 @@ func TestTags_TheCountSettingsHonourTheMinimum(t *testing.T) {
 	require.Equal(t, http.StatusCreated, recorder.Code, recorder.Body.String())
 }
 
+// TestTags_TheAdminPageCarriesTheSortMaps pins that the admin payload
+// carries the SORT MAPS.
+//
+// The tags extension page lets an administrator pick a tag's default
+// sort, and upstream lists the choices from `app.data.sortMaps` — so
+// that a sort an extension added can be chosen for a tag without that
+// extension knowing anything about tags.
+//
+// An empty map is not a harmless omission: the dropdown would offer
+// only "No preference", and the operator could not set a default sort
+// at all.
+func TestTags_TheAdminPageCarriesTheSortMaps(t *testing.T) {
+	app, handler := newTestForum(t)
+
+	recorder := do(t, handler, http.MethodGet, "/forum/admin", "", testSuperuser(t, app))
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	payload := bootPayloadOf(t, recorder)
+	require.NotNil(t, payload.Admin, "the admin shell should carry the admin data")
+
+	sorts, ok := payload.SortMaps["discussions"].(map[string]any)
+	require.True(t, ok, "the admin payload should carry the discussion sorts: %#v", payload.SortMaps)
+
+	// The sorts are the forum's own: the URL key maps to the API sort
+	// behind it, which is the shape the forum's `sortMap()` builds.
+	require.Equal(t, "-lastPostedAt", sorts["latest"])
+	require.Equal(t, "-commentCount", sorts["top"])
+	require.Equal(t, "title", sorts["az"])
+}
+
+// TestTags_TheAdminPageCanCreateATag pins that the tag creation the
+// admin page offers works.
+//
+// The page's "Create primary tag" button opens a modal that POSTs to
+// `/api/tags`, so the endpoint is what makes the button real. The
+// tag it creates must be PRIMARY — the button that opened the modal
+// said so, and the server must agree.
+func TestTags_TheAdminPageCanCreateATag(t *testing.T) {
+	app, handler := newTestForum(t)
+
+	admin := testSuperuser(t, app)
+
+	body := `{"data":{"attributes":{"name":"Announcements","slug":"announcements","isPrimary":true}}}`
+
+	recorder := doWithHeaders(t, handler, http.MethodPost, "/forum/api/tags", body, admin,
+		map[string]string{"X-CSRF-Token": "csrf-token"})
+	require.Equal(t, http.StatusCreated, recorder.Code, recorder.Body.String())
+
+	document := map[string]any{}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &document))
+
+	created, ok := document["data"].(map[string]any)
+	require.True(t, ok, "the response must carry a data object")
+
+	attributes, ok := created["attributes"].(map[string]any)
+	require.True(t, ok, "the tag must carry its attributes")
+
+	require.Equal(t, "Announcements", attributes["name"])
+	require.Equal(t, true, attributes["isPrimary"], "the tag must be primary")
+}
+
+// TestTags_TheAdminPageSavesTheCountSettings pins the settings tab's
+// save round-trip.
+//
+// The page's settings streams are saved through the admin surface's
+// `POST /api/settings`, and the settings that land must be the ones
+// the SERVER reads — a number here, because the count rules compare
+// the count against the setting, and a string that does not parse
+// would silently fall back to the default.
+func TestTags_TheAdminPageSavesTheCountSettings(t *testing.T) {
+	app, handler := newTestForum(t)
+
+	admin := testSuperuser(t, app)
+
+	recorder := do(t, handler, http.MethodPost, "/forum/api/settings",
+		`{"flarum-tags.min_primary_tags":1,"flarum-tags.max_primary_tags":3,"flarum-tags.min_secondary_tags":0,"flarum-tags.max_secondary_tags":5}`,
+		sessionCookies(admin[0].Value, admin[1].Value))
+	require.Equal(t, http.StatusNoContent, recorder.Code, recorder.Body.String())
+
+	repo := testRepo(t, app)
+
+	require.Equal(t, "1", settingText(t, repo, tags.SettingMinPrimaryTags))
+	require.Equal(t, "3", settingText(t, repo, tags.SettingMaxPrimaryTags))
+	require.Equal(t, "0", settingText(t, repo, tags.SettingMinSecondaryTags))
+	require.Equal(t, "5", settingText(t, repo, tags.SettingMaxSecondaryTags))
+
+	// The saved maximum is now the one the forum enforces, which is
+	// the whole point of the page: a set of two primary tags is
+	// accepted where the default maximum of one refused it.
+	primary := seedTag(t, app, "Primary", "primary")
+	primaryRecord, err := app.FindRecordById(mustCollection(t, app, "forum_tags"), primary.Id)
+	require.NoError(t, err)
+	primaryRecord.Set("is_primary", true)
+	primaryRecord.Set("position", 0)
+	require.NoError(t, app.Save(primaryRecord))
+
+	second := seedTag(t, app, "Second", "second")
+	secondRecord, err := app.FindRecordById(mustCollection(t, app, "forum_tags"), second.Id)
+	require.NoError(t, err)
+	secondRecord.Set("is_primary", true)
+	secondRecord.Set("position", 1)
+	require.NoError(t, app.Save(secondRecord))
+
+	_, authorCookies := memberSession(t, app, "tag_admin_page")
+
+	// The author may tag their own discussion once the setting permits.
+	setForumSetting(t, app, "allow_tag_change", "-1")
+
+	body := `{"data":{"attributes":{"title":"Two","content":"Hello"},` +
+		`"relationships":{"tags":{"data":[{"type":"tags","id":"` + primary.Id + `"},{"type":"tags","id":"` + second.Id + `"}]}}}}`
+
+	recorder = doWithHeaders(t, handler, http.MethodPost, "/forum/api/discussions", body, authorCookies,
+		map[string]string{"X-CSRF-Token": "csrf-token"})
+	require.Equal(t, http.StatusCreated, recorder.Code, recorder.Body.String())
+}
+
 // TestTags_ThePermissionKeysTranslate pins that upstream's permission
 // names map onto the forum's own, and that a TAG-SCOPED key carries
 // its scope.

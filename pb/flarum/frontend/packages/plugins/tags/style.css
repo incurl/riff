@@ -34,3 +34,115 @@
 .DiscussionListItem-tags {
   display: inline-flex;
 }
+
+/* --- the admin page's tag tree -------------------------------------
+   The rules are upstream's `less/admin/TagsPage.less`, in flat CSS.
+   They are the tree's own layout: the list, the items, the drag
+   placeholder and the range input on the settings tab. */
+
+.TagsContent-list {
+  padding: 20px 0 0;
+}
+
+.TagList,
+.TagList ol {
+  list-style: none;
+  padding: 0;
+  color: var(--muted-color);
+  font-size: 13px;
+  margin-top: 0;
+}
+
+.TagList > li {
+  display: inline-block;
+  max-height: 40px;
+  cursor: move;
+  width: 100%;
+}
+
+.TagList .TagIcon,
+.TagList .icon {
+  margin-right: 10px;
+}
+
+/* The FontAwesome Kit sets --fa-display, which breaks the layout.
+   Only the tag icons are targeted: a button icon has its own fix. */
+.TagList > li .icon {
+  --fa-display: inline-block;
+  display: inline-block !important;
+  line-height: inherit !important;
+}
+
+.TagListItem-info {
+  border-radius: var(--border-radius);
+  padding: 5px;
+}
+
+.TagListItem-info:hover {
+  background: var(--control-bg);
+}
+
+.TagListItem-info .Button {
+  float: right;
+  visibility: hidden;
+  margin: -8px -16px -8px 16px;
+}
+
+li:not(.sortable-dragging) > .TagListItem-info:hover > .Button {
+  visibility: visible;
+}
+
+.TagList--primary {
+  font-size: 16px;
+}
+
+.TagList--primary > .sortable-placeholder {
+  height: 38px;
+  margin-bottom: 10px;
+}
+
+.TagList ol {
+  margin-left: 27px;
+  min-height: 10px;
+  padding: 0;
+}
+
+.TagList ol > :last-child {
+  margin-bottom: 10px;
+}
+
+.sortable-placeholder {
+  border: 2px dashed var(--control-bg);
+  border-radius: var(--border-radius);
+  height: 34px;
+}
+
+.TagList-button {
+  background: none;
+  border: 1px dashed var(--control-bg);
+  height: 40px;
+  margin: auto auto 0 0;
+}
+
+.TagSettings-rangeInput input {
+  width: 80px;
+  display: inline;
+  margin: 0 5px;
+}
+
+.TagSettings-rangeInput input:first-child {
+  margin-left: 0;
+}
+
+.TagSettings-rangeSeparator {
+  margin: 0 4px;
+}
+
+.TagGroup ol > li:not(:first-child) {
+  margin-top: 8px;
+}
+
+/* The delete button sits at the far end of the modal's controls. */
+.EditTagModal-delete {
+  margin-left: auto;
+}

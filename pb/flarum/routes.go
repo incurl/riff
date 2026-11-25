@@ -593,7 +593,7 @@ func (m *Module) adminPayload() *frontend.Admin {
 		FontAwesomeConfig:           map[string]any{},
 		DebugEnabled:                false,
 		ThemeImages:                 map[string]any{},
-		SortMaps:                    map[string]any{},
+		SortMaps:                    adminSortMaps(),
 	}
 }
 
@@ -814,6 +814,31 @@ func adminSettingStringFromJSON(raw []byte) any {
 	}
 
 	return trimmed
+}
+
+// adminSortMaps returns the sort options each resource offers.
+//
+// The admin application reads them as `app.data.sortMaps`, and a
+// plugin's admin page uses them to offer a choice: upstream's tags
+// extension lists a tag's DEFAULT SORT from this map, so that a sort
+// an extension added can be chosen for a tag without that extension
+// knowing anything about tags.
+//
+// The map is keyed by resource, and each entry maps the sort's URL
+// key to the API sort behind it — the same shape the forum's own
+// `DiscussionListState.sortMap()` builds.
+func adminSortMaps() map[string]any {
+	return map[string]any{
+		"discussions": map[string]any{
+			"latest":    "-lastPostedAt",
+			"top":       "-commentCount",
+			"newest":    "-createdAt",
+			"oldest":    "createdAt",
+			"az":        "title",
+			"za":        "-title",
+			"relevance": "",
+		},
+	}
 }
 
 // PluginSettingSchemas returns every plugin's declared settings.

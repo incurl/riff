@@ -296,18 +296,44 @@ so a set of two primary tags was refused even with
 `flarum-tags.max_primary_tags` raised to two — the operator's setting
 did nothing. The rule now matches upstream's.
 
-**The upstream SETTINGS PAGES are not ported.** Upstream's `tags` and
-`gamification` extensions use a CUSTOM admin page — a tag tree, a rank
-editor, an image uploader — rather than the plain settings list, and
-`polls` groups its settings into four fieldsets. This port registers
-the SETTINGS with the plain registry, so the form is the standard
-settings list rather than upstream's bespoke page. The upstream
-`sticky` settings are not exposed at all: `pin_sticky_on_all_discussions`
-and `only_sticky_unread_discussions` gate a query this port does not
-run (the discussion list does not pin sticky discussions to the top),
-and `enable_display_excerpt` needs a `firstPostExcerpt` attribute and
-an `excerptDisplayEnabled` forum attribute, neither of which exists
-here.
+**The TAGS extension page IS the tag tree.** Upstream's `flarum/tags`
+registers a CUSTOM admin page (`Extend.Admin().page(TagsPage)`), and
+the admin application renders a custom page INSTEAD of the plain
+settings list. The page has two tabs: the tag TREE — primary and
+secondary tags, with create buttons and drag-to-reorder — and the
+count settings.
+
+This port carries that page: `TagsPage` and `EditTagModal` live under
+`pb/flarum/frontend/packages/plugins/tags/js/admin/`, and the four
+count settings are on the page's second tab rather than in the plain
+registry. A plugin that registers a custom page must NOT also register
+plain settings: the two would fight over the same page.
+
+TWO FIELDS OF THE MODAL ARE ABSENT, because the server has no
+counterpart: the icon IMAGE (upstream's `IconImageInput`, which uploads
+a picture) and the tag's PARENT (upstream picks one in the modal). The
+port's tag resource carries no icon-image attributes, so the input
+would upload to an endpoint that does not exist.
+
+**The gamification and polls SETTINGS PAGES are not ported.** Upstream's
+`fof/gamification` uses a custom page with a rank editor and an image
+uploader, and `fof/polls` groups its settings into four fieldsets.
+Those two plugins register their settings with the plain registry, so
+the form is the standard settings list rather than upstream's bespoke
+page. The upstream `sticky` settings are not exposed at all:
+`pin_sticky_on_all_discussions` and `only_sticky_unread_discussions`
+gate a query this port does not run (the discussion list does not pin
+sticky discussions to the top), and `enable_display_excerpt` needs a
+`firstPostExcerpt` attribute and an `excerptDisplayEnabled` forum
+attribute, neither of which exists here.
+
+**The admin payload carries the SORT MAPS.** The tags page lists a
+tag's DEFAULT SORT from `app.data.sortMaps`, so that a sort an
+extension added can be chosen for a tag without that extension knowing
+anything about tags. The map is keyed by resource and maps the sort's
+URL key to the API sort behind it — the same shape the forum's own
+`DiscussionListState.sortMap()` builds. An empty map is not a harmless
+omission: the dropdown would offer only "No preference".
 
 **The settings are STRINGS in the admin payload.** Upstream's settings
 column is TEXT, so `Settings::all()` hands the admin application a map

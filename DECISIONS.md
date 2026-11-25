@@ -5,6 +5,42 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## AN EXTENSION PAGE IS A PAGE, NOT A SETTINGS LIST (2026-11-25)
+
+The tags plugin had no page to create a tag from: its admin bundle
+registered four number fields and nothing else, so the extension page
+offered the count settings and no way to make a tag at all.
+
+**UPSTREAM'S `flarum/tags` REGISTERS A CUSTOM PAGE**, and the admin
+application renders a custom page INSTEAD of the plain settings list —
+`ExtensionPageResolver.onmatch` asks the registry for a page and
+returns it in place of the default one. So the settings and the tree
+are the SAME page, with the tree on one tab and the settings on
+another, and a plugin that registers a custom page must NOT also
+register plain settings: the two would fight over the same page.
+
+**THE PAGE IS UPSTREAM'S, AND SO IS THE MODAL.** `TagsPage` and
+`EditTagModal` live under the plugin's `js/admin/`, and the four count
+settings are on the page's second tab. The page loads the tag list on
+demand (the admin payload does not carry the tags) and drags to
+reorder through the core's own `loadSortable`, so the sortable
+library is only fetched when an administrator opens the page.
+
+**TWO FIELDS OF THE MODAL ARE ABSENT, BECAUSE THE SERVER HAS NO
+COUNTERPART.** Upstream's modal uploads an icon IMAGE and picks the
+tag's PARENT. The port's tag resource carries no icon-image
+attributes, so the input would upload to an endpoint that does not
+exist; and the parent is not offered.
+
+**THE ADMIN PAYLOAD MUST CARRY THE SORT MAPS.** The page lists a
+tag's DEFAULT SORT from `app.data.sortMaps`, so that a sort an
+extension added can be chosen for a tag without that extension knowing
+anything about tags. The map was EMPTY, which is not a harmless
+omission: the dropdown offered only "No preference", so the operator
+could not set a default sort at all. It is now keyed by resource and
+maps the sort's URL key to the API sort behind it — the same shape the
+forum's own `DiscussionListState.sortMap()` builds.
+
 ## THE COUNT RULES ARE A RANGE, NOT AN EXACT COUNT (2026-11-25)
 
 Two bugs, found while auditing the tag plugin's settings against

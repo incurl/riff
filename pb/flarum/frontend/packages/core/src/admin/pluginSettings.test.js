@@ -7,6 +7,14 @@
  * is the bundle's job. So a declared setting with no bundle is a
  * setting the operator cannot reach.
  *
+ * A plugin may also register a CUSTOM PAGE (`Extend.Admin().page(...)`),
+ * and then the form lives in that page instead: upstream's `flarum/tags`
+ * does exactly that, because its extension page is the tag TREE with
+ * the settings on a second tab. The admin application renders a custom
+ * page INSTEAD of the plain settings list, so a plugin that registers
+ * one must not also register plain settings — the two would fight over
+ * the same page.
+ *
  * The test reads the bundle SOURCES, because the contract is the key
  * the bundle registers, and the built bundle is not committed.
  *
@@ -17,22 +25,36 @@
 const fs = require('fs');
 const path = require('path');
 
-/** The plugins that expose settings, and the upstream keys each one edits. */
+/**
+ * The plugins that expose settings, and the upstream keys each one edits.
+ *
+ * `page` names the file the settings live in when the plugin registers
+ * a custom page instead of the plain settings list.
+ */
 const PLUGIN_SETTINGS = {
-  likes: ['flarum-likes.like_own_post'],
-  mentions: ['flarum-mentions.allow_username_format'],
-  tags: ['flarum-tags.min_primary_tags', 'flarum-tags.max_primary_tags', 'flarum-tags.min_secondary_tags', 'flarum-tags.max_secondary_tags'],
-  gamification: ['fof-gamification.allowSelfVotes', 'fof-gamification.defaultMetric', 'fof-gamification.defaultPeriod'],
+  likes: { keys: ['flarum-likes.like_own_post'] },
+  mentions: { keys: ['flarum-mentions.allow_username_format'] },
+  gamification: { keys: ['fof-gamification.allowSelfVotes', 'fof-gamification.defaultMetric', 'fof-gamification.defaultPeriod'] },
+  tags: {
+    keys: ['flarum-tags.min_primary_tags', 'flarum-tags.max_primary_tags', 'flarum-tags.min_secondary_tags', 'flarum-tags.max_secondary_tags'],
+    page: 'admin/TagsPage.js',
+  },
 };
 
 /** The plugins directory, relative to this test. */
 const PLUGINS_DIR = path.resolve(__dirname, '..', '..', '..', 'plugins');
 
-/** The setting key as it appears in a bundle: a quoted string. */
-const SETTING_PATTERN = /setting:\s*'([^']+)'/g;
+/**
+ * The setting key as it appears in a bundle.
+ *
+ * Two shapes: the registry's `setting: 'key'` (the plain settings
+ * list) and a custom page's `this.setting('key', ...)` (the page's
+ * own settings streams).
+ */
+const SETTING_PATTERN = /(?:setting:\s*|\.setting\()'([^']+)'/g;
 
 /**
- * The settings a bundle registers.
+ * The settings a source registers.
  */
 function registeredSettings(source) {
   const keys = [];
@@ -46,24 +68,52 @@ function registeredSettings(source) {
   return keys;
 }
 
-describe("the plugins' admin bundles", () => {
-  it.each(Object.entries(PLUGIN_SETTINGS))('%s registers its upstream settings', (plugin, keys) => {
-    const source = fs.readFileSync(path.join(PLUGINS_DIR, plugin, 'js', 'admin.js'), 'utf8');
+/**
+ * The source a plugin's settings live in: the admin bundle, or the
+ * custom page it registers.
+ */
+function settingsSource(plugin, config) {
+  const base = path.join(PLUGINS_DIR, plugin, 'js');
 
-    for (const key of keys) {
+  return config.page ? fs.readFileSync(path.join(base, config.page), 'utf8') : fs.readFileSync(path.join(base, 'admin.js'), 'utf8');
+}
+
+describe("the plugins' admin bundles", () => {
+  it.each(Object.entries(PLUGIN_SETTINGS))('%s registers its upstream settings', (plugin, config) => {
+    const source = settingsSource(plugin, config);
+
+    for (const key of config.keys) {
       expect(source).toContain(key);
     }
-
-    // The bundle must register through the admin application's own
-    // vocabulary, or the form renders the wrong control.
-    expect(source).toContain('Extend.Admin()');
   });
 
-  it.each(Object.entries(PLUGIN_SETTINGS))('%s registers nothing else', (plugin, keys) => {
-    const source = fs.readFileSync(path.join(PLUGINS_DIR, plugin, 'js', 'admin.js'), 'utf8');
+  it.each(Object.entries(PLUGIN_SETTINGS))('%s registers nothing else', (plugin, config) => {
+    const source = settingsSource(plugin, config);
 
     // A setting nobody reads is a control that changes nothing, and
     // the operator turns it and the forum does not move.
-    expect(registeredSettings(source).sort()).toEqual([...keys].sort());
+    expect(registeredSettings(source).sort()).toEqual([...config.keys].sort());
+  });
+
+  it.each(Object.entries(PLUGIN_SETTINGS))('%s registers through the admin vocabulary', (plugin) => {
+    const bundle = fs.readFileSync(path.join(PLUGINS_DIR, plugin, 'js', 'admin.js'), 'utf8');
+
+    // The bundle must register through the admin application's own
+    // vocabulary, or the form renders the wrong control.
+    expect(bundle).toContain('Extend.Admin()');
+  });
+
+  it('the tags bundle registers the tag tree page', () => {
+    const bundle = fs.readFileSync(path.join(PLUGINS_DIR, 'tags', 'js', 'admin.js'), 'utf8');
+
+    // Upstream's extension page is the tag TREE, so the plugin
+    // registers a custom page. The admin application renders it
+    // instead of the plain settings list — which is why the settings
+    // live in the page and not in the bundle.
+    expect(bundle).toContain('.page(');
+
+    // The store needs to know the `tags` type, or the page's tag list
+    // is refused: `pushObject` throws for an unregistered type.
+    expect(bundle).toContain("add('tags'");
   });
 });
