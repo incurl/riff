@@ -75,7 +75,25 @@ describeIfBuilt('the first-party plugin bundles', () => {
   beforeEach(() => {
     // The core bundle registers its modules on `flarum.reg` and the
     // plugin bundles assign themselves onto `flarum.extensions`.
-    (global as any).flarum = { extensions: {}, reg: { all: () => [] } };
+    //
+    // The registry's two extra methods are what a plugin needs when it extends
+    // a LAZY-CHUNK component by path (`extend('flarum/forum/components/NotificationGrid',
+    // …)`): `namespaceAndIdFromPath` splits the path and `onLoad` defers the
+    // registration until the chunk is fetched. The chunk is never fetched here,
+    // so the deferral simply never resolves — which is the truthful shape for
+    // a harness with no chunk loader.
+    (global as any).flarum = {
+      extensions: {},
+      reg: {
+        all: () => [],
+        namespaceAndIdFromPath: (path: string) => {
+          const [namespace, ...rest] = path.split('/');
+
+          return [namespace === 'flarum' ? 'core' : namespace, rest.join('/')];
+        },
+        onLoad: () => {},
+      },
+    };
 
     // The extenders are handed `globalThis` as their application, so the
     // harness supplies the surface the first-party bundles actually touch: a
@@ -130,32 +148,67 @@ describeIfBuilt('the first-party plugin bundles', () => {
   });
 
   it('run their extenders when the app boots the extensions', () => {
-    evaluateBundle(coreBundle);
-
-    for (const bundle of pluginBundles) {
-      evaluateBundle(bundle.file);
-    }
-
-    const booted: string[] = [];
-
-    (global as any).app.bootExtensions = (extensions: Record<string, any>) => {
-      Object.keys(extensions).forEach((name) => {
-        const extension = extensions[name];
-
-        if (!extension.extend) return;
-
-        for (const extender of extension.extend.flat(Infinity)) {
-          booted.push(name);
-          extender.extend(globalThis, { name, exports: extension });
-        }
-      });
-    };
-
-    (global as any).app.bootExtensions((global as any).flarum.extensions);
+    const booted = bootExtensions();
 
     // Every plugin contributed its extender.
     for (const bundle of pluginBundles) {
       expect(booted).toContain(bundle.id);
     }
   });
+
+  /**
+   * The model methods the likes UI CALLS.
+   *
+   * A missing `attribute('name')` registration is invisible in a bundle that
+   * loads cleanly: the accessor does not exist on the model, the call throws
+   * inside the `extend` callback, and `extend()` swallows it (it reports once
+   * through `app.handleErrorOnce`). The symptom is not a wrong count — it is
+   * a like button that never renders, which is how `isLiked` shipped missing
+   * while the Go side was sending it.
+   */
+  it('register the model methods the likes UI calls', () => {
+    bootExtensions();
+
+    // The registry is the core bundle's own (`flarum.reg`), which is what the
+    // extension bundles resolve their externals through.
+    const reg = (global as any).flarum.reg;
+    const Post = reg.get('core', 'common/models/Post');
+
+    expect(Post).toBeDefined();
+
+    for (const method of ['isLiked', 'likesCount', 'canLike', 'likes']) {
+      expect(typeof Post.prototype[method]).toBe('function');
+    }
+  });
 });
+
+/**
+ * Boot the loaded extensions against the harness app, and return the ids
+ * whose extenders ran.
+ */
+function bootExtensions(): string[] {
+  evaluateBundle(coreBundle);
+
+  for (const bundle of pluginBundles) {
+    evaluateBundle(bundle.file);
+  }
+
+  const booted: string[] = [];
+
+  (global as any).app.bootExtensions = (extensions: Record<string, any>) => {
+    Object.keys(extensions).forEach((name) => {
+      const extension = extensions[name];
+
+      if (!extension.extend) return;
+
+      for (const extender of extension.extend.flat(Infinity)) {
+        booted.push(name);
+        extender.extend(globalThis, { name, exports: extension });
+      }
+    });
+  };
+
+  (global as any).app.bootExtensions((global as any).flarum.extensions);
+
+  return booted;
+}

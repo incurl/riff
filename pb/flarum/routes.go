@@ -887,6 +887,40 @@ func (m *Module) PluginSettingSchemas() []plugin.SettingsSchema {
 	return schemas
 }
 
+// NotificationTypes returns the notification kinds the plugins send.
+//
+// The forum publishes a preference for every declared (kind, channel) pair,
+// which is what the settings page renders a checkbox for — so a kind nobody
+// declares is a kind a reader cannot switch off.
+func (m *Module) NotificationTypes() []plugin.NotificationType {
+	var types []plugin.NotificationType
+
+	for _, extenders := range m.plugins.PluginExtenders() {
+		types = append(types, extenders.NotificationTypes()...)
+	}
+
+	return types
+}
+
+// notificationDefaults turns the declared kinds into preference keys.
+//
+// It is upstream's `Notification::getDefaults()`: every registered blueprint
+// × every channel it supports, enabled. The settings page reads them merged
+// under the reader's own answers, and the write path treats a missing key as
+// enabled — so an undeclared kind still notifies, it just cannot be turned
+// off.
+func (m *Module) notificationDefaults() map[string]bool {
+	defaults := map[string]bool{}
+
+	for _, notificationType := range m.NotificationTypes() {
+		for _, channel := range notificationType.Channels {
+			defaults[repository.NotificationPreferenceKey(notificationType.Type, channel)] = true
+		}
+	}
+
+	return defaults
+}
+
 // adminPermissions returns the granted permissions, per permission.
 //
 // It is upstream's `Permission::map()`

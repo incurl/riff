@@ -151,10 +151,17 @@ export const extend = [
   // The post carries the likes, the count and the flag.
   //
   // They have to be registered as MODEL METHODS: the server sends
-  // them as plain attributes, and `post.likesCount()` is a method
+  // them as plain attributes, and `post.isLiked()` is a method
   // call — without the registration the method does not exist on the
   // model and the render throws.
-  new Extend.Model(Post).hasMany('likes').attribute('likesCount').attribute('canLike'),
+  //
+  // `isLiked` is the one that is easy to forget, because the button also
+  // reads `likesCount` and `canLike` and the Go side sends all three. It
+  // was missing, and the consequence was not a wrong count: `post.isLiked`
+  // was `undefined`, the call threw inside the `extend` callback, and
+  // `extend()` swallows that (it reports it once through
+  // `app.handleErrorOnce`) — so the like button never rendered at all.
+  new Extend.Model(Post).hasMany('likes').attribute('isLiked').attribute('likesCount').attribute('canLike'),
 
   {
     extend() {
@@ -164,6 +171,32 @@ export const extend = [
         if (!post || post.contentType() !== 'comment') return;
 
         items.add('like', likeButton(post), 10);
+      });
+
+      // The row on the settings page's notification grid.
+      //
+      // Without it the like notification arrives and the reader has no
+      // control over it — and no way to learn it exists. The key the grid
+      // writes is `notify_postLiked_alert`, which the server publishes in
+      // the user's `preferences` and honours when it writes the
+      // notification, so the checkbox and the write path agree.
+      //
+      // The component is named by PATH, not imported: `NotificationGrid` lives
+      // in a lazy chunk (`flarum.reg.addChunkModule("298", "3711", "core",
+      // "forum/components/NotificationGrid")`), so a static import would
+      // resolve to `undefined` at bundle-evaluation time and the `extend` call
+      // would throw. Naming the path defers the registration through
+      // `flarum.reg.onLoad` until the chunk lands — which is what upstream's
+      // own `extend('flarum/forum/components/NotificationGrid', ...)` does.
+      //
+      // The label is untranslated English: this port ships no locale bundle
+      // for the extension, and a missing key renders literally.
+      extendMethod('flarum/forum/components/NotificationGrid', 'notificationTypes', function (items) {
+        items.add('postLiked', {
+          name: 'postLiked',
+          icon: 'far fa-thumbs-up',
+          label: 'Notify me when someone likes my post',
+        });
       });
     },
   },

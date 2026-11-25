@@ -93,6 +93,32 @@ type SettingField struct {
 	Options []string
 }
 
+// NotificationType is a notification kind a plugin SENDS.
+//
+// A plugin declares it for the same reason it declares the settings it
+// reads: the forum publishes a notification preference for every declared
+// kind (`notify_<kind>_<channel>`), and a kind nobody declares is a kind a
+// reader cannot switch off. Upstream's equivalent is the notification
+// blueprint registered through `Extend\Notification()`
+// (`flarum/likes`: `->type(PostLikedBlueprint::class, ['alert'])`), whose
+// `Notification::getDefaults()` call produces the same keys.
+//
+// The kind must be one the `forum_notifications` collection's `type` select
+// accepts: the collection refuses a value it does not list, so a kind
+// declared here and missing there is a notification write that fails.
+type NotificationType struct {
+	// Type is the kind stored in the notifications table, e.g. "postLiked".
+	Type string
+	// Channels are the notification drivers the kind uses, e.g. "alert".
+	//
+	// Only a channel the forum actually DELIVERS should be listed: the
+	// settings page renders a checkbox per (kind, driver) pair and
+	// disables the ones the reader has no preference for, so declaring
+	// "email" for a kind the forum never emails would show a checkbox
+	// that toggles nothing.
+	Channels []string
+}
+
 // AttributeContributor contributes an attribute to a JSON:API resource.
 //
 // This is how a plugin exposes a field on a core resource without the
@@ -303,6 +329,8 @@ type Extenders struct {
 	assets []AssetBundle
 	// locales collects the plugin's language-pack declarations.
 	locales []LocaleBundle
+	// notificationTypes collects the notification kinds the plugins send.
+	notificationTypes []NotificationType
 }
 
 // NameResolver resolves logical model names to physical collection names.
@@ -418,6 +446,11 @@ func (e *Extenders) AddLocale(bundle LocaleBundle) {
 	e.locales = append(e.locales, bundle)
 }
 
+// AddNotificationType declares a notification kind the plugin sends.
+func (e *Extenders) AddNotificationType(notificationType NotificationType) {
+	e.notificationTypes = append(e.notificationTypes, notificationType)
+}
+
 // Routes returns the declared routes.
 func (e *Extenders) Routes() []RouteDef { return e.routes }
 
@@ -445,6 +478,9 @@ func (e *Extenders) Assets() []AssetBundle { return e.assets }
 
 // Locales returns the declared language packs.
 func (e *Extenders) Locales() []LocaleBundle { return e.locales }
+
+// NotificationTypes returns the declared notification kinds.
+func (e *Extenders) NotificationTypes() []NotificationType { return e.notificationTypes }
 
 // Migrate runs a plugin's migrations.
 //

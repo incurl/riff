@@ -128,6 +128,20 @@ func (s *Server) userResourceWithGroups(actorID string, user *domain.User, group
 		groups = user.Groups
 	}
 
+	// The preferences are the account's OWN, and nobody else's: upstream
+	// makes the field visible only to the caller
+	// (`UserResource` → `->visible(fn ($user, $context) => $context->getActor()->id === $user->id)`),
+	// and the settings page is the only reader.
+	//
+	// They carry the forum's notification DEFAULTS merged under the stored
+	// ones: the settings page renders a checkbox per preference key and
+	// disables the ones the map does not name, so an account that never
+	// touched a preference would otherwise see a grid of dead controls.
+	preferences := map[string]any{}
+	if actorID != "" && actorID == user.ID {
+		preferences = s.repo.NotificationPreferences(user.ID)
+	}
+
 	attributes := map[string]any{
 		"username":                user.Username,
 		"displayName":             user.DisplayName,
@@ -141,7 +155,7 @@ func (s *Server) userResourceWithGroups(actorID string, user *domain.User, group
 		"commentCount":            user.CommentCount,
 		"unreadNotificationCount": user.UnreadNotificationCount,
 		"newNotificationCount":    user.UnreadNotificationCount,
-		"preferences":             map[string]any{},
+		"preferences":             preferences,
 		"canEdit":                 false,
 		"canEditAvatar":           false,
 		"canEditGroups":           false,

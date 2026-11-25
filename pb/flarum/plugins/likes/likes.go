@@ -169,15 +169,37 @@ func (p *Plugin) Register(_ context.Context, ext *plugin.Extenders) error {
 
 	// The like toggle lives on its own route, because the frontend's
 	// like button posts to it rather than patching the post.
+	//
+	// It is registered for BOTH verbs and resolves the effective method
+	// itself. PocketBase bakes the method into the route pattern, and the
+	// frame's frontend rewrites every DELETE into a POST carrying
+	// `X-HTTP-Method-Override: DELETE` — so a DELETE-only route is
+	// unreachable from the SPA, and a POST-only one cannot unlike. The
+	// rewrite lands on the POST pattern, which is why the POST half has to
+	// read the header back.
 	ext.AddRoute(plugin.RouteDef{
 		Method:  "POST",
 		Path:    "/api/posts/{id}/like",
-		Handler: p.likeHandler,
+		Handler: p.toggleHandler,
 	})
 	ext.AddRoute(plugin.RouteDef{
 		Method:  "DELETE",
 		Path:    "/api/posts/{id}/like",
-		Handler: p.unlikeHandler,
+		Handler: p.toggleHandler,
+	})
+
+	// --- the notification kind ------------------------------------------
+	// Declared so the settings page offers a preference for it. A kind a
+	// plugin sends and does not declare is a notification the reader cannot
+	// switch off, while the settings page shows them nothing at all.
+	//
+	// "alert" is upstream's only channel for this blueprint
+	// (`PostLikedBlueprint implements AlertableInterface`): the forum does
+	// not email a like, so an `email` preference would be a checkbox that
+	// toggles nothing.
+	ext.AddNotificationType(plugin.NotificationType{
+		Type:     NotificationType,
+		Channels: []string{"alert"},
 	})
 
 	// --- the permission key --------------------------------------------

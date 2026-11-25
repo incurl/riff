@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/incurl/riff/pb/flarum/domain"
+	"github.com/incurl/riff/pb/flarum/repository"
 )
 
 // The likes plugin against upstream `flarum/likes`.
@@ -229,7 +230,7 @@ func TestLikes_ThePermissionKeyTranslates(t *testing.T) {
 	require.Equal(t, "discussion.likePosts", domain.UpstreamPermissionKey(domain.PermissionLikePost))
 }
 
-// postAttributes fetches a post and returns its attributes.
+// likePostAttributes fetches a post and returns its attributes.
 func likePostAttributes(t *testing.T, handler http.Handler, postID string, cookies []*http.Cookie) map[string]any {
 	t.Helper()
 
@@ -315,4 +316,113 @@ func removeLike(t *testing.T, app core.App, postID, userID string) {
 	}
 
 	require.NoError(t, app.Delete(record))
+}
+
+// TestLikes_TheUnlikeWorksThroughTheMethodOverride pins the route the way the
+// SPA reaches it.
+//
+// The frame's frontend rewrites every method other than GET and POST into a
+// POST carrying `X-HTTP-Method-Override`, and PocketBase bakes the method into
+// the route pattern — so `DELETE /api/posts/{id}/like` is unreachable from the
+// browser. The route answered that rewrite with the LIKE handler, which is
+// idempotent: the button could like and could never unlike, and the response
+// said 200 both times.
+func TestLikes_TheUnlikeWorksThroughTheMethodOverride(t *testing.T) {
+	app, handler := newTestForum(t)
+
+	author, _ := memberSession(t, app, "likes_override_author")
+	_, postID := seedDiscussionWithAuthor(t, app, author.Id, "Likeable", "Like me")
+
+	_, likerCookies := memberSession(t, app, "likes_override_liker")
+	csrf := map[string]string{"X-CSRF-Token": "csrf-token"}
+
+	override := map[string]string{
+		"X-CSRF-Token":           "csrf-token",
+		"X-HTTP-Method-Override": http.MethodDelete,
+	}
+
+	// A plain POST likes.
+	recorder := doWithHeaders(t, handler, http.MethodPost, "/forum/api/posts/"+postID+"/like", "{}", likerCookies, csrf)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	require.Equal(t, true, likePostAttributes(t, handler, postID, likerCookies)["isLiked"], "the post must be liked")
+
+	// The SPA's unlike: POST + override.
+	recorder = doWithHeaders(t, handler, http.MethodPost, "/forum/api/posts/"+postID+"/like", "{}", likerCookies, override)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	require.Equal(t, false, likePostAttributes(t, handler, postID, likerCookies)["isLiked"],
+		"the override must UNLIKE: the frontend never sends a real DELETE")
+
+	// A real DELETE still works, for a client that can send one.
+	recorder = doWithHeaders(t, handler, http.MethodPost, "/forum/api/posts/"+postID+"/like", "{}", likerCookies, csrf)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	recorder = doWithHeaders(t, handler, http.MethodDelete, "/forum/api/posts/"+postID+"/like", "", likerCookies, csrf)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	require.Equal(t, false, likePostAttributes(t, handler, postID, likerCookies)["isLiked"], "a real DELETE must unlike too")
+}
+
+// TestLikes_TheNotificationPreferenceIsPublishedToItsOwner pins that the
+// settings page has a preference to toggle.
+//
+// The grid renders a checkbox per (kind, driver) pair and DISABLES the ones
+// the user's `preferences` map does not name, so a key the server never
+// publishes is a dead control. Upstream exposes `preferences` to the account
+// itself only.
+func TestLikes_TheNotificationPreferenceIsPublishedToItsOwner(t *testing.T) {
+	app, handler := newTestForum(t)
+
+	owner, ownerCookies := memberSession(t, app, "likes_pref_owner")
+	_, otherCookies := memberSession(t, app, "likes_pref_other")
+
+	attributes := userAttributes(t, handler, owner.Id, ownerCookies)
+	preferences, ok := attributes["preferences"].(map[string]any)
+	require.True(t, ok, "the user resource must carry a preferences map")
+	require.Equal(t, true, preferences["notify_postLiked_alert"],
+		"the like notification's preference must default to on")
+
+	// Somebody else's preferences are not exposed.
+	require.Empty(t, userAttributes(t, handler, owner.Id, otherCookies)["preferences"],
+		"preferences belong to the account itself")
+}
+
+// TestLikes_TheNotificationHonoursThePreference pins the other half: the
+// checkbox has to change what happens.
+//
+// A preference the reader turns off is read where the notification is
+// WRITTEN (`CreateNotification`), so the kind cannot arrive through some
+// other producer that forgot to ask.
+func TestLikes_TheNotificationHonoursThePreference(t *testing.T) {
+	app, handler := newTestForum(t)
+
+	author, authorCookies := memberSession(t, app, "likes_pref_author")
+	_, postID := seedDiscussionWithAuthor(t, app, author.Id, "Likeable", "Like me")
+	_, likerCookies := memberSession(t, app, "likes_pref_liker")
+
+	repo := testRepo(t, app)
+	require.NoError(t, repo.SaveUserProfile(&repository.UserProfile{
+		UserID: author.Id,
+		// A stored `false` beats the default.
+		Preferences: map[string]any{repository.NotificationPreferenceKey("postLiked", "alert"): false},
+	}))
+
+	recorder := doWithHeaders(t, handler, http.MethodPost, "/forum/api/posts/"+postID+"/like", "{}",
+		likerCookies, map[string]string{"X-CSRF-Token": "csrf-token"})
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	require.Empty(t, listNotifications(t, handler, authorCookies),
+		"a reader who turned the kind off must not be notified")
+
+	// Turning it back on is enough: the like itself is untouched.
+	require.NoError(t, repo.SaveUserProfile(&repository.UserProfile{
+		UserID:      author.Id,
+		Preferences: map[string]any{repository.NotificationPreferenceKey("postLiked", "alert"): true},
+	}))
+
+	removeLike(t, app, postID, author.Id)
+
+	recorder = doWithHeaders(t, handler, http.MethodPost, "/forum/api/posts/"+postID+"/like", "{}",
+		likerCookies, map[string]string{"X-CSRF-Token": "csrf-token"})
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	require.Len(t, listNotifications(t, handler, authorCookies), 1, "the preference must be re-read, not cached")
 }

@@ -35,6 +35,15 @@ type Repository struct {
 	app core.App
 	// registry resolves logical names to physical collections.
 	registry *Registry
+	// notificationDefaults holds the notification preferences a reader
+	// starts with, keyed `notify_<kind>_<channel>`.
+	//
+	// It is set once, after the plugins load: a plugin is what declares a
+	// notification kind, and the defaults are what the settings page offers
+	// a checkbox for. A kind missing here is a kind whose row on that page
+	// renders disabled — the checkbox asks for a preference the reader has
+	// no entry for.
+	notificationDefaults map[string]bool
 }
 
 // New returns a repository.

@@ -459,6 +459,15 @@ func (m *Module) boot(ctx context.Context) error {
 				})
 		}
 	}
+
+	// The notification preferences a reader starts with. Declared by the
+	// plugins (a plugin is what sends a kind), published by the user
+	// resource, and honoured by `CreateNotification` — one place, so the
+	// checkbox on the settings page and the write path cannot disagree.
+	if m.repo != nil {
+		m.repo.SetNotificationDefaults(m.notificationDefaults())
+	}
+
 	return nil
 }
 

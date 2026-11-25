@@ -9,6 +9,31 @@ import (
 	"github.com/incurl/riff/pb/flarum/domain"
 )
 
+// toggleHandler dispatches the like route on the EFFECTIVE method.
+//
+// The route is mounted for POST and for DELETE, and this is the one place
+// that decides what the request means:
+//
+//	POST                                 like
+//	POST + X-HTTP-Method-Override:DELETE unlike
+//	DELETE                               unlike
+//
+// The middle row is the SPA's: it never sends a DELETE, because the frame's
+// `Application.request` rewrites every method other than GET and POST. Without
+// this dispatch the rewritten request lands on the POST route and LIKES the
+// post — so the button can like and can never unlike, silently, because a
+// repeat like is idempotent and answers 200.
+func (p *Plugin) toggleHandler(e *core.RequestEvent) error {
+	switch api.EffectiveMethod(e) {
+	case http.MethodPost:
+		return p.likeHandler(e)
+	case http.MethodDelete:
+		return p.unlikeHandler(e)
+	default:
+		return api.WriteMethodError(e, api.RequireMethod(e, http.MethodPost))
+	}
+}
+
 // likeHandler serves POST /api/posts/{id}/like.
 //
 // The permission check is the plugin's own: upstream Flarum's
