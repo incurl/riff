@@ -360,9 +360,13 @@ func settingTextOr(settings map[string]any, key, fallback string) string {
 // assetURL builds the public URL of an uploaded asset.
 //
 // The paths are the forum's own upload paths (`logo_path` and
-// friends), which upstream serves from its assets directory. riff has
-// no asset upload endpoint for them, so an unset path yields an empty
-// URL — which is what the frontend expects for "no logo".
+// friends), written by the module's asset upload endpoint. An unset
+// path yields an empty URL — which is what the frontend expects for
+// "no logo".
+//
+// The URL is under `/branding/`, not `/assets/`: the latter is the
+// BUILT BUNDLE tree, served from the embedded frontend, so a logo
+// stored there would be shadowed by the bundle route (or shadow it).
 func (s *Server) assetURL(path string) string {
 	path = strings.TrimSpace(path)
 	if path == "" {
@@ -371,10 +375,7 @@ func (s *Server) assetURL(path string) string {
 	if strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") {
 		return path
 	}
-	if !strings.HasPrefix(path, "/") {
-		path = "/" + path
-	}
-	return s.basePath + "/assets" + path
+	return s.basePath + "/branding" + "/" + strings.TrimPrefix(path, "/")
 }
 
 // showUserHandler serves GET /api/users/{id}.

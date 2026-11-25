@@ -65,6 +65,33 @@ func (m *Module) mount(r *router.Router[*core.RequestEvent]) {
 		return uploads.ServeFileHandler(e)
 	})
 
+	// --- the forum's branding assets ------------------------------------
+	// The logo, the dark-mode logo, the email logo, the favicon and the
+	// app icon. Upstream's Appearance page uploads them, and the forum
+	// document reads them back into `logoUrl` and friends — so without
+	// these routes the settings exist and nothing can ever write them.
+	//
+	// The serve route is a single-segment sibling of the SPA catch-all,
+	// the same shape `/files/{id}` and `/avatars/{id}` use. It is NOT
+	// under `/assets/`: that prefix is the BUILT BUNDLE tree.
+	r.GET(m.opts.BasePath+"/branding/{name}", m.serveAssetHandler)
+
+	// The routes are LITERAL paths rather than an `/api/{asset}`
+	// wildcard: a wildcard under `/api/` would overlap every other API
+	// route, and Go's `http.ServeMux` panics on patterns that overlap
+	// without one being strictly more specific. The asset name is
+	// therefore closed over, not read from the request.
+	for asset := range assetUploads {
+		asset := asset
+
+		r.POST(m.opts.BasePath+"/api/"+asset, func(e *core.RequestEvent) error {
+			return m.uploadAssetHandler(e, asset)
+		})
+		r.DELETE(m.opts.BasePath+"/api/"+asset, func(e *core.RequestEvent) error {
+			return m.deleteAssetHandler(e, asset)
+		})
+	}
+
 	// --- the frontend --------------------------------------------------
 	// The advertised bundles are validated before the shell emits them.
 	// The shell writes a <script>/<link> per registered bundle whether or

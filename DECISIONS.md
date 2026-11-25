@@ -5,6 +5,64 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## AN AFFORDANCE THE FORUM CANNOT HONOUR IS REMOVED, NOT LEFT DEAD (2026-11-25)
+
+An audit of every endpoint the reused Flarum frontend calls, against
+upstream's `Api/routes.php` and `Forum/routes.php`, found three classes
+of gap. Two of them are one bug wearing different clothes.
+
+**AN UNROUTED PATH IS NOT A 404 — IT IS THE SPA'S `index.html` WITH A
+200.** The SPA catch-all is a method-less `/{path...}` and it is the
+least specific route in the mux, so it answers everything the forum
+does not. The frontend's request helper throws only on a non-2xx, so a
+200 with an HTML body is WORSE than an error: the caller parses a page
+of markup as data. That is why every path the frontend calls has to
+exist, or the affordance that calls it has to be ABSENT.
+
+**THE APPEARANCE PAGE'S UPLOADS WERE SETTINGS NOBODY COULD WRITE.**
+The five uploads — `/logo`, `/logo-dark-mode`, `/email-logo`,
+`/favicon`, `/app-icon` — set `logo_path` and friends, and the forum
+document READ those settings into `logoUrl` and the shell's favicon.
+The reading half worked and the writing half did not: an administrator
+could press "Upload logo", pick a file, and get a 404, and the logo
+could never change. The routes now exist, the bytes live in
+PocketBase's filesystem, and they are served at
+`{basePath}/branding/{name}` — NOT under `/assets/`, which is the
+BUILT BUNDLE tree, and not at PocketBase's native `/api/files/...`
+URL, which lives at the listener root the forum does not own.
+
+**A DEAD AFFORDANCE IS WORSE THAN NO AFFORDANCE.** Three controls
+asked for something the forum cannot give, and each was removed rather
+than left to fail:
+
+- the login modal's "Forgot password?" and the settings page's
+  "Change password" both post to `/forgot`, and the forum has no such
+  endpoint — password reset belongs to the host's auth layer, and
+  PocketBase's own flow is not callable from Go;
+- the security page's "Log out everywhere" posts to
+  `/global-logout`, which cannot work: a PocketBase token is a
+  stateless JWT with no row to terminate, and invalidating every token
+  means rotating `tokenKey`, a reserved auth field the forum must
+  never write.
+
+The "terminate all other sessions" button beside them is left in
+place and is always DISABLED, because the list holds only the current
+session — inert rather than broken.
+
+**A NOTIFICATION KIND WITH NO COMPONENT RENDERS AN EMPTY ROW.** The
+server produced `postLiked` and the SPA looked its component up by
+`contentType` and found none, so the notification was a blank row
+while the unread badge counted it — exactly the symptom deviation 15
+warns about, and the port had it. The likes bundle now registers
+`PostLikedNotification` and the `post` relationship and `excerpt`
+attribute it reads.
+
+**MARK-AS-READ WAS TRACKED, NOT IMPLEMENTED.** The "Mark all as read"
+button and the list's scroll handler call `POST /discussions/read`,
+and the server tracks no read state at all — no `lastReadPostNumber`,
+no per-discussion unread count. That is a subsystem rather than a
+route, and it is recorded in `docs/design/flarum/deviations.md` §16a.
+
 ## AN ALERT THE FORUM CANNOT ACT ON IS NOT RENDERED (2026-11-25)
 
 Every signed-in member was shown an email-confirmation alert they

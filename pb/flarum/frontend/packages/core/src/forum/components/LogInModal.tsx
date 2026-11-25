@@ -8,7 +8,6 @@ import Stream from '../../common/utils/Stream';
 import type Mithril from 'mithril';
 import RequestError from '../../common/utils/RequestError';
 import type { LoginParams } from '../../common/Session';
-import ForgotPasswordModal from './ForgotPasswordModal';
 
 export interface ILoginModalAttrs extends IFormModalAttrs {
   identification?: string;
@@ -122,11 +121,18 @@ export default class LogInModal<CustomAttrs extends ILoginModalAttrs = ILoginMod
   footer() {
     return (
       <>
-        <p className="LogInModal-forgotPassword">
-          <Button className="Button Button--text Button--link" onclick={this.forgotPassword.bind(this)}>
-            {app.translator.trans('core.forum.log_in.forgot_password_link')}
-          </Button>
-        </p>
+        {/* The password reset is NOT offered, and that is a decision
+            rather than an omission. Its modal posts to `/api/forgot`,
+            and the forum has no such endpoint: registration, email
+            verification and password reset stay with the HOST's auth
+            layer (see `docs/design/flarum/shared-users.md`), and the
+            accounts are PocketBase accounts whose reset flow lives
+            there.
+
+            A link that opens a form which answers 404 is worse than
+            no link: the reader types their address twice and is told
+            nothing. The sign-up link below is hidden for the same
+            reason, by `allowSignUp`. */}
         {app.forum.attribute<boolean>('allowSignUp') && (
           <p className="LogInModal-signUp">
             {app.translator.trans('core.forum.log_in.sign_up_text', {
@@ -136,17 +142,6 @@ export default class LogInModal<CustomAttrs extends ILoginModalAttrs = ILoginMod
         )}
       </>
     );
-  }
-
-  /**
-   * Open the forgot password modal, prefilling it with an email if the user has
-   * entered one.
-   */
-  forgotPassword() {
-    const email = this.identification();
-    const attrs = email.includes('@') ? { email } : undefined;
-
-    app.modal.show(ForgotPasswordModal, attrs);
   }
 
   /**

@@ -33,7 +33,6 @@ const path = require('path');
  */
 const PLUGIN_SETTINGS = {
   likes: { keys: ['flarum-likes.like_own_post'] },
-  mentions: { keys: ['flarum-mentions.allow_username_format'] },
   gamification: { keys: ['fof-gamification.allowSelfVotes', 'fof-gamification.defaultMetric', 'fof-gamification.defaultPeriod'] },
   tags: {
     keys: ['flarum-tags.min_primary_tags', 'flarum-tags.max_primary_tags', 'flarum-tags.min_secondary_tags', 'flarum-tags.max_secondary_tags'],
@@ -102,6 +101,16 @@ describe("the plugins' admin bundles", () => {
     // The bundle must register through the admin application's own
     // vocabulary, or the form renders the wrong control.
     expect(bundle).toContain('Extend.Admin()');
+  });
+
+  it('the mentions bundle registers nothing, because the plugin has no settings', () => {
+    const bundle = fs.readFileSync(path.join(PLUGINS_DIR, 'mentions', 'js', 'admin.js'), 'utf8');
+
+    // Upstream's only setting turns the bare `@username` form off, and
+    // this port has no other form: turning it off would leave no way to
+    // mention at all. So the plugin declares no settings, and its admin
+    // bundle registers none.
+    expect(bundle).not.toContain('setting:');
   });
 
   it('the tags bundle registers the tag tree page', () => {

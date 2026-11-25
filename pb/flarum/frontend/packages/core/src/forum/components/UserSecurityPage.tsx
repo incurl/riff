@@ -74,27 +74,15 @@ export default class UserSecurityPage<CustomAttrs extends IUserPageAttrs = IUser
       20
     );
 
-    if (this.user!.id() === app.session.user!.id()) {
-      items.add(
-        'globalLogout',
-        <FieldSet
-          className="FieldSet--col UserSecurityPage-globalLogout"
-          label={app.translator.trans('core.forum.security.global_logout.heading')}
-          description={app.translator.trans('core.forum.security.global_logout.help_text')}
-        >
-          <Button
-            className="Button"
-            icon="fas fa-sign-out-alt"
-            onclick={this.globalLogout.bind(this)}
-            loading={this.state.loadingGlobalLogout}
-            disabled={this.state.loadingTerminateSessions}
-          >
-            {app.translator.trans('core.forum.security.global_logout.log_out_button')}
-          </Button>
-        </FieldSet>,
-        10
-      );
-    }
+    // "Log out everywhere" is NOT offered. It posts to
+    // `/global-logout`, which the forum does not route — and it cannot:
+    // a PocketBase auth token is a STATELESS JWT, so there is no stored
+    // session row to terminate. The only way to invalidate every token
+    // at once is to rotate the account's `tokenKey`, and that is a
+    // reserved auth field the forum must never write (see
+    // `docs/design/flarum/shared-users.md`).
+    //
+    // A button that signs nobody out is worse than no button.
 
     return items;
   }
@@ -262,18 +250,4 @@ export default class UserSecurityPage<CustomAttrs extends IUserPageAttrs = IUser
       });
   }
 
-  globalLogout() {
-    this.state.loadingGlobalLogout = true;
-
-    return app
-      .request({
-        method: 'POST',
-        url: app.forum.attribute<string>('baseUrl') + '/global-logout',
-      })
-      .then(() => window.location.reload())
-      .finally(() => {
-        this.state.loadingGlobalLogout = false;
-        m.redraw();
-      });
-  }
 }

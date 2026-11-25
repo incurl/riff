@@ -2,7 +2,6 @@ package mentions
 
 import (
 	"github.com/incurl/riff/markdown"
-	"github.com/incurl/riff/pb/flarum/api"
 	flarumcore "github.com/incurl/riff/pb/flarum/core"
 	"github.com/incurl/riff/pb/flarum/domain"
 )
@@ -29,15 +28,6 @@ func (p *Plugin) handlePostWritten(event flarumcore.Event) {
 	}
 
 	usernames := extractMentions(post.Content)
-
-	// The bare `@username` form resolves only while upstream's
-	// `flarum-mentions.allow_username_format` allows it. Upstream
-	// checks it when it resolves a mention, and so does this — a
-	// mention that resolves to nobody notifies nobody.
-	if !p.usernameFormatAllowed() {
-		usernames = nil
-	}
-
 	resolved := p.resolveMentions(usernames)
 
 	// The set is REPLACED, not merged: upstream's
@@ -52,30 +42,6 @@ func (p *Plugin) handlePostWritten(event flarumcore.Event) {
 	// Only the mentions that are NEW are notified: a mention the post
 	// already had is not a new mention.
 	p.notifyMentioned(post, added)
-}
-
-// usernameFormatAllowed reports whether the bare `@username` form
-// resolves to an account.
-//
-// It is upstream's `flarum-mentions.allow_username_format`, and
-// upstream's installed default is 1 — the bare form resolves. A
-// setting that is unset therefore resolves, which is what an
-// operator's fresh instance does.
-//
-// The read goes through the repository rather than through the API's
-// request-scoped helper: the hook runs AFTER the write, with no
-// request event of its own.
-func (p *Plugin) usernameFormatAllowed() bool {
-	if p.repo == nil {
-		return true
-	}
-
-	value, err := p.repo.SettingValue(SettingAllowUsernameFormat, true)
-	if err != nil {
-		return true
-	}
-
-	return api.SettingTruthy(value, true)
 }
 
 // extractMentions returns the usernames a post's content mentions.

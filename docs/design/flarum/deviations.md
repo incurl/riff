@@ -510,8 +510,99 @@ The following are **roadmap**, not v1:
 - the Goja sandbox hook layer (`backendKind: js-sandbox` is accepted by
   the manifest but refused by the manager with an explicit message);
 - plugin package signing and marketplace manifest checks;
-- the remaining upstream extensions (mentions, subscriptions, sticky,
-  lock, suspend, and the rest).
+- upstream's **subscriptions** extension. Mentions, tags, likes, lock,
+  sticky, suspend, polls, gamification, statistics, markdown and uploads
+  are all built; subscriptions is the remaining first-party extension.
+
+## 16a. The endpoints the admin and forum call that are not routed
+
+The reused Flarum frontend calls a fixed set of endpoints, and an
+unrouted path does not answer 404: the SPA catch-all answers it with
+`index.html` and a 200, which the request helper then tries to parse as
+data. Every path the frontend calls therefore has to exist, or the
+affordance that calls it has to be absent.
+
+An audit of every path the vendored frontend builds against upstream's
+`Api/routes.php` and `Forum/routes.php` found four groups.
+
+### Routed now, because the settings existed and nothing could write them
+
+The Appearance page's five uploads — `POST`/`DELETE` on `/logo`,
+`/logo-dark-mode`, `/email-logo`, `/favicon` and `/app-icon`. The
+settings they write (`logo_path` and friends) were already read into
+the forum document's `logoUrl`, `faviconUrl` and so on, so without the
+routes an administrator could see the buttons, upload a file, and get a
+404 — and the logo could never change. The bytes live in PocketBase's
+filesystem under `forum_assets/`, and are served at
+`{basePath}/branding/{name}`: NOT under `/assets/`, which is the BUILT
+BUNDLE tree, and not at PocketBase's native `/api/files/...` URL,
+which lives at the listener root the forum does not own. Pinned by
+`assets_test.go`.
+
+### Removed, because the forum cannot honour them
+
+- **the login modal's "Forgot password?" link** and the **settings
+  page's "Change password" button**. Both open a form that posts to
+  `/forgot`, and the forum has no such endpoint: registration, email
+  verification and password reset stay with the host's auth layer.
+  PocketBase owns the reset flow, and it is not callable from Go, so
+  the alternative would be a second implementation of it. The Memos
+  SPA's account settings change the password, and they are the same
+  account.
+- **the security page's "Log out everywhere"**. It posts to
+  `/global-logout`, which cannot be implemented: a PocketBase auth
+  token is a STATELESS JWT, so there is no session row to terminate,
+  and the only way to invalidate every token is to rotate the
+  account's `tokenKey` — a reserved auth field the forum must never
+  write.
+
+  The "terminate all other sessions" button beside it is left in
+  place and is ALWAYS DISABLED, because the session list holds only the
+  current session (deviation 12): `hasOtherActiveSessions()` is false,
+  so the button is inert rather than broken.
+
+### Not reachable, so not routes
+
+- **`/register`** — the sign-up link is behind `allowSignUp`, which the
+  forum document sets to false.
+- the queue, announcements, mail-test, bounce and webhook routes — the
+  admin payload reports `queueDriver: "sync"`,
+  `announcementsDisabled: true` and `canReceiveWebhooks: false`, so the
+  widgets that call them never render.
+- `/extension-bisect`, `/extensions/abandoned/sync`, `/system-info`,
+  `/sessions` (admin) and `/opensearch/suggestions` — one-shot admin
+  commands whose buttons are reachable but whose answers are an empty
+  204 or a count. They are inert in this port; a click reports
+  nothing rather than failing a save.
+
+### Tracked, not implemented
+
+- **mark-as-read** (`POST /discussions/read`). The forum's "Mark all as
+  read" button and the discussion list's scroll handler both call it,
+  and the server tracks no read state at all: there is no
+  `lastReadPostNumber` and no per-discussion unread count. Implementing
+  it is a subsystem (a `discussion_user` table, a `marked_all_as_read_at`
+  column, the unread counts, and the read-state filters), not a route.
+
+### The notification kinds that are allowed but never produced
+
+The `forum_notifications` collection allows `postLiked`,
+`discussionTagged`, `mentionedInPost` and `commentOnPost`, and the
+Mentions plugin widens it with `userMentioned`. Only `postLiked` and
+`userMentioned` are ever written: `discussionTagged`,
+`mentionedInPost` and `commentOnPost` are values the collection
+accepts and nothing produces, and upstream's own names for the mention
+kinds are `userMentioned` / `postMentioned` / `groupMentioned` —
+`mentionedInPost` is not one of them. The three unused values are
+therefore **dead**: a kind in the schema that no writer emits is a row
+that cannot exist.
+
+**The `postLiked` kind had no frontend component.** The server produced
+it and the SPA looked its component up by `contentType` and found
+none, so the notification rendered as an EMPTY ROW while the unread
+badge still counted it — the exact symptom deviation 15 warns about.
+The likes bundle now registers `PostLikedNotification`, and the
+`post` relationship and `excerpt` attribute the component reads.
 
 ## 17. The frontend build needs npm's legacy peer resolver
 

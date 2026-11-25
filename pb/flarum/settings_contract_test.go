@@ -11,7 +11,6 @@ import (
 
 	"github.com/incurl/riff/pb/flarum/plugins/gamification"
 	"github.com/incurl/riff/pb/flarum/plugins/likes"
-	"github.com/incurl/riff/pb/flarum/plugins/mentions"
 	"github.com/incurl/riff/pb/flarum/plugins/tags"
 )
 
@@ -43,7 +42,6 @@ func TestForum_TheAdminPayloadCarriesThePluginSettings(t *testing.T) {
 		value any
 	}{
 		{likes.SettingLikeOwnPost, "1"},
-		{mentions.SettingAllowUsernameFormat, "1"},
 		{tags.SettingMinPrimaryTags, strconv.Itoa(tags.DefaultMinPrimaryTags)},
 		{tags.SettingMaxPrimaryTags, strconv.Itoa(tags.DefaultMaxPrimaryTags)},
 		{tags.SettingMinSecondaryTags, strconv.Itoa(tags.DefaultMinSecondaryTags)},
@@ -101,15 +99,14 @@ func TestForum_ThePluginSettingsAreTheOnesTheServerReads(t *testing.T) {
 	_, _, module := newTestForumModule(t)
 
 	read := map[string]bool{
-		likes.SettingLikeOwnPost:            true,
-		mentions.SettingAllowUsernameFormat: true,
-		tags.SettingMinPrimaryTags:          true,
-		tags.SettingMaxPrimaryTags:          true,
-		tags.SettingMinSecondaryTags:        true,
-		tags.SettingMaxSecondaryTags:        true,
-		gamification.SettingAllowSelfVotes:  true,
-		gamification.SettingDefaultMetric:   true,
-		gamification.SettingDefaultPeriod:   true,
+		likes.SettingLikeOwnPost:           true,
+		tags.SettingMinPrimaryTags:         true,
+		tags.SettingMaxPrimaryTags:         true,
+		tags.SettingMinSecondaryTags:       true,
+		tags.SettingMaxSecondaryTags:       true,
+		gamification.SettingAllowSelfVotes: true,
+		gamification.SettingDefaultMetric:  true,
+		gamification.SettingDefaultPeriod:  true,
 	}
 
 	for _, schema := range module.PluginSettingSchemas() {
@@ -197,7 +194,6 @@ func TestForum_TheAdminBundlesRegisterTheUpstreamSettings(t *testing.T) {
 		page string
 	}{
 		{plugin: "likes", settings: []string{likes.SettingLikeOwnPost}},
-		{plugin: "mentions", settings: []string{mentions.SettingAllowUsernameFormat}},
 		{
 			plugin: "tags",
 			settings: []string{
@@ -246,15 +242,14 @@ func TestForum_TheAdminBundlesRegisterTheUpstreamSettings(t *testing.T) {
 // is worse than the control being absent.
 func TestForum_TheAdminBundlesCarryNoDeadSettings(t *testing.T) {
 	read := map[string]bool{
-		likes.SettingLikeOwnPost:            true,
-		mentions.SettingAllowUsernameFormat: true,
-		tags.SettingMinPrimaryTags:          true,
-		tags.SettingMaxPrimaryTags:          true,
-		tags.SettingMinSecondaryTags:        true,
-		tags.SettingMaxSecondaryTags:        true,
-		gamification.SettingAllowSelfVotes:  true,
-		gamification.SettingDefaultMetric:   true,
-		gamification.SettingDefaultPeriod:   true,
+		likes.SettingLikeOwnPost:           true,
+		tags.SettingMinPrimaryTags:         true,
+		tags.SettingMaxPrimaryTags:         true,
+		tags.SettingMinSecondaryTags:       true,
+		tags.SettingMaxSecondaryTags:       true,
+		gamification.SettingAllowSelfVotes: true,
+		gamification.SettingDefaultMetric:  true,
+		gamification.SettingDefaultPeriod:  true,
 	}
 
 	// The setting key as it appears in a bundle: a quoted string.
@@ -269,7 +264,6 @@ func TestForum_TheAdminBundlesCarryNoDeadSettings(t *testing.T) {
 	// list.
 	forms := map[string][]string{
 		"likes":        {"js/admin.js"},
-		"mentions":     {"js/admin.js"},
 		"gamification": {"js/admin.js"},
 		// The tags plugin registers the tag TREE page, and the count
 		// settings live on its second tab.

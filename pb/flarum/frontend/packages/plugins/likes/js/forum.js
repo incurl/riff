@@ -21,6 +21,43 @@ import classList from 'flarum/common/utils/classList';
 import Icon from 'flarum/common/components/Icon';
 import CommentPost from 'flarum/forum/components/CommentPost';
 import Post from 'flarum/common/models/Post';
+import Notification from 'flarum/forum/components/Notification';
+import NotificationModel from 'flarum/common/models/Notification';
+
+/**
+ * The notification that tells an author somebody liked their post.
+ *
+ * It is upstream's `PostLikedNotification`: the thumb icon, a link to
+ * the post, and a sentence naming who liked it.
+ */
+class PostLikedNotification extends Notification {
+  icon() {
+    return 'far fa-thumbs-up';
+  }
+
+  href() {
+    const notification = this.attrs.notification;
+    const post = notification.post();
+
+    if (!post) {
+      return '#';
+    }
+
+    return app.route.post(post);
+  }
+
+  content() {
+    const user = this.attrs.notification.fromUser();
+
+    return user ? `${user.displayName()} liked your post.` : 'Someone liked your post.';
+  }
+
+  excerpt() {
+    // The server sends the summary in `excerpt` — the post's own
+    // text, trimmed.
+    return this.attrs.notification.excerpt() || null;
+  }
+}
 
 // pending holds the post ids whose toggle request is in flight, so the
 // button can disable itself instead of accepting a double click.
@@ -87,6 +124,30 @@ function likeButton(post) {
 }
 
 export const extend = [
+  // The notification's `post` relationship, and its excerpt.
+  //
+  // The server sends both, and the notification component links to the
+  // post — but the core's Notification model declares no accessor for
+  // either, so `notification.post()` and `notification.excerpt()` do
+  // not exist without this.
+  new Extend.Model(NotificationModel).hasOne('post').attribute('excerpt'),
+
+  // The notification component for the like kind.
+  //
+  // The name is the kind the SERVER sends: the notifications
+  // collection's `type` field carries `postLiked` (upstream's
+  // `PostLikedBlueprint::getType()`), and the serializer publishes it
+  // as `contentType`.
+  //
+  // WITHOUT this the notification renders as an EMPTY ROW: the SPA
+  // looks the component up by that name
+  // (`NotificationType.tsx` reads `notification.contentType()` and
+  // uses it as the key into `app.notificationComponents`), and an
+  // unregistered kind has no component — while the unread badge still
+  // counts it, because the badge reads `isRead`. The symptom is a
+  // badge with a blank list.
+  new Extend.Notification().add('postLiked', PostLikedNotification),
+
   // The post carries the likes, the count and the flag.
   //
   // They have to be registered as MODEL METHODS: the server sends

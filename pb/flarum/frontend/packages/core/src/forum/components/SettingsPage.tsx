@@ -5,7 +5,6 @@ import Switch from '../../common/components/Switch';
 import Button from '../../common/components/Button';
 import FieldSet from '../../common/components/FieldSet';
 import NotificationGrid from './NotificationGrid';
-import ChangePasswordModal from './ChangePasswordModal';
 import ChangeEmailModal from './ChangeEmailModal';
 import listItems from '../../common/helpers/listItems';
 import extractText from '../../common/utils/extractText';
@@ -90,13 +89,14 @@ export default class SettingsPage<CustomAttrs extends IUserPageAttrs = IUserPage
   accountItems() {
     const items = new ItemList<Mithril.Children>();
 
-    items.add(
-      'changePassword',
-      <Button className="Button" onclick={() => app.modal.show(ChangePasswordModal)}>
-        {app.translator.trans('core.forum.settings.change_password_button')}
-      </Button>,
-      100
-    );
+    // The password change is NOT offered. Its modal posts to
+    // `/api/forgot`, and the forum has no such endpoint: the account's
+    // password belongs to the HOST's auth layer (see
+    // `docs/design/flarum/shared-users.md`). The button is hidden
+    // rather than left to open a form that answers 404.
+    //
+    // The Memos SPA's own account settings change the password, and
+    // they are the same PocketBase account.
 
     items.add(
       'changeEmail',
