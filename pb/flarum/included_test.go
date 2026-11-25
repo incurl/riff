@@ -444,3 +444,38 @@ func TestForum_TheNotificationsDeleteIsOptIn(t *testing.T) {
 	require.Equal(t, http.StatusMethodNotAllowed, recorder.Code,
 		"a POST without the override header must be refused: %s", recorder.Body.String())
 }
+
+// TestForum_ACombinedDiscussionFilterDoesNotFail pins that a listing can
+// carry more than one filter.
+//
+// The repository joined its clauses with PocketBase's filter `&&`, but the
+// count query and the page query take dbx expressions, which reach the
+// driver as written — so any listing with TWO clauses answered 500 with
+// `near "&": syntax error`: a search term (`filter[q]` adds the state
+// clause and the search clause) and "started by me" (`filter[user]`) both
+// did. A single clause happened to be valid SQL, which is why the fault was
+// invisible until two were combined.
+func TestForum_ACombinedDiscussionFilterDoesNotFail(t *testing.T) {
+	app, handler := newTestForum(t)
+
+	author := testUser(t, app, "filtered_writer")
+
+	matchedID, _ := seedDiscussionWithAuthor(t, app, author.Id, "Release notes", "body")
+	seedDiscussionWithAuthor(t, app, author.Id, "Something else", "body")
+
+	recorder := do(t, handler, http.MethodGet, "/forum/api/discussions?filter[q]=Release", "", nil)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	document := decodeDocument(t, recorder)
+	resources, ok := document.Data.([]any)
+	require.True(t, ok, "the data should be a resource collection")
+	require.Len(t, resources, 1, "the search must select the matching discussion only")
+
+	resource, ok := resources[0].(map[string]any)
+	require.True(t, ok, "the resource should be an object")
+	require.Equal(t, matchedID, resource["id"])
+
+	// The author's own listing is the other two-clause case.
+	recorder = do(t, handler, http.MethodGet, "/forum/api/discussions?filter[user]="+author.Id, "", nil)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+}

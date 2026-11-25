@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
+	"github.com/pocketbase/dbx"
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/pocketbase/pocketbase/tools/types"
 
@@ -557,6 +558,13 @@ type DiscussionFilter struct {
 	// IncludeHidden includes hidden discussions. Only a moderator may
 	// ask for them.
 	IncludeHidden bool
+	// ExcludeHiddenTags drops every discussion that carries a HIDDEN tag.
+	//
+	// It is upstream's `HideHiddenTagsFromAllDiscussionsPage`, and it applies
+	// to the ALL-DISCUSSIONS page only: the caller sets it when no filter was
+	// asked for. A tag page must keep it off, or the tag's own page goes blank
+	// as soon as an operator hides the tag.
+	ExcludeHiddenTags bool
 	// Sort is the ordering the caller asked for.
 	//
 	// It is upstream's sort name, with a leading "-" for a descending
@@ -615,6 +623,7 @@ func (r *Repository) ListDiscussions(filter DiscussionFilter, limit, offset int)
 
 	clauses := []string{}
 	params := map[string]any{}
+	extra := []dbx.Expression{}
 	if filter.UserID != "" {
 		clauses = append(clauses, "user = {:user}")
 		params["user"] = filter.UserID
@@ -630,9 +639,48 @@ func (r *Repository) ListDiscussions(filter DiscussionFilter, limit, offset int)
 		clauses = append(clauses, "title LIKE {:search}")
 		params["search"] = "%" + filter.Search + "%"
 	}
-	filterExpr := strings.Join(clauses, " && ")
 
-	total, err := r.countRecords(collection, filterExpr, params)
+	// A hidden TAG hides the discussions that carry it — upstream's
+	// `HideHiddenTagsFromAllDiscussionsPage`. The caller sets the flag only
+	// for the unfiltered listing, so a tag page still shows its own tag's
+	// discussions even when that tag is hidden.
+	if filter.ExcludeHiddenTags {
+		hiddenTagIDs, err := r.hiddenTagIDs()
+		if err != nil {
+			return nil, 0, err
+		}
+		if len(hiddenTagIDs) > 0 {
+			exclusion, err := r.tagMembershipExpression(hiddenTagIDs, true)
+			if err != nil {
+				return nil, 0, err
+			}
+			extra = append(extra, exclusion)
+		}
+	}
+
+	// The tag filter is a clause too, not a post-filter over the fetched
+	// page: a page-level filter would only ever see `limit` rows, so a tag
+	// page could show nothing while the tag has discussions, and `total`
+	// would count every discussion rather than the tagged ones.
+	if filter.TagID != "" {
+		membership, err := r.tagMembershipExpression([]string{filter.TagID}, false)
+		if err != nil {
+			return nil, 0, err
+		}
+		extra = append(extra, membership)
+	}
+
+	// The clauses are joined with SQL's `AND`, not PocketBase's filter
+	// `&&`: `CountRecords` and `RecordQuery` take dbx expressions, which
+	// reach the driver as written. With two clauses the filter used to be
+	// `a && b`, which SQLite rejects with "near \"&\": syntax error" — so
+	// any listing combining two filters (`filter[user]` with the state
+	// clause, or a search term) answered 500.
+	filterExpr := strings.Join(clauses, " AND ")
+
+	// The count carries the extra clauses too, so `total` counts the rows the
+	// page can actually contain.
+	total, err := r.countRecords(collection, filterExpr, params, extra...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -640,6 +688,9 @@ func (r *Repository) ListDiscussions(filter DiscussionFilter, limit, offset int)
 	query := r.app.RecordQuery(collection)
 	if filterExpr != "" {
 		query = query.AndWhere(dbxExp(filterExpr, params))
+	}
+	for _, expression := range extra {
+		query = query.AndWhere(expression)
 	}
 	query = query.OrderBy(discussionOrderBy(filter.Sort)).Limit(int64(limit)).Offset(int64(offset))
 	var records []*core.Record
@@ -650,22 +701,6 @@ func (r *Repository) ListDiscussions(filter DiscussionFilter, limit, offset int)
 	discussions := make([]*domain.Discussion, 0, len(records))
 	for _, record := range records {
 		discussions = append(discussions, r.discussionFromRecord(record))
-	}
-
-	// A tag filter is applied after the query, because the tag
-	// relationship lives in its own collection.
-	if filter.TagID != "" {
-		tagged, err := r.DiscussionIDsWithTag(filter.TagID)
-		if err != nil {
-			return nil, 0, err
-		}
-		filtered := make([]*domain.Discussion, 0, len(discussions))
-		for _, discussion := range discussions {
-			if _, ok := tagged[discussion.ID]; ok {
-				filtered = append(filtered, discussion)
-			}
-		}
-		discussions = filtered
 	}
 
 	return discussions, total, nil

@@ -3,6 +3,7 @@ package flarum
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -759,4 +760,90 @@ func TestTags_ThePermissionKeysTranslate(t *testing.T) {
 	key, scope = domain.ForumPermissionKeyAndScope("tag.discussion.reply")
 	require.Equal(t, "tag.discussion.reply", key)
 	require.Empty(t, scope)
+}
+
+// discussionListIDs decodes a discussion listing into its ids and its
+// reported total.
+//
+// The total is returned alongside the ids because the two must AGREE: the
+// hidden-tag exclusion is a clause in the count query as well as the page
+// query, so a page showing one discussion must not report a total of two.
+func discussionListIDs(t *testing.T, recorder *httptest.ResponseRecorder) ([]string, int) {
+	t.Helper()
+
+	var document struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+		Meta struct {
+			Page struct {
+				Total int `json:"total"`
+			} `json:"page"`
+		} `json:"meta"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &document), recorder.Body.String())
+
+	ids := make([]string, 0, len(document.Data))
+	for _, resource := range document.Data {
+		ids = append(ids, resource.ID)
+	}
+
+	return ids, document.Meta.Page.Total
+}
+
+// TestTags_AHiddenTagLeavesTheAllDiscussionsPage pins upstream's
+// `HideHiddenTagsFromAllDiscussionsPage`.
+//
+// `is_hidden` was stored, editable and served, and had NO consumer: hiding a
+// tag changed nothing that a reader could see. Upstream's rule is that the
+// all-discussions page drops every discussion carrying a hidden tag — and
+// that the rule applies only THERE: any filter (a tag, a user, a state, a
+// search) turns it off.
+//
+// The tag filter is the one that makes the guard load-bearing rather than
+// pedantic: hiding a tag must not blank the tag's own page.
+func TestTags_AHiddenTagLeavesTheAllDiscussionsPage(t *testing.T) {
+	app, handler := newTestForum(t)
+
+	author := testUser(t, app, "hidden_tag_writer")
+
+	hidden := seedTag(t, app, "Archive", "archive")
+	hidden.Set("is_hidden", true)
+	require.NoError(t, app.Save(hidden))
+
+	visible := seedTag(t, app, "Guides", "guides")
+
+	hiddenDiscussion, _ := seedDiscussionWithAuthor(t, app, author.Id, "Archived", "In a hidden tag")
+	visibleDiscussion, _ := seedDiscussionWithAuthor(t, app, author.Id, "Current", "In a visible tag")
+	attachTag(t, app, hiddenDiscussion, hidden.Id)
+	attachTag(t, app, visibleDiscussion, visible.Id)
+
+	// 1. The all-discussions page: the hidden tag's discussion is gone, and
+	//    the count agrees with the rows it describes.
+	recorder := do(t, handler, http.MethodGet, "/forum/api/discussions", "", nil)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	ids, total := discussionListIDs(t, recorder)
+	require.Equal(t, []string{visibleDiscussion}, ids, "the hidden tag's discussion must not be listed")
+	require.Equal(t, 1, total, "the total must count the rows the page can contain")
+
+	// 2. The hidden tag's OWN page still shows it: the exclusion belongs to
+	//    the unfiltered page, not to the tag.
+	recorder = do(t, handler, http.MethodGet, "/forum/api/discussions?filter[tag]="+hidden.Id, "", nil)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	ids, total = discussionListIDs(t, recorder)
+	require.Equal(t, []string{hiddenDiscussion}, ids, "a hidden tag's own page must not go blank")
+	require.Equal(t, 1, total)
+
+	// 3. Any other filter turns the exclusion off as well — upstream's
+	//    `getListFilters() > 0` guard. Both discussions belong to the same
+	//    author, so the author's listing shows both.
+	recorder = do(t, handler, http.MethodGet, "/forum/api/discussions?filter[user]="+author.Id, "", nil)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	ids, total = discussionListIDs(t, recorder)
+	require.ElementsMatch(t, []string{hiddenDiscussion, visibleDiscussion}, ids,
+		"a filtered listing must not apply the all-discussions exclusion")
+	require.Equal(t, 2, total)
 }

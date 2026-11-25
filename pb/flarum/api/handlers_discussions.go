@@ -37,6 +37,15 @@ func (s *Server) listDiscussionsHandler(e *core.RequestEvent) error {
 		Sort: strings.TrimSpace(query.Get("sort")),
 	}
 
+	// A hidden tag hides its discussions from the ALL-DISCUSSIONS page only —
+	// upstream's `HideHiddenTagsFromAllDiscussionsPage`, which does nothing
+	// once any filter (or a full-text search) is in play.
+	//
+	// The tag filter is what makes this load-bearing: a tag page must keep
+	// showing a hidden tag's discussions, or the page an operator is looking
+	// at goes blank the moment they hide the tag.
+	filter.ExcludeHiddenTags = filter.UserID == "" && filter.TagID == "" && filter.State == "" && filter.Search == ""
+
 	discussions, total, err := s.repo.ListDiscussions(filter, limit, offset)
 	if err != nil {
 		return fail(e, errInternal("The discussions could not be loaded.", err))

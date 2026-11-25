@@ -23,16 +23,46 @@ func dbxExp(sql string, params map[string]any) dbx.Expression {
 //
 // It runs a separate COUNT query rather than counting the fetched page,
 // because the frontend renders a page count from meta.page.total.
-func (r *Repository) countRecords(collection *core.Collection, filter string, params map[string]any) (int, error) {
+//
+// The `extra` expressions are part of the count for the same reason: a
+// clause the page query applies but the count does not makes `total`
+// disagree with the rows it describes. Callers that narrow the query
+// outside the filter string pass it here as well.
+func (r *Repository) countRecords(collection *core.Collection, filter string, params map[string]any, extra ...dbx.Expression) (int, error) {
 	var exprs []dbx.Expression
 	if filter != "" {
 		exprs = append(exprs, dbxExp(filter, params))
 	}
+	exprs = append(exprs, extra...)
 	total, err := r.app.CountRecords(collection, exprs...)
 	if err != nil {
 		return 0, err
 	}
 	return int(total), nil
+}
+
+// hiddenTagIDs returns the ids of the tags an administrator marked hidden.
+//
+// They are read rather than compared in SQL, so the clause that uses them
+// stays dialect-neutral: `is_hidden` is a boolean, and how a boolean is
+// spelled in a WHERE clause is the driver's business, not this package's.
+func (r *Repository) hiddenTagIDs() ([]string, error) {
+	collection, err := r.collection("tags")
+	if err != nil {
+		return nil, err
+	}
+
+	records, err := r.app.FindRecordsByFilter(collection, "is_hidden = true", "", 0, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	ids := make([]string, 0, len(records))
+	for _, record := range records {
+		ids = append(ids, record.Id)
+	}
+
+	return ids, nil
 }
 
 // TagIDBySlug resolves a tag's record id from its slug.
@@ -67,26 +97,47 @@ func (r *Repository) TagIDBySlug(slug string) (string, error) {
 	return records[0].Id, nil
 }
 
-// DiscussionIDsWithTag returns the ids of the discussions carrying a tag.
+// tagMembershipExpression builds the predicate that ties a discussion to a
+// set of tags through the link table.
 //
-// The tag relationship lives in its own collection, so the filter is
-// applied in memory over the page that was fetched.
-func (r *Repository) DiscussionIDsWithTag(tagID string) (map[string]struct{}, error) {
+// It is a SUBQUERY rather than a post-filter, because a post-filter only
+// ever sees the page that was already fetched: with a page size of 20 and a
+// tag on 3 of 50 discussions, filtering the page in memory shows the tag's
+// discussions only when they happen to be among the 20 most recent — and the
+// COUNT query, which cannot see the page at all, reports the unfiltered
+// total. Expressing it as a clause makes the rows, their count and the
+// pagination offsets agree.
+//
+// `excluded` selects the polarity: false keeps only the discussions carrying
+// one of the tags (the tag filter), true drops them (the hidden-tag
+// exclusion).
+//
+// Identifiers are written unquoted on purpose. dbx substitutes `{{…}}` only
+// in `NewQuery`'s SQL text, so a placeholder inside a `dbx.Exp` reaches the
+// driver literally; these names come from the collections PocketBase itself
+// resolved, never from a request.
+func (r *Repository) tagMembershipExpression(tagIDs []string, excluded bool) (dbx.Expression, error) {
 	collection, err := r.collection("discussion_tags")
 	if err != nil {
 		return nil, err
 	}
 
-	records, err := r.app.FindRecordsByFilter(collection, "tag = {:tag}", "", 0, 0, map[string]any{"tag": tagID})
-	if err != nil {
-		return nil, err
+	placeholders := make([]string, 0, len(tagIDs))
+	params := make(map[string]any, len(tagIDs))
+	for i, id := range tagIDs {
+		key := "tag_" + strconv.Itoa(i)
+		placeholders = append(placeholders, "{:"+key+"}")
+		params[key] = id
 	}
 
-	tagged := make(map[string]struct{}, len(records))
-	for _, record := range records {
-		tagged[record.GetString("discussion")] = struct{}{}
+	operator := " IN ("
+	if excluded {
+		operator = " NOT IN ("
 	}
-	return tagged, nil
+
+	sql := "id" + operator + "SELECT discussion FROM " + collection.Name + " WHERE tag IN (" + strings.Join(placeholders, ", ") + "))"
+
+	return dbxExp(sql, params), nil
 }
 
 // PermissionRowsFor returns the permission rows that apply to a set of
