@@ -97,13 +97,17 @@ the stylesheets into the embedded tree.
 
 Three front-end deviations are deliberate:
 
-- **Likes gets a button, Tags gets badges.** The Likes bundle extends
-  `CommentPost`'s `footerItems` with a like/unlike button; the Tags
-  bundle extends `DiscussionListItem`'s `infoItems` with tag badges.
-  Everything else upstream ships (the tag picker in the composer, the
-  tag index and tag pages, the likes list popover) is not implemented.
-- **Tag badges are labels, not links.** There is no tag route in this
-  port, so a badge links nowhere rather than to the fallback page.
+- **Likes gets a button and a settings row.** The Likes bundle extends
+  `CommentPost`'s `footerItems` with a like/unlike button, and
+  `NotificationGrid`'s `notificationTypes` with the "notify me when someone
+  likes my post" row; the Tags bundle extends `DiscussionListItem`'s
+  `infoItems` with tag badges. Everything else upstream ships (the likers list
+  under a post, the user profile's "Likes" tab, and the
+  `filter[liked]`/`filter[likedBy]` searchers that feed it) is not
+  implemented.
+- **Tag badges are LINKS.** A badge points at the tag's page (`/t/<slug>`) via
+  the same `Link` the tags extension registers, since the port has a tag
+  route.
 - **No locale files.** The port has no extension-locale pipeline, and
   the translator renders a missing key as the key itself, so the
   extension strings are literal English rather than `trans()` calls.

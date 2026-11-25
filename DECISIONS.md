@@ -5,6 +5,61 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## A LIKE IS A ROUTE HERE, AND THE SPA COULD ONLY EVER LIKE (2026-11-25)
+
+The likes plugin was audited against upstream `flarum/likes` 2.x and two of
+its three UI paths did not work. Neither failure was visible from the Go
+tests, which is the point of this entry.
+
+**THE UNLIKE WAS UNREACHABLE FROM THE SPA.** The frame's frontend rewrites
+every method other than GET and POST into a POST carrying
+`X-HTTP-Method-Override` (`Application.request`), and PocketBase bakes the
+method into the route pattern. The plugin mounted `DELETE` → unlike and
+`POST` → like, and the POST handler never read the header — so the rewrite
+matched the LIKE route and re-liked. Idempotent, `200` both ways, and the
+button could never turn off. Measured before the fix:
+`POST + override` answered `{"isLiked":true}` on an already-liked post. The
+route is now mounted for BOTH verbs on one `toggleHandler` that dispatches on
+`api.EffectiveMethod`, and `TestLikes_TheUnlikeWorksThroughTheMethodOverride`
+drives the three spellings (plain POST, POST+override, real DELETE).
+
+**`isLiked` WAS NEVER REGISTERED ON THE MODEL.** `Extend.Model(Post)` declared
+`likes`, `likesCount` and `canLike`, and the button calls `post.isLiked()`
+too. A missing `attribute(…)` registration does not yield a wrong count: the
+accessor is `undefined`, the call throws inside the `extend` callback, and
+`extend()` catches it and reports once through `app.handleErrorOnce` — so the
+footer item is silently dropped and the like button never renders. This is
+the failure mode that makes a bundle-loading test worth having:
+`pluginBundles.test.ts` evaluates the built bundles and now asserts the four
+likes accessors exist on `Post.prototype`.
+
+**A LAZY-CHUNK COMPONENT IS EXTENDED BY PATH.** `NotificationGrid` is a chunk
+module (`flarum.reg.addChunkModule("298","3711","core",…)`), so a static
+import of it resolves to `undefined` at bundle-evaluation time and the
+`extend` call throws on `.prototype` — which is exactly what upstream's
+`extend('flarum/forum/components/NotificationGrid', …)` string form avoids,
+by deferring through `flarum.reg.onLoad`. The Jest harness gained the two
+registry methods a plugin needs for that (`namespaceAndIdFromPath`, `onLoad`).
+
+**A NOTIFICATION PREFERENCE IS A CHAIN, NOT A CHECKBOX.** Adding the grid row
+alone would have produced a DISABLED checkbox: the grid disables any key its
+`preferences` map does not name, and the port's user resource published an
+empty map. So the kind is now declared (`plugin.NotificationType` +
+`AddNotificationType`, one entry per (kind, channel)), the resource publishes
+the defaults merged under the reader's own answers
+(`Repository.NotificationPreferences`, to the account itself only — upstream's
+`visible` predicate), and `Repository.CreateNotification` drops the
+notification when the reader turned it off. Three places, one declaration:
+the checkbox and the write path cannot disagree, and `email` is deliberately
+not declared for `postLiked` because upstream's blueprint is
+`AlertableInterface` and this forum sends no mail — an `email` key would be a
+checkbox that toggles nothing.
+
+Still not ported from upstream: the likers list under a post
+(`addLikesList`), the user profile's "Likes" tab (`addLikesTabToUserProfile`)
+with the `filter[liked]`/`filter[likedBy]` searchers that feed it, and
+realtime.
+
 ## THE TAG FILTER IS A VALUE, NOT A SLUG (2026-11-25)
 
 The last two tags gaps: `filter[tag]` breadth, and upstream's `TagSearcher`.
