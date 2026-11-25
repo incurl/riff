@@ -40,8 +40,28 @@ import { SCOPED_PERMISSIONS, globalPermission, scopedKey, scopedRequired } from 
  * The pure halves live in `./scope` so they can be tested without a
  * browser — the scoped key and the required-permission rewrite are where a
  * mistake turns a restriction into a grant.
+ *
+ * It RETURNS AN EXTENDER. Upstream calls it from an `app.initializers.add`
+ * callback, and this port's plugin framework has no initializers — an
+ * extension is a list of extenders that `bootExtensions` runs. This function
+ * used to register its extensions eagerly and return NOTHING, and `admin.js`
+ * put that `undefined` into the extenders array: `bootExtensions` then threw on
+ * `undefined.extend` and took the whole admin app down with it — the loading
+ * overlay never cleared, and no plugin's admin UI registered, because the boot
+ * is a single pass and the throw happened on the first extension.
  */
 export default function addTagsPermissionScope() {
+  return { extend: registerPermissionScope };
+}
+
+/**
+ * The registrations, run when the application boots the extension.
+ *
+ * They have to be deferred to that moment rather than performed while the
+ * bundle is evaluated: the extenders are handed the running application, and a
+ * bundle is evaluated before `app.boot()` has assigned `app.store`/`app.forum`.
+ */
+function registerPermissionScope() {
   // The grid waits for the tag list: a restricted tag's column is part of
   // the grid, so the grid cannot be drawn before the tags are known.
   extendMethod(PermissionGrid.prototype, 'oninit', function () {

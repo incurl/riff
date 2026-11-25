@@ -20,6 +20,10 @@
  * The test drives the real boot sequence: the core bundle, then the
  * plugin bundles, then `app.bootExtensions(flarum.extensions)`.
  */
+// Imported rather than taken from the injected globals: this file is
+// type-checked (`npm run typecheck`), and the ambient Jest types are not in
+// scope for the TS build.
+import { beforeEach, describe, expect, it } from '@jest/globals';
 import fs from 'fs';
 import path from 'path';
 
@@ -29,18 +33,71 @@ import path from 'path';
  * `ui/dist` is build output and is gitignored, so the test skips
  * itself when the bundles have not been built — the same way the Go
  * side treats the embedded frontend.
+ *
+ * BOTH APPLICATIONS are covered, and that is not symmetry for its own sake:
+ * the admin app is a DIFFERENT core bundle. `admin.js` carries `common/*` and
+ * `admin/*` and no `forum/*` modules at all, so a plugin's admin half that
+ * reaches for `flarum/forum/app` resolves it to `undefined` — quietly, with one
+ * console line — and a plugin that puts such a value in its extenders array
+ * takes the whole admin boot down. The admin bundles were untested, and the
+ * tags permission scope shipped exactly that way.
  */
 const distDir = path.join(__dirname, '..', '..', '..', '..', 'ui', 'dist');
 
-const coreBundle = path.join(distDir, 'forum.js');
+interface AppBundles {
+  /** The app, for the test names. */
+  label: string;
+  /** The app's core bundle. */
+  core: string;
+  /** The plugin bundles, in load order. */
+  plugins: { id: string; file: string }[];
+}
 
-const pluginBundles = [
-  { id: 'riff-tags', file: path.join(distDir, 'plugins', 'tags', 'forum.js') },
-  { id: 'riff-likes', file: path.join(distDir, 'plugins', 'likes', 'forum.js') },
-  { id: 'riff-uploads', file: path.join(distDir, 'plugins', 'uploads', 'forum.js') },
+/**
+ * Every plugin that ships a front-end bundle, with the id it registers under.
+ *
+ * The id is the one `app.bootExtensions(flarum.extensions)` reads, and it comes
+ * from the plugin's own name — `riff/<name>` for the first-party ones, which is
+ * what makes it `riff-<name>`. The mentions plugin keeps UPSTREAM's id
+ * (`flarum/mentions`), so its bundles register as `flarum-mentions`; that is
+ * not an oversight to "fix" here, it is what the plugin is called.
+ */
+const pluginBundles: { dir: string; id: string }[] = [
+  { dir: 'tags', id: 'riff-tags' },
+  { dir: 'likes', id: 'riff-likes' },
+  { dir: 'uploads', id: 'riff-uploads' },
+  { dir: 'lock', id: 'riff-lock' },
+  { dir: 'sticky', id: 'riff-sticky' },
+  { dir: 'suspend', id: 'riff-suspend' },
+  { dir: 'markdown', id: 'riff-markdown' },
+  { dir: 'gamification', id: 'riff-gamification' },
+  { dir: 'polls', id: 'riff-polls' },
+  { dir: 'statistics', id: 'riff-statistics' },
+  { dir: 'mentions', id: 'flarum-mentions' },
 ];
 
-const built = fs.existsSync(coreBundle) && pluginBundles.every((b) => fs.existsSync(b.file));
+/** The `<name>/<suffix>` bundle of every plugin, in load order. */
+function pluginBundlesFor(suffix: 'forum.js' | 'admin.js'): { id: string; file: string }[] {
+  return pluginBundles.map((plugin) => ({
+    id: plugin.id,
+    file: path.join(distDir, 'plugins', plugin.dir, suffix),
+  }));
+}
+
+const apps: AppBundles[] = [
+  {
+    label: 'forum',
+    core: path.join(distDir, 'forum.js'),
+    plugins: pluginBundlesFor('forum.js'),
+  },
+  {
+    label: 'admin',
+    core: path.join(distDir, 'admin.js'),
+    plugins: pluginBundlesFor('admin.js'),
+  },
+];
+
+const built = apps.every((app) => fs.existsSync(app.core) && app.plugins.every((b) => fs.existsSync(b.file)));
 
 const describeIfBuilt = built ? describe : describe.skip;
 
@@ -73,88 +130,77 @@ function evaluateBundle(file: string): void {
 
 describeIfBuilt('the first-party plugin bundles', () => {
   beforeEach(() => {
-    // The core bundle registers its modules on `flarum.reg` and the
-    // plugin bundles assign themselves onto `flarum.extensions`.
-    //
-    // The registry's two extra methods are what a plugin needs when it extends
-    // a LAZY-CHUNK component by path (`extend('flarum/forum/components/NotificationGrid',
-    // …)`): `namespaceAndIdFromPath` splits the path and `onLoad` defers the
-    // registration until the chunk is fetched. The chunk is never fetched here,
-    // so the deferral simply never resolves — which is the truthful shape for
-    // a harness with no chunk loader.
-    (global as any).flarum = {
-      extensions: {},
-      reg: {
-        all: () => [],
-        namespaceAndIdFromPath: (path: string) => {
-          const [namespace, ...rest] = path.split('/');
-
-          return [namespace === 'flarum' ? 'core' : namespace, rest.join('/')];
-        },
-        onLoad: () => {},
-      },
-    };
-
-    // The extenders are handed `globalThis` as their application, so the
-    // harness supplies the surface the first-party bundles actually touch: a
-    // model registry (`Extend.Store`), the route table and its helper map
-    // (`Extend.Routes`), and the boot hook. Without these the FIRST extender
-    // that registers a model throws and the test never reaches the rest —
-    // which is how it hid a bundle that registered nothing at all.
-    (global as any).store = { models: {} };
-    (global as any).routes = {};
-    (global as any).route = () => '';
-    (global as any).beforeMount = () => {};
-    // The component registries: `Extend.PostTypes` adds to
-    // `postComponents`, and `Extend.Notification` adds to
-    // `notificationComponents`.
-    (global as any).postComponents = {};
-    (global as any).notificationComponents = {};
-    // The search registry: `Extend.Search` pushes a gambit onto
-    // `app.search.gambits.gambits[modelType]` (the tags extension registers
-    // its `tag:` gambit there).
-    (global as any).search = { gambits: { gambits: {} } };
+    resetGlobal();
   });
 
-  it('register themselves on flarum.extensions under their own id', () => {
-    evaluateBundle(coreBundle);
+  for (const app of apps) {
+    describe(`the ${app.label} app`, () => {
+      beforeEach(() => {
+        resetGlobal();
+      });
 
-    for (const bundle of pluginBundles) {
-      evaluateBundle(bundle.file);
-    }
+      it('register themselves on flarum.extensions under their own id', () => {
+        evaluateApp(app);
 
-    for (const bundle of pluginBundles) {
-      expect((global as any).flarum.extensions[bundle.id]).toBeDefined();
-    }
-  });
+        for (const bundle of app.plugins) {
+          expect((global as any).flarum.extensions[bundle.id]).toBeDefined();
+        }
+      });
 
-  it('export an extend array whose entries have an extend() method', () => {
-    evaluateBundle(coreBundle);
+      /**
+       * Every entry is a real extender.
+       *
+       * `bootExtensions` walks the array and calls `extender.extend(...)`, so
+       * ONE `undefined` in it throws out of the boot — and because the boot is
+       * a single pass, every extension after it never registers either. The
+       * tags admin bundle shipped `addTagsPermissionScope()` in the array, a
+       * function that returned nothing: the admin app's loading overlay never
+       * cleared and no plugin's admin UI appeared, with one console line to say
+       * why.
+       */
+      it('export an extend array of real extenders', () => {
+        evaluateApp(app);
 
-    for (const bundle of pluginBundles) {
-      evaluateBundle(bundle.file);
-    }
+        for (const bundle of app.plugins) {
+          const extension = (global as any).flarum.extensions[bundle.id];
 
-    for (const bundle of pluginBundles) {
-      const extension = (global as any).flarum.extensions[bundle.id];
+          // An EMPTY array is legitimate — the uploads bundle deliberately
+          // registers nothing (its admin entry exists so the extension's admin
+          // URL is not a 404). What is not legitimate is a HOLE in it.
+          expect(Array.isArray(extension.extend)).toBe(true);
 
-      expect(Array.isArray(extension.extend)).toBe(true);
-      expect(extension.extend.length).toBeGreaterThan(0);
+          extension.extend.forEach((extender: unknown, index: number) => {
+            // Named in the assertion: an undefined entry is the failure this
+            // test exists for, and "expected undefined to be defined" alone
+            // does not say which bundle at which position.
+            expect({ app: app.label, bundle: bundle.id, index, defined: extender !== undefined }).toEqual({
+              app: app.label,
+              bundle: bundle.id,
+              index,
+              defined: true,
+            });
 
-      for (const extender of extension.extend) {
-        expect(typeof extender.extend).toBe('function');
-      }
-    }
-  });
+            expect(typeof (extender as any)?.extend).toBe('function');
+          });
+        }
+      });
 
-  it('run their extenders when the app boots the extensions', () => {
-    const booted = bootExtensions();
+      it('run their extenders when the app boots the extensions', () => {
+        const booted = bootExtensions(app);
 
-    // Every plugin contributed its extender.
-    for (const bundle of pluginBundles) {
-      expect(booted).toContain(bundle.id);
-    }
-  });
+        for (const bundle of app.plugins) {
+          const extension = (global as any).flarum.extensions[bundle.id];
+
+          // Nothing to boot is not a failure; a bundle that HAS extenders and
+          // still does not boot means the boot aborted before reaching it,
+          // which is the symptom the whole admin app showed.
+          if (!extension.extend.length) continue;
+
+          expect(booted).toContain(bundle.id);
+        }
+      });
+    });
+  }
 
   /**
    * The model methods the likes UI CALLS.
@@ -167,7 +213,7 @@ describeIfBuilt('the first-party plugin bundles', () => {
    * while the Go side was sending it.
    */
   it('register the model methods the likes UI calls', () => {
-    bootExtensions();
+    bootExtensions(appById('forum'));
 
     // The registry is the core bundle's own (`flarum.reg`), which is what the
     // extension bundles resolve their externals through.
@@ -182,16 +228,85 @@ describeIfBuilt('the first-party plugin bundles', () => {
   });
 });
 
-/**
- * Boot the loaded extensions against the harness app, and return the ids
- * whose extenders ran.
- */
-function bootExtensions(): string[] {
-  evaluateBundle(coreBundle);
+/** One of the applications, by label. */
+function appById(label: string): AppBundles {
+  const app = apps.find((candidate) => candidate.label === label);
 
-  for (const bundle of pluginBundles) {
+  if (!app) throw new Error(`no bundle set for the ${label} app`);
+
+  return app;
+}
+
+/**
+ * Install the globals a core bundle expects, and empty the extension registry.
+ *
+ * The core bundle registers its modules on `flarum.reg` and the plugin bundles
+ * assign themselves onto `flarum.extensions`.
+ *
+ * The registry's two extra methods are what a plugin needs when it extends a
+ * LAZY-CHUNK component by path (`extend('flarum/forum/components/NotificationGrid',
+ * …)`): `namespaceAndIdFromPath` splits the path and `onLoad` defers the
+ * registration until the chunk is fetched. The chunk is never fetched here, so
+ * the deferral simply never resolves — which is the truthful shape for a
+ * harness with no chunk loader.
+ */
+function resetGlobal(): void {
+  (global as any).flarum = {
+    extensions: {},
+    reg: {
+      all: () => [],
+      namespaceAndIdFromPath: (path: string) => {
+        const [namespace, ...rest] = path.split('/');
+
+        return [namespace === 'flarum' ? 'core' : namespace, rest.join('/')];
+      },
+      onLoad: () => {},
+    },
+  };
+
+  // The extenders are handed `globalThis` as their application, so the harness
+  // supplies the surface the first-party bundles actually touch: a model
+  // registry (`Extend.Store`), the route table and its helper map
+  // (`Extend.Routes`), and the boot hook. Without these the FIRST extender that
+  // registers a model throws and the test never reaches the rest — which is how
+  // it hid a bundle that registered nothing at all.
+  //
+  // The admin extenders need nothing beyond `beforeMount`: `Extend.Admin` defers
+  // all of its registry work into that hook.
+  (global as any).store = { models: {} };
+  (global as any).routes = {};
+  (global as any).route = () => '';
+  (global as any).beforeMount = () => {};
+  // The component registries: `Extend.PostTypes` adds to `postComponents`, and
+  // `Extend.Notification` adds to `notificationComponents`.
+  (global as any).postComponents = {};
+  (global as any).notificationComponents = {};
+  // The search registry: `Extend.Search` pushes a gambit onto
+  // `app.search.gambits.gambits[modelType]` (the tags extension registers its
+  // `tag:` gambit there).
+  (global as any).search = { gambits: { gambits: {} } };
+}
+
+/** Evaluate one application's core bundle and its plugin bundles. */
+function evaluateApp(app: AppBundles): void {
+  evaluateBundle(app.core);
+
+  for (const bundle of app.plugins) {
     evaluateBundle(bundle.file);
   }
+}
+
+/**
+ * Boot one application's loaded extensions against the harness app, and return
+ * the ids whose extenders ran.
+ *
+ * It mirrors the real `Application.bootExtensions` — including its shape rather
+ * than a defensive version of it: a `undefined` entry throws here, which is
+ * exactly what it does in the browser, and is why the extenders are asserted to
+ * be objects before this runs.
+ */
+function bootExtensions(app: AppBundles): string[] {
+  evaluateApp(app);
 
   const booted: string[] = [];
 

@@ -3,8 +3,16 @@
 // They mirror upstream `flarum/tags`'s `js/src/common/helpers/` and
 // `js/src/common/utils/sortTags.tsx`, so the admin page sorts and
 // renders tags the way upstream's does.
-
-import app from 'flarum/forum/app';
+//
+// THE APP IS THE COMMON PROXY, not `flarum/forum/app`. These helpers are
+// shared by the forum bundle AND the admin bundle (the admin tag tree and the
+// permission scope both sort and label tags), and the admin app's core bundle
+// carries no forum modules: importing `flarum/forum/app` there resolved to
+// `undefined` ("No module found for core:forum/app") and every helper that
+// touched it — `loadTags()` first — threw. `flarum/common/app` is the proxy
+// over `window.app`, so it is whichever application is running, which is what
+// upstream uses for code in `js/src/common/`.
+import app from 'flarum/common/app';
 import classList from 'flarum/common/utils/classList';
 import Icon from 'flarum/common/components/Icon';
 import Link from 'flarum/common/components/Link';
