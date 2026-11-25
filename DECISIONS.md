@@ -5,6 +5,52 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## THE ADMIN BUNDLE IS A DIFFERENT CORE BUNDLE (2026-11-25)
+
+The admin app went blank: one `TypeError` out of `bootExtensions` and nothing
+rendered. Two faults in one plugin's admin half, and both were invisible to
+every check the repo had.
+
+**`admin.js` IS NOT `forum.js`.** The admin entry is
+`export * from './src/common'; export * from './src/admin'` — there is no
+`src/forum` in it. So `flarum/forum/app` in code that BOTH halves import
+resolves to `undefined`: `flarum.reg.get('core','forum/app')` logs "No module
+found for core:forum/app" and hands back nothing, and the first helper that
+touches `app.forum`/`app.store` throws. The tags helpers are shared (the admin
+tag tree and the permission scope sort and label tags with them), so they now
+import `flarum/common/app` — the proxy over `window.app`, which is whichever
+application is running, and what upstream uses for `js/src/common/`. Forum-only
+modules keep `flarum/forum/app`.
+
+**AN EXTENSION IS A LIST OF EXTENDERS, NOT AN INITIALIZER.** Upstream's
+`addTagsPermissionScope` is called from an `app.initializers.add` callback;
+this port has no initializers, so the function was adapted into the extenders
+array — and adapted wrongly: it registered its extensions eagerly and returned
+nothing, so `extend` was `[undefined, Store, Admin().page(…)]`. `bootExtensions`
+does `extender.extend(...)` in a single pass, so that `undefined` threw and
+**aborted the boot for every extension after it**: the tags admin page, the
+likes setting section, the statistics page — all gone, from one `undefined`.
+The function now RETURNS `{ extend: registerPermissionScope }`, and the work
+happens when the boot calls it (which is also the only correct time: a bundle is
+evaluated before `app.boot()` has assigned `app.store`/`app.forum`).
+
+**WHY NOTHING CAUGHT IT.** `pluginBundles.test.ts` evaluated the plugin bundles
+for the FORUM only — three plugins, one app. The admin bundles were never
+loaded, so an `undefined` in an admin extenders array and a forum-only import in
+an admin module were both outside the harness. It now boots EVERY plugin's
+bundle in **both** apps and asserts that each entry of each `extend` array is a
+real extender, naming the app, the bundle and the index when one is not. Run
+against the pre-fix bundle those two assertions fail with the same
+`Cannot read properties of undefined (reading 'extend')` the browser showed,
+which is the mutation check for this entry.
+
+Two smaller things the harness had to learn, both of which were real: the admin
+core bundle loads fine in jsdom (it creates `new Admin()` at module scope, but
+mounting, and therefore every DOM lookup, waits for `boot()`), and a plugin's
+registered id is its OWN name — the mentions plugin is `flarum/mentions`, so its
+bundles register as `flarum-mentions` while every first-party one is
+`riff-<name>`.
+
 ## LIVE REFRESH IS A POLL, NOT A WEBSOCKET (2026-11-25)
 
 The forum had no realtime at all: a new reply appeared only on a manual reload.
