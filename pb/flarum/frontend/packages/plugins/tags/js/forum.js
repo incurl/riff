@@ -4,11 +4,12 @@
 // behaviours (`js/src/forum/index.ts`) plus a route model:
 //
 //   addTagList()     the shared tag list
-//   addTagFilter()   the tag page's hero, title, button colour and the
-//                    `filter[tag]` the discussion list sends
+//   addTagFilter()   the tag page's hero, title, button colour, the
+//                    `filter[tag]` the discussion list sends, and the sort
+//                    the page opens in
 //   addTagLabels()   labels on list items, and on a discussion's hero
-//   addTagControl()  (NOT ported — see the note at the end of this file)
-//   addTagComposer() (NOT ported — see the note at the end of this file)
+//   addTagControl()  the "Edit tags" control on a discussion (addTagControl.js)
+//   addTagComposer() the composer's tag picker (addTagComposer.js)
 //   extendRealtime() (NOT ported: this port has no realtime extension)
 //
 // plus `Extend.Routes()` for `/tags` and `/t/:tags`, and
@@ -40,7 +41,7 @@ import DiscussionListState from 'flarum/forum/states/DiscussionListState';
 import GlobalSearchState from 'flarum/forum/states/GlobalSearchState';
 
 import { Tag } from './models';
-import { currentTag, loadTags, sortTags, tagsLabel } from './helpers';
+import { currentTag, loadTags, sortTags, tagDefaultSort, tagsLabel } from './helpers';
 import { addTagComposer } from './addTagComposer';
 import DiscussionTaggedPost from './components/DiscussionTaggedPost';
 import addTagControl from './addTagControl';
@@ -154,23 +155,71 @@ function addTagLabels() {
 /**
  * The tag a page is filtered to.
  *
- * Three things have to agree for a tag page to work, and upstream wires all
- * three:
+ * Four things have to agree for a tag page to work, and upstream wires all
+ * four:
  *
  *   1. the route param reaches the search state, so the list request carries
- *      it;
+ *      it — together with the tag's `defaultSort`, which is the order the
+ *      page opens in;
  *   2. the request sends `filter[tag]`, which this port's `GET /api/discussions`
  *      already understands (`DiscussionFilter.TagID`);
  *   3. the page says WHICH tag it is — hero, title, and the colour of the
- *      "start a discussion" button.
+ *      "start a discussion" button;
+ *   4. the sort control says which sort the page is in.
  */
 function addTagFilter() {
-  // 1. The route param becomes a search param.
+  // 1. The route param becomes a search param, and so does the tag's default
+  //    sort.
+  //
+  //    Never when the address already carries a sort: a reader's choice
+  //    outranks the tag's default.
   extendMethod(GlobalSearchState.prototype, 'params', function (params) {
     params.tags = m.route.param('tags');
+
+    if (!params.sort) {
+      const defaultSort = tagDefaultSort(params.tags);
+
+      if (defaultSort) params.sort = defaultSort;
+    }
+  });
+
+  // 1b. The sort control's label, and what `changeSort` treats as the default
+  //     (so choosing the tag's own default keeps it out of the address).
+  override(GlobalSearchState.prototype, 'defaultSort', function (original) {
+    return tagDefaultSort(m.route.param('tags')) || original();
+  });
+
+  // 1c. A COLD load of `/t/<slug>` waits for the tag list before it asks for
+  //     discussions.
+  //
+  //     Without the wait the first request goes out with no sort — the tag is
+  //     not in the store yet — the list arrives in the forum's default order,
+  //     and nothing re-requests it when the tags do arrive, so the page shows
+  //     the tag's sort in the control and the forum's order in the list. The
+  //     tag list is one small request, and this only runs for the first page
+  //     of a tag route whose tag is still unknown.
+  override(DiscussionListState.prototype, 'loadPage', function (original, page = 1) {
+    const slug = m.route.param('tags');
+
+    if (page !== 1 || !slug || currentTag()) {
+      return original(page);
+    }
+
+    // `currentTag()` is what starts the request; this waits for the same
+    // shared promise. A failure is not fatal — the list loads unsorted, the
+    // same behaviour as before.
+    return loadTags().then(
+      () => original(page),
+      () => original(page)
+    );
   });
 
   // 2. The search param becomes a filter.
+  //
+  //    The sort is resolved HERE as well as in `params()`, because this is the
+  //    moment the request is built: on a cold load the tag list may have
+  //    arrived since the page mounted, and `params()` is only consulted when
+  //    the page is created.
   //
   //    Upstream ALSO pushes `tags,parent` into `include` here. This port
   //    cannot: a tag resource is serialised by the tags PLUGIN, and the
@@ -186,6 +235,14 @@ function addTagFilter() {
     if (tags) {
       params.filter = params.filter || {};
       params.filter.tag = tags;
+
+      if (!this.params.sort) {
+        const defaultSort = tagDefaultSort(tags);
+
+        // The map holds the API sort (`-lastPostedAt`), which is what the
+        // request needs; `tagDefaultSort` returns the URL key.
+        if (defaultSort) params.sort = app.discussions.sortMap()[defaultSort];
+      }
     }
   });
 

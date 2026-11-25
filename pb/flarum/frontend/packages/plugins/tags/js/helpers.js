@@ -203,6 +203,34 @@ export function findBySlug(slug) {
 }
 
 /**
+ * The sort a tag page opens in.
+ *
+ * Upstream's `tagDefaultSort`: the tag's stored `defaultSort`, and only when
+ * the sort map knows it. The stored value is a **URL key** (`latest`), not an
+ * API sort (`-lastPostedAt`) — the admin's dropdown writes the map's keys, and
+ * an unknown value sent to the server would be an ordering it cannot apply,
+ * so it is ignored and the forum's own default wins.
+ *
+ * It reads the STORE, so on a cold load it returns `null` until `loadTags()`
+ * has filled it. That is why the tag page's first request waits for the tag
+ * list (`forum.js::addTagFilter`): a sort discovered after the list has
+ * arrived is a sort nothing re-requests.
+ *
+ * @param {string} slug
+ * @returns {string | null}
+ */
+export function tagDefaultSort(slug) {
+  if (!slug) {
+    return null;
+  }
+
+  const tag = findBySlug(slug);
+  const defaultSort = tag ? tag.defaultSort() : null;
+
+  return defaultSort && defaultSort in app.discussions.sortMap() ? defaultSort : null;
+}
+
+/**
  * The tag the current route points at, if any.
  *
  * Upstream hangs this off the application (`app.currentTag()`); this keeps it
