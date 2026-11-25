@@ -183,3 +183,75 @@ export function loadTags() {
 
   return tagsRequest;
 }
+
+/** The cached tag for the current route. */
+let activeTag = null;
+
+/** Whether a tag-list request is in flight. */
+let loadingTags = false;
+
+/**
+ * Find a loaded tag by slug, case-insensitively.
+ *
+ * @param {string} slug
+ * @returns {object | null}
+ */
+export function findBySlug(slug) {
+  return (
+    app.store.all('tags').find((tag) => (tag.slug() || '').localeCompare(slug, undefined, { sensitivity: 'base' }) === 0) || null
+  );
+}
+
+/**
+ * The tag the current route points at, if any.
+ *
+ * Upstream hangs this off the application (`app.currentTag()`); this keeps it
+ * module-local, because nothing else needs it and a module-local cache cannot
+ * leak a stale tag into a route that has none.
+ *
+ * The lookup is by SLUG against the store, which `loadTags()` fills. It
+ * deliberately does not call `GET /api/tags/{slug}`: the port's show route
+ * takes an ID, so a slug lookup would 404.
+ *
+ * @returns {object | null}
+ */
+export function currentTag() {
+  const slug = m.route.param('tags');
+
+  if (!slug) {
+    activeTag = null;
+
+    return null;
+  }
+
+  if (activeTag && (activeTag.slug() || '').localeCompare(slug, undefined, { sensitivity: 'base' }) === 0) {
+    return activeTag;
+  }
+
+  const found = findBySlug(slug);
+
+  if (found) {
+    activeTag = found;
+
+    return found;
+  }
+
+  // Not in the store yet: on a cold load of `/t/<slug>` the boot payload
+  // carries the discussions but not necessarily this tag. Load the list once,
+  // then redraw so the hero and the title appear.
+  if (!loadingTags) {
+    loadingTags = true;
+
+    loadTags()
+      .then(() => {
+        activeTag = findBySlug(slug);
+        m.redraw();
+      })
+      .catch(() => {})
+      .finally(() => {
+        loadingTags = false;
+      });
+  }
+
+  return null;
+}

@@ -236,3 +236,117 @@ li:not(.sortable-dragging) > .TagListItem-info:hover > .Button {
 .TagsLabel-icon {
   margin-right: 4px;
 }
+
+/* --- the composer's tag picker --------------------------------------- */
+
+.DiscussionComposer-changeTags {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--border-radius, 4px);
+  background: var(--control-bg);
+  color: inherit;
+  border: 0;
+  cursor: pointer;
+}
+
+.DiscussionComposer-changeTags.disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* --- the tag selection modal ----------------------------------------- */
+
+.TagSelectionModal-container {
+  min-width: 320px;
+}
+
+.TagSelectionModal-filter {
+  margin-bottom: 10px;
+}
+
+.TagSelectionModal-selected {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.TagSelectionModal-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px 2px 8px;
+  border-radius: 10px;
+  background: var(--control-bg);
+  font-size: 12px;
+}
+
+.TagSelectionModal-remove {
+  border: 0;
+  background: none;
+  color: var(--muted-color);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 2px;
+}
+
+.TagSelectionModal-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.TagSelectionModal-item {
+  margin: 0;
+}
+
+.TagSelectionModal-button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--border-radius, 4px);
+  background: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.TagSelectionModal-button:hover {
+  background: var(--control-bg);
+}
+
+.TagSelectionModal-item.selected .TagSelectionModal-button {
+  background: var(--control-bg);
+  font-weight: 600;
+}
+
+.TagSelectionModal-name {
+  flex: 0 0 auto;
+}
+
+.TagSelectionModal-description {
+  flex: 1 1 auto;
+  font-size: 12px;
+  color: var(--muted-color);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.TagSelectionModal-hint {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--muted-color);
+}
+
+.TagSelectionModal-hint--error {
+  color: var(--error-color, #d83e3e);
+}

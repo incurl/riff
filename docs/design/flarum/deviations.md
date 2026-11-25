@@ -549,14 +549,20 @@ filtering, and still open for authoring.
 - `Extend.Model(Discussion).hasMany('tags').attribute('canTag')` — so
   `discussion.tags()` is the model method upstream's code calls.
 - The `allow_tag_change` setting, which the server READ but nothing could set.
+- `addTagComposer()` — the composer's tag picker, the tags travelling with
+  the discussion, a tag page's tag preselected, and the minimums enforced
+  before submitting.
+- The four COUNT settings on the forum document (`minPrimaryTags` and its
+  three siblings), so the picker knows the limits before an author chooses
+  anything. The server enforces the same counts, so a picker that ignored
+  them would let an author compose a discussion the server then refuses.
 
 **Not built**, and why each is a real absence rather than an oversight:
 
-- `addTagComposer()` / `TagSelectionModal` — without it a discussion cannot be
-  given tags from the UI. This is the most significant remaining gap: the API
-  accepts tags on create, and the composer never offers them.
 - `addTagControl()` — the tag button on a discussion page (change a
-  discussion's tags after posting).
+  discussion's tags after posting). The composer's picker is there, so a
+  discussion can be CREATED with tags, but an existing discussion's tags can
+  only be changed through the API.
 - `discussionTagged` PostTypes — a rename or tag change is stored as a post of
   that type, and the port renders no component for it, so a stream shows those
   events as ordinary posts.
@@ -588,6 +594,25 @@ That last one is the reason `discussion.tags()` is guarded: `Model.hasMany` maps
 a relationship's identifiers through the store WITHOUT dropping the ones that
 have not arrived, so `sortTags` filters falsy entries rather than throwing on
 `position()` and taking the whole list down with it.
+
+Two more adaptations, both forced by the composer:
+
+3. **THE CHOSEN TAGS LIVE OUTSIDE `composer.fields`.** Upstream puts them
+   there (`this.composer.fields.tags`), but this port's `fields` map is typed
+   `Record<string, Stream<any>>` — a plain array in it would be read as a
+   Stream, and every read would be `undefined`.
+4. **CREATING A DISCUSSION WITH TAGS IS A DIFFERENT QUESTION FROM CHANGING
+   ONE.** Upstream's `DiscussionPolicy::tag()` governs changing the tags of a
+   discussion that EXISTS: the author may, while `allow_tag_change` permits
+   it, and a moderator may through the `discussion.tag` permission. A
+   discussion being CREATED has no author to be "the author who may still
+   change it", and `allow_tag_change` is explicitly about changing tags AFTER
+   posting. The port's relationship writer asked the changing question on
+   create, so every tagged create answered 422 — the composer could offer a
+   picker whose result the server refused. The writer now branches on
+   `req.Creating` and asks the ordinary question instead: may this actor
+   start a discussion with this tag (`canStartDiscussion`, the same answer
+   the picker used to decide whether to offer it).
 
 ## 16a. The endpoints the admin and forum call that are not routed
 

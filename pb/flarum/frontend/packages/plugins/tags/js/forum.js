@@ -40,81 +40,10 @@ import DiscussionListState from 'flarum/forum/states/DiscussionListState';
 import GlobalSearchState from 'flarum/forum/states/GlobalSearchState';
 
 import { Tag } from './models';
-import { loadTags, sortTags, tagsLabel } from './helpers';
+import { currentTag, loadTags, sortTags, tagsLabel } from './helpers';
+import { addTagComposer } from './addTagComposer';
 import TagHero from './components/TagHero';
 import TagsIndexPage from './components/TagsIndexPage';
-
-/** The cached tag for the current route. */
-let activeTag = null;
-
-/** Whether a tag-list request is in flight. */
-let loadingTags = false;
-
-/**
- * Find a loaded tag by slug, case-insensitively.
- *
- * @param {string} slug
- * @returns {object | null}
- */
-function findBySlug(slug) {
-  return (
-    app.store.all('tags').find((tag) => (tag.slug() || '').localeCompare(slug, undefined, { sensitivity: 'base' }) === 0) || null
-  );
-}
-
-/**
- * The tag the current route points at, if any.
- *
- * Upstream hangs this off the application (`app.currentTag()`); this keeps it
- * module-local, because nothing else needs it and a module-local cache cannot
- * leak a stale tag into a route that has none.
- *
- * The lookup is by SLUG against the store, which `loadTags()` fills. It
- * deliberately does not call `GET /api/tags/{slug}`: the port's show route
- * takes an ID, so a slug lookup would 404.
- *
- * @returns {object | null}
- */
-export function currentTag() {
-  const slug = m.route.param('tags');
-
-  if (!slug) {
-    activeTag = null;
-
-    return null;
-  }
-
-  if (activeTag && (activeTag.slug() || '').localeCompare(slug, undefined, { sensitivity: 'base' }) === 0) {
-    return activeTag;
-  }
-
-  const found = findBySlug(slug);
-
-  if (found) {
-    activeTag = found;
-
-    return found;
-  }
-
-  // Not in the store yet: on a cold load of `/t/<slug>` the boot payload
-  // carries the discussions but not necessarily this tag. Load the list once,
-  // then redraw so the hero and the title appear.
-  if (!loadingTags) {
-    loadingTags = true;
-
-    loadTags()
-      .then(() => {
-        activeTag = findBySlug(slug);
-        m.redraw();
-      })
-      .catch(() => {})
-      .finally(() => {
-        loadingTags = false;
-      });
-  }
-
-  return null;
-}
 
 export const extend = [
   // The store needs to know the `tags` type, or it refuses the payload:
@@ -139,6 +68,7 @@ export const extend = [
     extend() {
       addTagLabels();
       addTagFilter();
+      addTagComposer();
 
       // One shared tag-list request for the whole page load: the labels, the
       // sidebar and `/tags` all read from it.

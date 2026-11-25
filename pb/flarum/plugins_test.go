@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/incurl/riff/pb/flarum/api"
+	"github.com/incurl/riff/pb/flarum/plugins/tags"
 	"github.com/incurl/riff/pb/flarum/repository"
 )
 
@@ -212,6 +213,86 @@ func TestTags_TheTagListCarriesEveryTag(t *testing.T) {
 	}
 
 	require.True(t, found, "the tag must be listed: %v", resources)
+}
+
+// TestTags_AFreshDiscussionCarriesTheChosenTags pins the composer's write.
+//
+// The composer's `data()` sends the chosen tags as the `tags` RELATIONSHIP,
+// and the store serialises a model array into `{"data": [{"type": "tags",
+// "id": "…"}]}`. The server's relationship writer takes those ids.
+//
+// This is the whole composer path in one assertion: without the
+// relationship the tags are chosen and then silently dropped, and the
+// discussion appears untagged.
+func TestTags_AFreshDiscussionCarriesTheChosenTags(t *testing.T) {
+	app, handler := newTestForum(t)
+	tag := seedTag(t, app, "Composer", "composer")
+
+	// A PRIMARY tag: `HasPosition` is `position != 0 || is_primary`, and
+	// the count rules count the two kinds separately — upstream's own
+	// wording for the failure is "the number of primary tags must be
+	// exactly 1".
+	tagRecord, err := app.FindRecordById(mustCollection(t, app, "forum_tags"), tag.Id)
+	require.NoError(t, err)
+	tagRecord.Set("is_primary", true)
+	require.NoError(t, app.Save(tagRecord))
+
+	_, cookies := memberSession(t, app, "composer_member")
+
+	body := `{"data":{"type":"discussions","attributes":{"title":"With a tag","content":"Hello"},` +
+		`"relationships":{"tags":{"data":[{"type":"tags","id":"` + tag.Id + `"}]}}}}`
+
+	recorder := doWithHeaders(t, handler, http.MethodPost, "/forum/api/discussions", body, cookies, nil)
+	require.Equal(t, http.StatusCreated, recorder.Code, recorder.Body.String())
+
+	document := decodeDocument(t, recorder)
+	resource, ok := document.Data.(map[string]any)
+	require.True(t, ok, "the data should be a resource object")
+
+	relationships, ok := resource["relationships"].(map[string]any)
+	require.True(t, ok, "the resource must carry relationships")
+
+	tags, ok := relationships["tags"].(map[string]any)
+	require.True(t, ok, "the discussion must carry a tags relationship")
+
+	data, ok := tags["data"].([]any)
+	require.True(t, ok, "the tags relationship must carry identifiers")
+	require.Len(t, data, 1, "the chosen tag must be on the discussion")
+
+	identifier, ok := data[0].(map[string]any)
+	require.True(t, ok, "the identifier should be an object")
+	require.Equal(t, tag.Id, identifier["id"])
+}
+
+// TestTags_TheForumDocumentCarriesTheCountSettings pins the limits the
+// composer's picker enforces.
+//
+// The picker reads them from the forum document (`app.forum.attribute(
+// 'minPrimaryTags')`), and the SERVER enforces the same counts. A modal
+// that ignored them would let an author compose a discussion the server
+// then refuses — the worst way to enforce a minimum.
+//
+// The values are the settings' DEFAULTS, because the settings are unset on
+// a fresh instance and the server falls back to them.
+func TestTags_TheForumDocumentCarriesTheCountSettings(t *testing.T) {
+	app, handler := newTestForum(t)
+
+	cookies := testSuperuser(t, app)
+
+	recorder := do(t, handler, http.MethodGet, "/forum/api", "", cookies)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	document := decodeDocument(t, recorder)
+	resource, ok := document.Data.(map[string]any)
+	require.True(t, ok, "the data should be a resource object")
+
+	attributes, ok := resource["attributes"].(map[string]any)
+	require.True(t, ok, "the forum document must carry attributes")
+
+	require.Equal(t, float64(tags.DefaultMinPrimaryTags), attributes["minPrimaryTags"])
+	require.Equal(t, float64(tags.DefaultMaxPrimaryTags), attributes["maxPrimaryTags"])
+	require.Equal(t, float64(tags.DefaultMinSecondaryTags), attributes["minSecondaryTags"])
+	require.Equal(t, float64(tags.DefaultMaxSecondaryTags), attributes["maxSecondaryTags"])
 }
 
 // TestLikes_MigrationCreatesTheCollection pins layer 1 for the Likes

@@ -243,6 +243,56 @@ func (p *Plugin) Register(_ context.Context, ext *plugin.Extenders) error {
 		},
 	})
 
+	// The four COUNT settings travel on the FORUM DOCUMENT, so the
+	// composer's tag picker knows the limits before an author chooses
+	// anything.
+	//
+	// Upstream publishes them on the forum resource (they are read as
+	// `app.forum.attribute('minPrimaryTags')` and its three siblings), and
+	// they have to be there for the same reason the picker exists: a modal
+	// that ignored the limits would let an author compose a discussion the
+	// server then REFUSES, which is the worst way to enforce a minimum.
+	//
+	// They are published as NUMBERS, because upstream's are numbers and
+	// `parseInt` is what the composer applies to them. The values are the
+	// settings the server reads (`tagCounts`), so the form and the write
+	// path agree by construction.
+	ext.AddAttribute(plugin.AttributeContributor{
+		Resource: "forums",
+		Name:     "minPrimaryTags",
+		Value: func(_ context.Context, req *plugin.AttributeRequest) (any, error) {
+			minPrimary, _, _, _ := tagCounts(req.App)
+			return minPrimary, nil
+		},
+	})
+
+	ext.AddAttribute(plugin.AttributeContributor{
+		Resource: "forums",
+		Name:     "maxPrimaryTags",
+		Value: func(_ context.Context, req *plugin.AttributeRequest) (any, error) {
+			_, maxPrimary, _, _ := tagCounts(req.App)
+			return maxPrimary, nil
+		},
+	})
+
+	ext.AddAttribute(plugin.AttributeContributor{
+		Resource: "forums",
+		Name:     "minSecondaryTags",
+		Value: func(_ context.Context, req *plugin.AttributeRequest) (any, error) {
+			_, _, minSecondary, _ := tagCounts(req.App)
+			return minSecondary, nil
+		},
+	})
+
+	ext.AddAttribute(plugin.AttributeContributor{
+		Resource: "forums",
+		Name:     "maxSecondaryTags",
+		Value: func(_ context.Context, req *plugin.AttributeRequest) (any, error) {
+			_, _, _, maxSecondary := tagCounts(req.App)
+			return maxSecondary, nil
+		},
+	})
+
 	ext.AddAsset(plugin.AssetBundle{
 		PluginID: PluginID,
 		Version:  Version,
@@ -287,7 +337,47 @@ var errNotFound = errors.New("tags: not found")
 // discussion's COMPLETE tag set, so a tag the client left out is
 // removed.
 func (*Plugin) writeDiscussionTags(ctx context.Context, req *plugin.RelationshipWriteRequest) error {
-	// Two ways to change a discussion's tags, and upstream's
+	// TAGGING A DISCUSSION AS IT IS CREATED is a different question from
+	// changing an existing discussion's tags, and upstream asks it
+	// differently.
+	//
+	// Upstream's `DiscussionPolicy::tag()` governs CHANGING the tags of a
+	// discussion that exists: the author may, while `allow_tag_change`
+	// permits it, and a moderator may through the `discussion.tag`
+	// permission. Both of those are about a discussion ALREADY POSTED.
+	//
+	// A discussion that is being CREATED has no author to be "the author
+	// who may still change it", and `allow_tag_change` is explicitly about
+	// changing tags AFTER posting. So on create the question is the
+	// ordinary one: may this actor start a discussion at all, and with
+	// these tags? That is `canStartDiscussion` on each tag — the same
+	// answer the composer's picker used when it offered the tag in the
+	// first place.
+	//
+	// Without this branch the composer could not create a TAGGED
+	// discussion at all: the writer demanded the "change tags" permission
+	// for a discussion that did not exist yet, and every tagged create
+	// answered 422.
+	if req.Creating {
+		for _, id := range req.IDs {
+			if _, err := findTag(req.App, physicalName(nil), id); err != nil {
+				return errors.New("that tag does not exist")
+			}
+
+			// The same question the tag resource answers with
+			// `canStartDiscussion`: may this actor start a discussion in
+			// this tag? A tag with its own permission scope is the case
+			// that matters, and the check is the SCOPED one — the same
+			// `Can` the attribute uses.
+			if !req.Can(domain.PermissionStartDiscussion, api.TypeTag, id) {
+				return errors.New("you are not allowed to start a discussion with that tag")
+			}
+		}
+
+		return writeTags(req, req.IDs)
+	}
+
+	// Changing an EXISTING discussion's tags. Two ways, and upstream's
 	// `DiscussionPolicy::tag()` is the FIRST of them:
 	//
 	//   - the AUTHOR, while the `allow_tag_change` setting permits it;
@@ -310,8 +400,18 @@ func (*Plugin) writeDiscussionTags(ctx context.Context, req *plugin.Relationship
 		return errors.New("you are not allowed to change that discussion's tags")
 	}
 
-	tags := make([]*domain.Tag, 0, len(req.IDs))
-	for _, id := range req.IDs {
+	return writeTags(req, req.IDs)
+}
+
+// writeTags resolves the tag ids, enforces the count rules, and sets the
+// discussion's tags.
+//
+// It is the half both paths share: creating a discussion with tags and
+// changing an existing one's tags differ in WHO may do it, not in what
+// happens to the tags.
+func writeTags(req *plugin.RelationshipWriteRequest, ids []string) error {
+	tags := make([]*domain.Tag, 0, len(ids))
+	for _, id := range ids {
 		tag, err := findTag(req.App, physicalName(nil), id)
 		if err != nil {
 			return errors.New("that tag does not exist")
