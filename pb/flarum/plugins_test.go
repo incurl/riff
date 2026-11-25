@@ -370,6 +370,137 @@ func TestTags_ChangingTagsNeedsTheAllowTagChangeSetting(t *testing.T) {
 	require.Equal(t, false, attributes["canTag"], "the control must not be offered when the save would be refused")
 }
 
+// TestTags_ChangingTheTagsRecordsAnEventPost pins the stream's record of it.
+//
+// Upstream creates a `discussionTagged` post when a discussion's tags
+// change, so a reader can see that a discussion was retagged and when. Its
+// content is `[oldTagIds, newTagIds]` — TWO ARRAYS — and the frontend
+// diffs them to say which tags were added and which removed.
+//
+// The content must reach the frontend as an ARRAY: `post.content()[0]` is
+// the first element, and a string would make it the first CHARACTER.
+func TestTags_ChangingTheTagsRecordsAnEventPost(t *testing.T) {
+	app, handler := newTestForum(t)
+
+	author, authorCookies := memberSession(t, app, "event_post_author")
+	setForumSetting(t, app, "allow_tag_change", "-1")
+
+	first := seedTag(t, app, "First", "first")
+	firstRecord, err := app.FindRecordById(mustCollection(t, app, "forum_tags"), first.Id)
+	require.NoError(t, err)
+	firstRecord.Set("is_primary", true)
+	require.NoError(t, app.Save(firstRecord))
+
+	second := seedTag(t, app, "Second", "second")
+	secondRecord, err := app.FindRecordById(mustCollection(t, app, "forum_tags"), second.Id)
+	require.NoError(t, err)
+	secondRecord.Set("is_primary", true)
+	require.NoError(t, app.Save(secondRecord))
+
+	discussionID, _ := seedDiscussionWithAuthor(t, app, author.Id, "Event", "Hello")
+	attachTag(t, app, discussionID, first.Id)
+
+	body := `{"data":{"type":"discussions","relationships":{"tags":{"data":[{"type":"tags","id":"` +
+		second.Id + `"}]}}}}`
+
+	recorder := doWithHeaders(t, handler, http.MethodPatch, "/forum/api/discussions/"+discussionID, body, authorCookies,
+		map[string]string{"X-CSRF-Token": "csrf-token"})
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	// The STREAM carries the event post.
+	recorder = do(t, handler, http.MethodGet, "/forum/api/posts?filter[discussion]="+discussionID, "", authorCookies)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	document := decodeDocument(t, recorder)
+	resources, ok := document.Data.([]any)
+	require.True(t, ok, "the data should be a resource collection")
+	require.Len(t, resources, 2, "the first post and the event post")
+
+	// The event post's content is an ARRAY.
+	var eventPost map[string]any
+
+	for _, entry := range resources {
+		candidate, ok := entry.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		attributes, ok := candidate["attributes"].(map[string]any)
+		if !ok {
+			continue
+		}
+
+		if attributes["type"] == "discussionTagged" {
+			eventPost = attributes
+		}
+	}
+
+	require.NotNil(t, eventPost, "the stream must carry the event post: %v", resources)
+
+	content, ok := eventPost["content"].([]any)
+	require.True(t, ok, "the event post's content must be an ARRAY, not a string: %v", eventPost["content"])
+	require.Len(t, content, 2, "the content is [oldTagIds, newTagIds]")
+
+	oldIDs, ok := content[0].([]any)
+	require.True(t, ok, "the old set must be an array")
+	require.Len(t, oldIDs, 1)
+	require.Equal(t, first.Id, oldIDs[0])
+
+	newIDs, ok := content[1].([]any)
+	require.True(t, ok, "the new set must be an array")
+	require.Len(t, newIDs, 1)
+	require.Equal(t, second.Id, newIDs[0])
+}
+
+// TestTags_ResendingTheSameTagsRecordsNoPost pins that nothing changed
+// means nothing is recorded.
+//
+// Upstream returns early when the old and new tag ids are equal, and a post
+// saying "the tags did not change" is noise in the stream. The comparison
+// is order-insensitive too: a client that re-sends the same tags in a
+// different order has not changed anything.
+func TestTags_ResendingTheSameTagsRecordsNoPost(t *testing.T) {
+	app, handler := newTestForum(t)
+
+	author, authorCookies := memberSession(t, app, "no_event_author")
+	setForumSetting(t, app, "allow_tag_change", "-1")
+
+	first := seedTag(t, app, "Same", "same")
+	firstRecord, err := app.FindRecordById(mustCollection(t, app, "forum_tags"), first.Id)
+	require.NoError(t, err)
+	firstRecord.Set("is_primary", true)
+	require.NoError(t, app.Save(firstRecord))
+
+	discussionID, _ := seedDiscussionWithAuthor(t, app, author.Id, "Unchanged", "Hello")
+	attachTag(t, app, discussionID, first.Id)
+
+	// The SAME set. (A set of two PRIMARY tags would break the maximum of
+	// one, so the "same set in another order" case needs a SECONDARY tag —
+	// which is what a re-send of a realistic set looks like.)
+	secondary := seedTag(t, app, "Secondary", "secondary")
+	secondaryRecord, err := app.FindRecordById(mustCollection(t, app, "forum_tags"), secondary.Id)
+	require.NoError(t, err)
+	secondaryRecord.Set("position", nil)
+	require.NoError(t, app.Save(secondaryRecord))
+	attachTag(t, app, discussionID, secondary.Id)
+
+	// The SAME set, in the other order.
+	body := `{"data":{"type":"discussions","relationships":{"tags":{"data":[{"type":"tags","id":"` +
+		secondary.Id + `"},{"type":"tags","id":"` + first.Id + `"}]}}}}`
+
+	recorder := doWithHeaders(t, handler, http.MethodPatch, "/forum/api/discussions/"+discussionID, body, authorCookies,
+		map[string]string{"X-CSRF-Token": "csrf-token"})
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	recorder = do(t, handler, http.MethodGet, "/forum/api/posts?filter[discussion]="+discussionID, "", authorCookies)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	document := decodeDocument(t, recorder)
+	resources, ok := document.Data.([]any)
+	require.True(t, ok, "the data should be a resource collection")
+	require.Len(t, resources, 1, "nothing changed, so no event post: %v", resources)
+}
+
 // TestTags_TheForumDocumentCarriesTheCountSettings pins the limits the
 // composer's picker enforces.
 //

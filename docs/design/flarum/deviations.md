@@ -555,6 +555,8 @@ filtering, and still open for authoring.
 - `addTagControl()` — the discussion page's "Edit tags" button, which opens
   the same picker seeded with the discussion's CURRENT tags and saves the
   result as the `tags` relationship.
+- The `discussionTagged` post type — the event post that records that a
+  discussion was retagged, and the component that renders it.
 - The four COUNT settings on the forum document (`minPrimaryTags` and its
   three siblings), so the picker knows the limits before an author chooses
   anything. The server enforces the same counts, so a picker that ignored
@@ -602,7 +604,14 @@ Two more adaptations, both forced by the composer:
    there (`this.composer.fields.tags`), but this port's `fields` map is typed
    `Record<string, Stream<any>>` — a plain array in it would be read as a
    Stream, and every read would be `undefined`.
-4. **CREATING A DISCUSSION WITH TAGS IS A DIFFERENT QUESTION FROM CHANGING
+4. **THE EVENT POST'S CONTENT IS AN ARRAY, NOT A STRING.** Upstream's
+   `DiscussionTaggedPost::buildContent` returns `[oldTagIds, newTagIds]` and
+   the frontend reads `post.content()[0]` — the first element, not the first
+   character. The port's `content` column is an editor field (text), so the
+   array is stored as its JSON text and the API DECODES it back into an
+   array for a non-comment post (`api.postContent`). A comment's content is
+   prose and stays a string.
+5. **CREATING A DISCUSSION WITH TAGS IS A DIFFERENT QUESTION FROM CHANGING
    ONE.** Upstream's `DiscussionPolicy::tag()` governs changing the tags of a
    discussion that EXISTS: the author may, while `allow_tag_change` permits
    it, and a moderator may through the `discussion.tag` permission. A

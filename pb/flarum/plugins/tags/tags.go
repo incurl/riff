@@ -427,5 +427,35 @@ func writeTags(req *plugin.RelationshipWriteRequest, ids []string) error {
 		}
 	}
 
-	return setDiscussionTags(req.App, req.RecordID, tags)
+	// The OLD set, read BEFORE the change: it is what the event post
+	// records, so it has to be the set as it was.
+	//
+	// A discussion being CREATED has no old set, and upstream raises its
+	// `DiscussionWasTagged` event only for an existing discussion — so no
+	// post is created for a create.
+	oldIDs, err := discussionTagIDs(req.App, req.RecordID)
+	if err != nil {
+		return err
+	}
+
+	if err := setDiscussionTags(req.App, req.RecordID, tags); err != nil {
+		return err
+	}
+
+	// A CHANGE is recorded in the stream, so a reader can see that a
+	// discussion was retagged and when. Upstream creates the post only when
+	// the set actually changed — a client that re-sends the same tags has
+	// not changed anything, and a post saying so is noise.
+	newIDs := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		newIDs = append(newIDs, tag.ID)
+	}
+
+	if !sameTagSet(oldIDs, newIDs) {
+		if err := createTaggedEventPost(req.App, req.RecordID, req.ActorID, oldIDs, newIDs); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

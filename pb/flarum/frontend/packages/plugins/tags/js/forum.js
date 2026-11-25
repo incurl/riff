@@ -42,6 +42,7 @@ import GlobalSearchState from 'flarum/forum/states/GlobalSearchState';
 import { Tag } from './models';
 import { currentTag, loadTags, sortTags, tagsLabel } from './helpers';
 import { addTagComposer } from './addTagComposer';
+import DiscussionTaggedPost from './components/DiscussionTaggedPost';
 import addTagControl from './addTagControl';
 import TagHero from './components/TagHero';
 import TagsIndexPage from './components/TagsIndexPage';
@@ -64,6 +65,11 @@ export const extend = [
   // are already on the wire; declaring them here is what turns them into
   // `discussion.tags()` and `discussion.canTag()`.
   new Extend.Model(Discussion).hasMany('tags').attribute('canTag'),
+
+  // The post that records that a discussion was retagged. Without a
+  // component for the type, the post renders as an ordinary comment —
+  // which is how a tag change would appear in the stream.
+  new Extend.PostTypes().add('discussionTagged', DiscussionTaggedPost),
 
   {
     extend() {

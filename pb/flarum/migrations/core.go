@@ -22,6 +22,7 @@ func Core(app core.App, _ *repository.Registry) error {
 		createGroupUsers,
 		createDiscussions,
 		createPosts,
+		addDiscussionTaggedPostType,
 		createDiscussionTags,
 		createPermissions,
 		createSettings,
@@ -343,8 +344,13 @@ func createPosts(app core.App) error {
 		Max:  255,
 	})
 	collection.Fields.Add(&core.SelectField{
-		Name:   "type",
-		Values: []string{"comment", "discussionRenamed"},
+		Name: "type",
+		// `discussionTagged` is upstream's third post type: the event post
+		// that records that a discussion's tags changed. The tags extension
+		// writes it, and the migration that adds it to an EXISTING instance is
+		// `1960000000_add_discussion_tagged_post_type` — this line is what a
+		// fresh install gets.
+		Values: []string{"comment", "discussionRenamed", "discussionTagged"},
 	})
 	collection.Fields.Add(&core.RelationField{
 		Name:         "edited_user",
@@ -391,6 +397,45 @@ func createPosts(app core.App) error {
 	collection.AddIndex("idx_forum_posts_user", false, "user", "")
 
 	return saveIfMissing(app, collection)
+}
+
+// addDiscussionTaggedPostType adds the `discussionTagged` post type to an
+// EXISTING posts collection.
+//
+// The forum's own migration creates the collection with the type already
+// listed, so this step is a no-op on a fresh install. It exists for an
+// instance whose posts collection predates the type: PocketBase refuses a
+// value a SELECT field does not list, so without it the tags extension
+// could not save the event post it creates when a discussion is retagged.
+//
+// Idempotency: a no-op when the value is already there.
+func addDiscussionTaggedPostType(app core.App) error {
+	collection, err := app.FindCollectionByNameOrId("forum_posts")
+	if err != nil {
+		// The collection does not exist yet: `createPosts` owns it, and it
+		// will list the value from the start.
+		return nil //nolint:nilerr // a missing collection means nothing to alter
+	}
+
+	field := collection.Fields.GetByName("type")
+	if field == nil {
+		return nil
+	}
+
+	selectField, ok := field.(*core.SelectField)
+	if !ok {
+		return nil
+	}
+
+	for _, value := range selectField.Values {
+		if value == "discussionTagged" {
+			return nil
+		}
+	}
+
+	selectField.Values = append(selectField.Values, "discussionTagged")
+
+	return app.Save(collection)
 }
 
 // createDiscussionTags creates the discussion-to-tag link table.

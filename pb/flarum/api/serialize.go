@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"time"
 
@@ -243,7 +244,7 @@ func discussionResource(discussion *domain.Discussion, canReply, canRename, canH
 // carries the Markdown source for the edit form.
 func postResource(post *domain.Post, canEdit, canDelete, canHide bool, extra map[string]any) Resource {
 	attributes := map[string]any{
-		"content":      post.Content,
+		"content":      postContent(post),
 		"contentHtml":  post.ContentHTML,
 		"contentType":  post.ContentType,
 		"createdAt":    timestamp(post.CreatedAt),
@@ -276,6 +277,27 @@ func postResource(post *domain.Post, canEdit, canDelete, canHide bool, extra map
 		Attributes:    attributes,
 		Relationships: relationships,
 	}
+}
+
+// postContent returns a post's content in the shape its type expects.
+//
+// An EVENT post (a rename, a tag change) stores its data as a JSON ARRAY —
+// upstream's `DiscussionTaggedPost::buildContent` returns
+// `[oldTagIds, newTagIds]` — and the frontend reads it as an array:
+// `post.content()[0]` is the first element, not the first character.
+//
+// The column is an editor field (text), so the array is stored as its JSON
+// text and DECODED back into an array here. A comment's content is prose and
+// stays a string.
+func postContent(post *domain.Post) any {
+	if post.Type != "comment" {
+		var decoded []any
+		if err := json.Unmarshal([]byte(post.Content), &decoded); err == nil {
+			return decoded
+		}
+	}
+
+	return post.Content
 }
 
 // notificationResource renders a notification as a JSON:API resource.
