@@ -545,12 +545,45 @@ func (r *Repository) SetGroupOrder(order []string) error {
 
 // --- discussions ---------------------------------------------------------
 
+// TagUntagged is the pseudo-tag `filter[tag]` accepts for "carries no tag
+// at all".
+//
+// It is upstream's `untagged` value (`TagFilter::constrain`), and it is
+// resolved before any slug lookup, so a real tag whose slug happens to be
+// `untagged` cannot shadow it.
+const TagUntagged = "untagged"
+
+// TagFilter is one OR-GROUP of `filter[tag]`.
+//
+// A discussion satisfies it when it carries at least one of the members —
+// upstream's nested `where` closure, whose members are
+// `whereIn(..., 'or', $negate)`.
+type TagFilter struct {
+	// Members are tag record ids, or [TagUntagged].
+	Members []string
+	// Negated inverts every membership test (`filter[-tag]`).
+	//
+	// Each MEMBER is negated separately and the results are still OR-ed,
+	// exactly as upstream's `whereIn(..., 'or', $negate)` renders it — so
+	// `-tag:a,b` excludes only the discussions that carry BOTH. Faithful to
+	// upstream rather than intuitive, because a client's filter has to mean
+	// the same thing on both sides.
+	Negated bool
+}
+
 // DiscussionFilter narrows a discussion listing.
 type DiscussionFilter struct {
 	// UserID limits the listing to discussions the user started.
 	UserID string
-	// TagID limits the listing to discussions carrying the tag.
-	TagID string
+	// TagFilters is upstream's `filter[tag]`, one entry per OR-GROUP.
+	//
+	// A discussion must satisfy EVERY entry — upstream's `TagFilter` nests
+	// one `where` closure per group and Laravel ANDs the closures, which is
+	// why the client sends `{tag: ['foo,bar', 'baz']}` for `tag:foo,bar
+	// tag:baz` ("(foo OR bar) AND baz"). Two filters with the same key but
+	// opposite negation (`tag:a -tag:b`) are two entries here, because
+	// upstream keeps one Filter object per value.
+	TagFilters []TagFilter
 	// State limits the listing to discussions in that state.
 	State string
 	// Search matches the title or the first post's content.
@@ -662,8 +695,10 @@ func (r *Repository) ListDiscussions(filter DiscussionFilter, limit, offset int)
 	// page: a page-level filter would only ever see `limit` rows, so a tag
 	// page could show nothing while the tag has discussions, and `total`
 	// would count every discussion rather than the tagged ones.
-	if filter.TagID != "" {
-		membership, err := r.tagMembershipExpression([]string{filter.TagID}, false)
+	//
+	// One clause per OR-group, AND-ed — upstream's `filter[tag]` semantics.
+	for index, tagFilter := range filter.TagFilters {
+		membership, err := r.tagGroupExpression(index, tagFilter.Members, tagFilter.Negated)
 		if err != nil {
 			return nil, 0, err
 		}

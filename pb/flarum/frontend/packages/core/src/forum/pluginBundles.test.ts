@@ -92,6 +92,10 @@ describeIfBuilt('the first-party plugin bundles', () => {
     // `notificationComponents`.
     (global as any).postComponents = {};
     (global as any).notificationComponents = {};
+    // The search registry: `Extend.Search` pushes a gambit onto
+    // `app.search.gambits.gambits[modelType]` (the tags extension registers
+    // its `tag:` gambit there).
+    (global as any).search = { gambits: { gambits: {} } };
   });
 
   it('register themselves on flarum.extensions under their own id', () => {

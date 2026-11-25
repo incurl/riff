@@ -1,7 +1,11 @@
 package api
 
 import (
+	"cmp"
 	"context"
+	"net/url"
+	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/pocketbase/pocketbase/core"
@@ -22,16 +26,16 @@ func (s *Server) listDiscussionsHandler(e *core.RequestEvent) error {
 	// `/t/<slug>`, and upstream resolves slugs) and as a record ID from an API
 	// client. Both are accepted; an unknown value filters to nothing, which is
 	// what a bogus id has always done.
-	tagID, err := s.resolveTagFilter(query.Get("filter[tag]"))
+	tagFilters, err := s.resolveTagFilters(query)
 	if err != nil {
 		return fail(e, errInternal("The discussions could not be loaded.", err))
 	}
 
 	filter := repository.DiscussionFilter{
-		UserID: query.Get("filter[user]"),
-		TagID:  tagID,
-		State:  query.Get("filter[state]"),
-		Search: strings.TrimSpace(query.Get("filter[q]")),
+		UserID:     query.Get("filter[user]"),
+		TagFilters: tagFilters,
+		State:      query.Get("filter[state]"),
+		Search:     strings.TrimSpace(query.Get("filter[q]")),
 		// The sort is upstream's: a bare name sorts ascending, a leading
 		// "-" sorts descending (`-lastPostedAt`, `-commentCount`, ...).
 		Sort: strings.TrimSpace(query.Get("sort")),
@@ -44,7 +48,7 @@ func (s *Server) listDiscussionsHandler(e *core.RequestEvent) error {
 	// The tag filter is what makes this load-bearing: a tag page must keep
 	// showing a hidden tag's discussions, or the page an operator is looking
 	// at goes blank the moment they hide the tag.
-	filter.ExcludeHiddenTags = filter.UserID == "" && filter.TagID == "" && filter.State == "" && filter.Search == ""
+	filter.ExcludeHiddenTags = filter.UserID == "" && len(filter.TagFilters) == 0 && filter.State == "" && filter.Search == ""
 
 	discussions, total, err := s.repo.ListDiscussions(filter, limit, offset)
 	if err != nil {
@@ -64,26 +68,123 @@ func (s *Server) listDiscussionsHandler(e *core.RequestEvent) error {
 	return s.writeDocumentWithIncluded(e, resources, meta, links)
 }
 
-// resolveTagFilter turns `filter[tag]` into a tag record id.
+// resolveTagFilters turns `filter[tag]` (and its negated spelling
+// `filter[-tag]`) into the repository's OR-groups.
 //
-// A value that already IS an id (or that matches no slug) is returned
-// unchanged, so the two spellings are one code path: the repository always
-// filters by id.
-func (s *Server) resolveTagFilter(value string) (string, error) {
-	if value == "" {
-		return "", nil
+// The value is upstream's: a list of groups, each a comma-separated OR-set,
+// and the groups are AND-ed. A member is a slug (what the frontend and an
+// upstream client send), a record id (what this port's own tests and API
+// clients send), or the pseudo-tag `untagged`.
+//
+// `untagged` is resolved BEFORE any slug lookup, so a real tag whose slug is
+// `untagged` cannot shadow it — upstream compares the literal string first
+// for the same reason. Empty members (`a,,b`) are dropped rather than
+// resolved: upstream would turn one into a null id, which matches nothing.
+func (s *Server) resolveTagFilters(query url.Values) ([]repository.TagFilter, error) {
+	filters := make([]repository.TagFilter, 0, 2)
+
+	for _, source := range []struct {
+		key     string
+		negated bool
+	}{
+		{key: "filter[tag]"},
+		{key: "filter[-tag]", negated: true},
+	} {
+		for _, raw := range tagFilterValues(query, source.key) {
+			members := make([]string, 0, 2)
+
+			for _, part := range strings.Split(raw, ",") {
+				member := strings.TrimSpace(part)
+
+				switch member {
+				case "":
+					// A stray comma is not a member: upstream would resolve
+					// it to a null id, which matches nothing.
+				case repository.TagUntagged:
+					members = append(members, repository.TagUntagged)
+				default:
+					id, err := s.repo.TagIDBySlug(member)
+					if err != nil {
+						return nil, err
+					}
+					if id == "" {
+						// Not a slug: it may already be the record id.
+						id = member
+					}
+					members = append(members, id)
+				}
+			}
+
+			if len(members) == 0 {
+				continue
+			}
+
+			filters = append(filters, repository.TagFilter{Members: members, Negated: source.negated})
+		}
 	}
 
-	id, err := s.repo.TagIDBySlug(value)
-	if err != nil {
-		return "", err
+	return filters, nil
+}
+
+// tagFilterValues collects one filter key's values, whatever shape it
+// arrived in.
+//
+// A Flarum client can spell the same filter three ways, and all three are
+// accepted because the client chooses:
+//
+//	filter[tag]=a        a single value (the tag page's route param)
+//	filter[tag][]=a      an unindexed array
+//	filter[tag][0]=a     an indexed array — what mithril's query builder
+//	                     emits for a JS array, and what the gambit produces
+//
+// A repeated `filter[tag]` is the AND form and keeps its order. The bracketed
+// forms are sorted by their index so the client's group order survives.
+func tagFilterValues(query url.Values, key string) []string {
+	values := append([]string{}, query[key]...)
+
+	type indexedValue struct {
+		index int
+		order int
+		value string
 	}
 
-	if id != "" {
-		return id, nil
+	prefix := key + "["
+	indexed := []indexedValue{}
+	order := 0
+
+	for name, entries := range query {
+		if name == key || !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, "]") {
+			continue
+		}
+
+		inner := strings.TrimSuffix(strings.TrimPrefix(name, prefix), "]")
+
+		// An unindexed `[]` keeps its encounter order; an indexed one sorts
+		// by the number, which is the order the client wrote.
+		index := order
+		if parsed, err := strconv.Atoi(inner); err == nil {
+			index = parsed
+		}
+
+		for _, entry := range entries {
+			indexed = append(indexed, indexedValue{index: index, order: order, value: entry})
+			order++
+		}
 	}
 
-	return value, nil
+	slices.SortStableFunc(indexed, func(a, b indexedValue) int {
+		if a.index != b.index {
+			return cmp.Compare(a.index, b.index)
+		}
+
+		return cmp.Compare(a.order, b.order)
+	})
+
+	for _, entry := range indexed {
+		values = append(values, entry.value)
+	}
+
+	return values
 }
 
 // writeDocumentWithIncluded writes a document and the resources its

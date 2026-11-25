@@ -14,9 +14,13 @@ import (
 // listTagsHandler serves GET /api/tags.
 //
 // The response is a JSON:API collection of tag resources.
+//
+// `filter[q]` is upstream's `TagSearcher`: a prefix match on a tag's name or
+// slug. It is what the header's search dropdown asks when the reader types, so
+// a tag with no discussions yet is still findable by name.
 func (p *Plugin) listTagsHandler(e *core.RequestEvent) error {
 	physical := physicalName(e)
-	tags, err := listTags(e.App, physical)
+	tags, err := listTags(e.App, physical, e.Request.URL.Query().Get("filter[q]"))
 	if err != nil {
 		return api.WriteError(e, http.StatusInternalServerError, api.CodeInternal, "The tags could not be loaded.")
 	}

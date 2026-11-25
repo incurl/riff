@@ -847,3 +847,192 @@ func TestTags_AHiddenTagLeavesTheAllDiscussionsPage(t *testing.T) {
 		"a filtered listing must not apply the all-discussions exclusion")
 	require.Equal(t, 2, total)
 }
+
+// TestTags_TheTagFilterAcceptsOrGroups pins the comma form of `filter[tag]`.
+//
+// Upstream's `TagFilter` reads the value as a list of groups and splits each
+// one on commas, so `filter[tag]=guides,news` is ONE group: either tag. The
+// port resolved a single slug, so the comma was a tag name that did not exist
+// and the page went blank.
+func TestTags_TheTagFilterAcceptsOrGroups(t *testing.T) {
+	app, handler := newTestForum(t)
+
+	guides := seedTag(t, app, "Guides", "guides")
+	news := seedTag(t, app, "News", "news")
+	other := seedTag(t, app, "Other", "other")
+
+	guidesID, _ := seedDiscussion(t, app, "A guide", "body")
+	newsID, _ := seedDiscussion(t, app, "Some news", "body")
+	otherID, _ := seedDiscussion(t, app, "Other things", "body")
+	attachTag(t, app, guidesID, guides.Id)
+	attachTag(t, app, newsID, news.Id)
+	attachTag(t, app, otherID, other.Id)
+
+	recorder := do(t, handler, http.MethodGet, "/forum/api/discussions?filter[tag]=guides,news", "", nil)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	ids, total := discussionListIDs(t, recorder)
+	require.ElementsMatch(t, []string{guidesID, newsID}, ids, "either tag must match")
+	require.Equal(t, 2, total)
+}
+
+// TestTags_TheTagFilterAcceptsAndGroups pins the repeated form.
+//
+// A REPEATED `filter[tag]` is a second group, and upstream ANDs the groups, so
+// `filter[tag]=guides&filter[tag]=news` keeps only the discussions carrying
+// both. It is what the gambit's `tag:a tag:b` sends.
+func TestTags_TheTagFilterAcceptsAndGroups(t *testing.T) {
+	app, handler := newTestForum(t)
+
+	guides := seedTag(t, app, "Guides", "guides")
+	news := seedTag(t, app, "News", "news")
+
+	bothID, _ := seedDiscussion(t, app, "Guides and news", "body")
+	guidesID, _ := seedDiscussion(t, app, "Only a guide", "body")
+	newsID, _ := seedDiscussion(t, app, "Only news", "body")
+	attachTag(t, app, bothID, guides.Id)
+	attachTag(t, app, bothID, news.Id)
+	attachTag(t, app, guidesID, guides.Id)
+	attachTag(t, app, newsID, news.Id)
+
+	recorder := do(t, handler, http.MethodGet, "/forum/api/discussions?filter[tag]=guides&filter[tag]=news", "", nil)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	ids, total := discussionListIDs(t, recorder)
+	require.Equal(t, []string{bothID}, ids, "only the discussion carrying both tags may match")
+	require.Equal(t, 1, total)
+}
+
+// TestTags_TheTagFilterAcceptsTheIndexedForm pins the spelling the CLIENT
+// actually emits.
+//
+// `m.buildQueryString` renders a JS array as
+// `filter[tag][0]=a&filter[tag][1]=b`, so a gambit-produced filter arrives
+// indexed. Reading only the exact key `filter[tag]` would silently drop it —
+// a filtered feed that looks unfiltered.
+func TestTags_TheTagFilterAcceptsTheIndexedForm(t *testing.T) {
+	app, handler := newTestForum(t)
+
+	guides := seedTag(t, app, "Guides", "guides")
+	news := seedTag(t, app, "News", "news")
+
+	bothID, _ := seedDiscussion(t, app, "Guides and news", "body")
+	guidesID, _ := seedDiscussion(t, app, "Only a guide", "body")
+	newsID, _ := seedDiscussion(t, app, "Only news", "body")
+	attachTag(t, app, bothID, guides.Id)
+	attachTag(t, app, bothID, news.Id)
+	attachTag(t, app, guidesID, guides.Id)
+	attachTag(t, app, newsID, news.Id)
+
+	recorder := do(t, handler, http.MethodGet,
+		"/forum/api/discussions?filter[tag][0]=guides&filter[tag][1]=news", "", nil)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	ids, _ := discussionListIDs(t, recorder)
+	require.Equal(t, []string{bothID}, ids, "an indexed filter is two groups, so the same as the repeated form")
+}
+
+// TestTags_TheTagFilterAcceptsTheUntaggedPseudoTag pins upstream's
+// `untagged` value: the discussions carrying NO tag at all.
+func TestTags_TheTagFilterAcceptsTheUntaggedPseudoTag(t *testing.T) {
+	app, handler := newTestForum(t)
+
+	guides := seedTag(t, app, "Guides", "guides")
+
+	taggedID, _ := seedDiscussion(t, app, "Tagged", "body")
+	untaggedID, _ := seedDiscussion(t, app, "Untagged", "body")
+	attachTag(t, app, taggedID, guides.Id)
+
+	recorder := do(t, handler, http.MethodGet, "/forum/api/discussions?filter[tag]=untagged", "", nil)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	ids, total := discussionListIDs(t, recorder)
+	require.Equal(t, []string{untaggedID}, ids, "untagged means no tag rows at all")
+	require.Equal(t, 1, total)
+}
+
+// TestTags_TheTagFilterIsNegated pins upstream's `-tag:` spelling, and that a
+// positive and a negated filter can be combined.
+//
+// The negation belongs to the FILTER, not to the listing: `tag:news -tag:guides`
+// keeps the news discussions that are not also guides.
+func TestTags_TheTagFilterIsNegated(t *testing.T) {
+	app, handler := newTestForum(t)
+
+	guides := seedTag(t, app, "Guides", "guides")
+	news := seedTag(t, app, "News", "news")
+
+	guideID, _ := seedDiscussion(t, app, "A guide", "body")
+	newsID, _ := seedDiscussion(t, app, "Some news", "body")
+	attachTag(t, app, guideID, guides.Id)
+	attachTag(t, app, newsID, news.Id)
+
+	recorder := do(t, handler, http.MethodGet, "/forum/api/discussions?filter[-tag]=guides", "", nil)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	ids, _ := discussionListIDs(t, recorder)
+	require.Equal(t, []string{newsID}, ids, "the negated tag's discussion must be the only one dropped")
+
+	recorder = do(t, handler, http.MethodGet,
+		"/forum/api/discussions?filter[tag]=news&filter[-tag]=guides", "", nil)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	ids, total := discussionListIDs(t, recorder)
+	require.Equal(t, []string{newsID}, ids)
+	require.Equal(t, 1, total)
+}
+
+// tagNames decodes a tag listing into its names.
+func tagNames(t *testing.T, recorder *httptest.ResponseRecorder) []string {
+	t.Helper()
+
+	var document struct {
+		Data []struct {
+			Attributes struct {
+				Name string `json:"name"`
+			} `json:"attributes"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &document), recorder.Body.String())
+
+	names := make([]string, 0, len(document.Data))
+	for _, resource := range document.Data {
+		names = append(names, resource.Attributes.Name)
+	}
+
+	return names
+}
+
+// TestTags_TheTagSearchMatchesAPrefixOfTheNameOrSlug pins upstream's
+// `TagSearcher` and the extension's `FulltextFilter`.
+//
+// The match is a PREFIX on the name or the slug, not a substring: that is
+// what makes typing in the header's search box behave like autocomplete
+// instead of full-text search over a taxonomy. A substring match would also
+// list a tag whose slug merely contains the query, which upstream
+// deliberately does not do.
+func TestTags_TheTagSearchMatchesAPrefixOfTheNameOrSlug(t *testing.T) {
+	app, handler := newTestForum(t)
+
+	seedTag(t, app, "Guides", "guides")
+	seedTag(t, app, "News", "news")
+	seedTag(t, app, "Beginner's Guide", "beginners-guide")
+
+	// A prefix of the NAME, in any case.
+	recorder := do(t, handler, http.MethodGet, "/forum/api/tags?filter[q]=Gui", "", nil)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	require.Equal(t, []string{"Guides"}, tagNames(t, recorder),
+		"a prefix of the name must match, and case must not")
+
+	// A prefix of the SLUG matches a tag whose name does not start with it.
+	recorder = do(t, handler, http.MethodGet, "/forum/api/tags?filter[q]=beginners", "", nil)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	require.Equal(t, []string{"Beginner's Guide"}, tagNames(t, recorder),
+		"a prefix of the slug must match too")
+
+	// "ide" is inside "Guides" but is not a prefix: a substring match would
+	// list it, and that is not upstream's behaviour.
+	recorder = do(t, handler, http.MethodGet, "/forum/api/tags?filter[q]=ide", "", nil)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	require.Empty(t, tagNames(t, recorder), "the match is a prefix, not a substring")
+}

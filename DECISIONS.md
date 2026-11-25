@@ -5,6 +5,69 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## THE TAG FILTER IS A VALUE, NOT A SLUG (2026-11-25)
+
+The last two tags gaps: `filter[tag]` breadth, and upstream's `TagSearcher`.
+
+**`filter[tag]` IS A LIST OF AND-ED OR-GROUPS.** Upstream's `TagFilter`
+reads the value as `string|array`, splits each element on commas into an OR
+set, and nests one `where` closure per element — so `tag:foo,bar tag:baz`
+means `(foo OR bar) AND baz`. The frontend mirrors that in
+`GambitManager.apply` (`predicates: true` concatenates), and the sent shape
+is `{tag: ['foo,bar', 'baz']}`. The port resolved ONE slug, so a comma was a
+tag name that did not exist and the page went blank.
+
+Three HTTP spellings have to be read, because the client chooses between
+them: `filter[tag]=a` (the tag page's route param), a repeated key (the AND
+form), and the INDEXED form `filter[tag][0]=a` — which is what mithril's
+query builder emits for a JS array, and therefore what the gambit produces.
+Reading only the exact key drops the gambit's filter silently, and a
+filtered feed that looks unfiltered is the worst kind of wrong.
+
+**NEGATION IS THE FILTER KEY, NOT A PREFIX.** Flarum spells it `filter[-tag]`,
+because `GambitManager` keys the filter map by `-tag` and `searchToQuery`
+strips the `-` on the way back. Each filter carries its own polarity, so
+`tag:a -tag:b` is two filters that are BOTH applied — the model is
+`[]TagFilter{Members, Negated}`, not "the tag filter plus a negated flag".
+
+**`untagged` IS A PSEUDO-TAG, RESOLVED BEFORE ANY SLUG LOOKUP**, so a real
+tag whose slug happens to be `untagged` cannot shadow it.
+
+**A NEGATED OR-GROUP MEANS WHAT UPSTREAM SAYS IT MEANS.** Upstream renders
+each member as `whereIn(..., 'or', $negate)`, so `-tag:a,b` produces
+`NOT IN (a) OR NOT IN (b)` — it excludes only the discussions carrying BOTH.
+That is not what an author would guess, and it survives here anyway: a
+client's filter has to mean the same thing on both sides, and "tidying" it
+into `NOT IN (a, b)` would quietly return a different set than a Flarum
+client expects. It is a comment on `TagFilter.Negated` for the next reader.
+
+**BOUND PARAMETER NAMES MUST BE UNIQUE ACROSS CLAUSES.** The groups are
+combined into ONE statement, and dbx binds a name once — the later value
+replacing the earlier. Named per member index, the first member of every
+group was `{:tag_group_0}`, so `filter[tag]=news&filter[-tag]=guides` bound
+both to `guides` and matched nothing. The key carries the group's ordinal
+now, and `TestTags_TheTagFilterIsNegated` fails if it stops doing so (the
+AND-group tests pass by luck without it, which is why each of them seeds a
+discussion carrying only one of the two tags).
+
+**`TagSearcher` IS A PREFIX MATCH ON THE NAME OR THE SLUG.** Upstream's
+`TagSearcher` is `Tag::whereVisibleTo($actor)` and the extension's
+`FulltextFilter` adds `name LIKE 'q%' OR slug LIKE 'q%'` — a prefix, not a
+substring, and not a description search. The match happens in Go over the
+records `listTags` already reads: the tag list is a taxonomy, not a feed, and
+a SQL prefix match would rest on how PocketBase decides to wrap a LIKE
+parameter (`%` in the caller's text changes the meaning).
+
+**THE DROPDOWN SECTION IS A RIFF ADDITION.** Upstream registers the searcher
+and nothing else: its core search dropdown lists discussions, posts and
+users, and `flarum/tags` has no client-side source. Here the searcher would
+have no consumer at all — a tag with no discussions yet is findable by
+nothing — so the plugin adds a `tags` source to `GlobalSearch.sourceItems`
+(recorded in `docs/design/flarum/deviations.md` §16b). The `tag:` gambit is
+upstream's, registered through `Extend.Search()`, and it writes the same
+`filter[tag]` the tag page's route param writes, so the server keeps ONE
+implementation of "filter by tag".
+
 ## A TAG FILTER IS A CLAUSE, NOT A POST-FILTER (2026-11-25)
 
 Three gaps left in the tags alignment. One of them turned out to be a query

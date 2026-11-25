@@ -569,11 +569,6 @@ filtering, and still open for authoring.
 - `extendRealtime` — there is no realtime extension to hook.
 - `addTagsHomePageOption` / `addTagSlugDriverLabels` — no "Tags" home-page option
   and no slug driver labels.
-- `filter[tag]` beyond one value. Upstream's `TagFilter` accepts comma-separated
-  slug groups (OR), the `untagged` pseudo-slug and negation; the port resolves a
-  single slug-or-id.
-- `TagSearcher` — upstream makes tags (and posts, via `PostTagFilter`) findable
-  from the global search.
 
 **Now built** (they were listed here as gaps, and are recorded so the list stays
 honest about what a reader can expect to find in the code):
@@ -593,6 +588,24 @@ honest about what a reader can expect to find in the code):
   unfiltered discussion list drops every discussion carrying a hidden tag, and
   any filter turns the exclusion off — which is what keeps a hidden tag's own
   page from going blank.
+- `filter[tag]` breadth, to upstream's `TagFilter` value contract: a list of
+  AND-ed OR-groups (`filter[tag]=a,b` is either; a repeated key or an indexed
+  array is several groups), the `untagged` pseudo-tag, and per-filter negation
+  through `filter[-tag]`. All three HTTP spellings are read because the client
+  chooses between them — the gambit produces the indexed form.
+- `TagSearcher`, and the `tag:` gambit that feeds it: `GET /api/tags?filter[q]=`
+  is a PREFIX match on a tag's name or slug (upstream's `FulltextFilter`), and
+  `tag:slug` / `-tag:slug` in the search box write the same `filter[tag]` the
+  tag page's route param writes.
+
+**One deliberate addition**, recorded because upstream does not have it:
+upstream registers `TagSearcher` and ships NO client-side search source — its
+core dropdown lists discussions, posts and users. With the searcher and nothing
+else, a tag with no discussions yet would be findable by nothing, so the plugin
+adds a `tags` section to `GlobalSearch.sourceItems`
+(`js/components/GlobalTagsSearchSource.js`, gated on `canViewForum` like the
+discussion and post sections). Its labels are untranslated English, because this
+port ships no locale bundle for the extension.
 
 `addTagsPermissionScope` IS ported: a restricted tag gets its own column in the
 admin permission grid, and the grant is stored with the tag's id as its scope.

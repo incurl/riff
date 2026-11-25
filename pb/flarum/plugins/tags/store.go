@@ -1,6 +1,8 @@
 package tags
 
 import (
+	"strings"
+
 	"github.com/pkg/errors"
 	"github.com/pocketbase/pocketbase/core"
 
@@ -29,8 +31,19 @@ func tagRecord(record *core.Record) *domain.Tag {
 	}
 }
 
-// listTags returns every tag, ordered by position then name.
-func listTags(app core.App, physical string) ([]*domain.Tag, error) {
+// listTags returns the tags, optionally narrowed to a search prefix.
+//
+// The search is upstream's `TagSearcher` + the extension's `FulltextFilter`:
+// a PREFIX match on the NAME or the SLUG, case-insensitively — not a
+// substring match. `filter[q]=gui` finds "Guides" and "guides", not
+// "Beginners Guide".
+//
+// It filters in memory rather than in the query on purpose: `listTags` already
+// reads every record (the tag list is a taxonomy, not a feed), and a SQL
+// prefix match would mean depending on how PocketBase decides to wrap a LIKE
+// parameter — which is the caller's business to escape, and one more thing to
+// get wrong for a list this small.
+func listTags(app core.App, physical, search string) ([]*domain.Tag, error) {
 	collection, err := app.FindCollectionByNameOrId(physical)
 	if err != nil {
 		return nil, errors.Wrapf(err, "tags: the %q collection is missing", physical)
@@ -41,11 +54,26 @@ func listTags(app core.App, physical string) ([]*domain.Tag, error) {
 		return nil, err
 	}
 
+	prefix := strings.ToLower(strings.TrimSpace(search))
+
 	tags := make([]*domain.Tag, 0, len(records))
 	for _, record := range records {
-		tags = append(tags, tagRecord(record))
+		tag := tagRecord(record)
+
+		if prefix != "" && !hasPrefixFold(tag.Name, prefix) && !hasPrefixFold(tag.Slug, prefix) {
+			continue
+		}
+
+		tags = append(tags, tag)
 	}
+
 	return tags, nil
+}
+
+// hasPrefixFold reports whether a value starts with an already-lowercased
+// prefix, ignoring case.
+func hasPrefixFold(value, lowercasePrefix string) bool {
+	return strings.HasPrefix(strings.ToLower(value), lowercasePrefix)
 }
 
 // findTag returns a tag by id or slug.

@@ -65,6 +65,60 @@ func (r *Repository) hiddenTagIDs() ([]string, error) {
 	return ids, nil
 }
 
+// tagGroupExpression builds the predicate for one `filter[tag]` OR-group.
+//
+// A discussion satisfies the group when it carries at least one of the
+// group's members — upstream's nested `where` closure, whose members are
+// `whereIn(..., 'or', $negate)`.
+//
+// `negated` is upstream's `-tag:`: every MEMBER is negated and the results
+// are still OR-ed, because that is literally what the nested call renders.
+// So `-tag:a,b` keeps a discussion that lacks a OR lacks b — it excludes
+// only the ones carrying BOTH. Faithful to upstream rather than intuitive,
+// because a client's filter must mean the same thing on both.
+//
+// [TagUntagged] is the member with no tag rows at all, so it contributes
+// the join table's own presence/absence rather than a `tag = …` test.
+//
+// `id` names the GROUP: the clauses are combined into one statement, and a
+// parameter name that repeats across groups is bound once — the later value
+// silently replacing the earlier one, which makes two filters behave as if
+// the second were the first.
+func (r *Repository) tagGroupExpression(id int, group []string, negated bool) (dbx.Expression, error) {
+	collection, err := r.collection("discussion_tags")
+	if err != nil {
+		return nil, err
+	}
+
+	table := collection.Name
+	terms := make([]string, 0, len(group))
+	params := make(map[string]any, len(group))
+
+	for index, member := range group {
+		if member == TagUntagged {
+			if negated {
+				terms = append(terms, "id IN (SELECT discussion FROM "+table+")")
+			} else {
+				terms = append(terms, "id NOT IN (SELECT discussion FROM "+table+")")
+			}
+
+			continue
+		}
+
+		key := "tag_group_" + strconv.Itoa(id) + "_" + strconv.Itoa(index)
+		params[key] = member
+
+		operator := " IN "
+		if negated {
+			operator = " NOT IN "
+		}
+
+		terms = append(terms, "id"+operator+"(SELECT discussion FROM "+table+" WHERE tag = {:"+key+"})")
+	}
+
+	return dbxExp("("+strings.Join(terms, " OR ")+")", params), nil
+}
+
 // TagIDBySlug resolves a tag's record id from its slug.
 //
 // It exists because `filter[tag]` arrives in TWO spellings and both are

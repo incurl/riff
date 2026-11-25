@@ -10,10 +10,12 @@
 //   addTagLabels()   labels on list items, and on a discussion's hero
 //   addTagControl()  the "Edit tags" control on a discussion (addTagControl.js)
 //   addTagComposer() the composer's tag picker (addTagComposer.js)
+//   addTagSearchSource()  the Tags section of the header's search dropdown
 //   extendRealtime() (NOT ported: this port has no realtime extension)
 //
-// plus `Extend.Routes()` for `/tags` and `/t/:tags`, and
-// `Extend.Model(Discussion)` for the `tags` relation and `canTag`.
+// plus `Extend.Routes()` for `/tags` and `/t/:tags`, `Extend.Model(Discussion)`
+// for the `tags` relation and `canTag`, and `Extend.Search()` for the `tag:`
+// gambit.
 //
 // A Flarum extension bundle exports `{ extend: [...] }`. The boot shell loads
 // the bundle, hands `flarum.extensions` to `app.bootExtensions`, and each
@@ -35,6 +37,7 @@ import textContrastClass from 'flarum/common/helpers/textContrastClass';
 import Discussion from 'flarum/common/models/Discussion';
 import DiscussionHero from 'flarum/forum/components/DiscussionHero';
 import DiscussionListItem from 'flarum/forum/components/DiscussionListItem';
+import GlobalSearch from 'flarum/forum/components/GlobalSearch';
 import IndexPage from 'flarum/forum/components/IndexPage';
 import IndexSidebar from 'flarum/forum/components/IndexSidebar';
 import DiscussionListState from 'flarum/forum/states/DiscussionListState';
@@ -44,6 +47,8 @@ import { Tag } from './models';
 import { currentTag, loadTags, sortTags, tagDefaultSort, tagsLabel } from './helpers';
 import { addTagComposer } from './addTagComposer';
 import DiscussionTaggedPost from './components/DiscussionTaggedPost';
+import GlobalTagsSearchSource from './components/GlobalTagsSearchSource';
+import TagGambit from './query/TagGambit';
 import addTagControl from './addTagControl';
 import TagHero from './components/TagHero';
 import TagsIndexPage from './components/TagsIndexPage';
@@ -67,6 +72,11 @@ export const extend = [
   // `discussion.tags()` and `discussion.canTag()`.
   new Extend.Model(Discussion).hasMany('tags').attribute('canTag'),
 
+  // `tag:slug` / `-tag:slug` in the search box. The gambit writes the same
+  // `filter[tag]` the tag page's route param writes, so the server has ONE
+  // implementation of "filter by tag".
+  new Extend.Search().gambit('discussions', TagGambit),
+
   // The post that records that a discussion was retagged. Without a
   // component for the type, the post renders as an ordinary comment —
   // which is how a tag change would appear in the stream.
@@ -78,6 +88,7 @@ export const extend = [
       addTagFilter();
       addTagComposer();
       addTagControl();
+      addTagSearchSource();
 
       // One shared tag-list request for the whole page load: the labels, the
       // sidebar and `/tags` all read from it.
@@ -97,6 +108,26 @@ export const extend = [
     },
   },
 ];
+
+/**
+ * The Tags section of the header's search dropdown.
+ *
+ * Upstream's `TagSearcher` makes `GET /api/tags?filter[q]=` work, and its
+ * core dropdown lists discussions, posts and users — so the searcher has no
+ * client-side consumer upstream. Here it gets one, because a tag with no
+ * discussions yet is otherwise findable by nothing at all.
+ *
+ * The section is gated on `canViewForum`, like the discussion and post
+ * sections of the core dropdown: a tag page is a discussion listing, so a
+ * caller who may not read discussions has nothing to do with a tag result.
+ */
+function addTagSearchSource() {
+  extendMethod(GlobalSearch.prototype, 'sourceItems', function (items) {
+    if (!app.forum.attribute('canViewForum')) return;
+
+    items.add('tags', new GlobalTagsSearchSource());
+  });
+}
 
 /**
  * Labels on a discussion, in both places upstream puts them.
