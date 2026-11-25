@@ -360,7 +360,8 @@ func (*Plugin) writeDiscussionTags(ctx context.Context, req *plugin.Relationship
 	// answered 422.
 	if req.Creating {
 		for _, id := range req.IDs {
-			if _, err := findTag(req.App, physicalName(nil), id); err != nil {
+			tag, err := findTag(req.App, physicalName(nil), id)
+			if err != nil {
 				return errors.New("that tag does not exist")
 			}
 
@@ -368,8 +369,13 @@ func (*Plugin) writeDiscussionTags(ctx context.Context, req *plugin.Relationship
 			// `canStartDiscussion`: may this actor start a discussion in
 			// this tag? A tag with its own permission scope is the case
 			// that matters, and the check is the SCOPED one — the same
-			// `Can` the attribute uses.
-			if !req.Can(domain.PermissionStartDiscussion, api.TypeTag, id) {
+			// check the attribute uses.
+			//
+			// A RESTRICTED tag asks the scoped question, and the global
+			// grant is not consulted: the member group holds
+			// `startDiscussion` globally, so a fallback would open every
+			// restricted tag to every member.
+			if !canStartInTag(req, tag) {
 				return errors.New("you are not allowed to start a discussion with that tag")
 			}
 		}
@@ -401,6 +407,30 @@ func (*Plugin) writeDiscussionTags(ctx context.Context, req *plugin.Relationship
 	}
 
 	return writeTags(req, req.IDs)
+}
+
+// canStartInTag reports whether the actor may start a discussion in the
+// tag.
+//
+// A RESTRICTED tag asks the SCOPED question: the tag's own rules answer
+// it, and the global grant is not consulted. The member group holds
+// `startDiscussion` globally, so a fallback would open every restricted
+// tag to every member — and a restricted tag that restricts nobody is
+// worse than no restricted tag at all, because the operator believes it
+// is closed.
+//
+// An unrestricted tag has no scope of its own, so the ordinary check
+// answers it.
+func canStartInTag(req *plugin.RelationshipWriteRequest, tag *domain.Tag) bool {
+	if tag == nil {
+		return false
+	}
+
+	if tag.IsRestricted && req.CanScoped != nil {
+		return req.CanScoped(domain.PermissionStartDiscussion, api.TypeTag, tag.ID)
+	}
+
+	return req.Can(domain.PermissionStartDiscussion, api.TypeTag, tag.ID)
 }
 
 // writeTags resolves the tag ids, enforces the count rules, and sets the

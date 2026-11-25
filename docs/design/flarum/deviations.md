@@ -564,18 +564,52 @@ filtering, and still open for authoring.
 
 **Not built**, and why each is a real absence rather than an oversight:
 
-- `addTagControl()` — the tag button on a discussion page, and the save that
-  carries the new set.
-- `discussionTagged` PostTypes — a rename or tag change is stored as a post of
-  that type, and the port renders no component for it, so a stream shows those
-  events as ordinary posts.
 - `app.tagList` (`TagListState`) — a shared, sorted, indexed tag list. The port
   reads the store directly, which is equivalent for the sizes involved.
 - `extendRealtime` — there is no realtime extension to hook.
-- `addTagsPermissionScope` / `addTagsHomePageOption` / `addTagSlugDriverLabels`
-  — no per-tag scope on the admin permission grid (the Go layer enforces
-  scopes; the grid cannot grant one), no "Tags" home-page option, and no slug
-  driver labels.
+- `addTagsHomePageOption` / `addTagSlugDriverLabels` — no "Tags" home-page option
+  and no slug driver labels.
+- Upstream's `getSelectableTags` rule in the picker — it shows the tags whose
+  `canStartDiscussion()` / `canAddToDiscussion()` is true, so a tag the caller
+  may not use is never offered. The port's `TagSelectionModal` lists every tag,
+  so a restricted tag the caller may not use is OFFERED and the server then
+  refuses it.
+- A tag's `defaultSort`. The admin `TagsPage` can set it and
+  `DiscussionListState.sortMap()` exists, but nothing reads `tag.defaultSort()`
+  when a tag page opens, so the forum's own sort applies instead.
+- `isHidden`. The flag is stored, editable in admin and served as an attribute,
+  but no forum code reads it: upstream's `HideHiddenTagsFromAllDiscussionsPage`
+  drops discussions in hidden tags from the unfiltered discussion list, and the
+  port does not.
+- `filter[tag]` beyond one value. Upstream's `TagFilter` accepts comma-separated
+  slug groups (OR), the `untagged` pseudo-slug and negation; the port resolves a
+  single slug-or-id.
+- `TagSearcher` — upstream makes tags (and posts, via `PostTagFilter`) findable
+  from the global search.
+
+`addTagsPermissionScope` IS ported: a restricted tag gets its own column in the
+admin permission grid, and the grant is stored with the tag's id as its scope.
+Three adaptations were needed, and each one is load-bearing:
+
+1. **The scope is stored in a COLUMN, not in the permission string.** Upstream's
+   `group_permission` table has no scope column — the scope is part of the
+   permission string, so a restricted tag's grant is the literal row
+   `tag5.startDiscussion`. The port splits the key into the forum's own
+   permission name and the scope, so the key has to be rebuilt when it is read.
+2. **The tag's id is NOT numeric here.** Upstream's tag ids are integers, so
+   upstream's own frontend writes `tag5.startDiscussion`. This port's tag ids
+   are PocketBase ids — 15 characters of digits and letters — so the scoped key
+   is `tagabc123def456ghi.startDiscussion`. A parser that demanded a numeric id
+   never split it, and the grant was stored as a GLOBAL row: a restricted tag
+   that granted access to everybody.
+3. **A restricted tag asks the SCOPED question ALONE.** Upstream's
+   `User::hasPermission` is an exact string match, and upstream's `TagPolicy`
+   returns the scoped answer for a restricted tag — so the global fallback in
+   `Gate::allows()` is never reached, because the policy covered the question.
+   The port fell back to the global grant, so a restricted tag restricted
+   nobody: the member group holds `startDiscussion` globally. The scoped check
+   is `domain.PermissionChecker.CanScoped`, and the tag plugin asks it for a
+   restricted tag.
 
 Two adaptations worth recording, because the upstream code would NOT work here
 if copied:

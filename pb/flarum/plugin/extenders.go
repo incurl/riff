@@ -221,6 +221,19 @@ type RelationshipWriteRequest struct {
 	Creating bool
 	// Can reports whether the actor may perform an action on a subject.
 	Can func(action, subjectType, subjectID string) bool
+	// CanScoped reports whether the actor may perform an action on the
+	// subject ALONE — the subject's own rules answer the question and
+	// the global grant is not consulted.
+	//
+	// It is what a RESTRICTED tag asks: upstream's `TagPolicy` returns
+	// the scoped answer alone for a restricted tag, because upstream's
+	// `User::hasPermission` is an EXACT match against the group's
+	// permission rows. A tag that inherited the global grant would
+	// restrict nobody.
+	//
+	// It is nil when the forum does not provide one, and a plugin must
+	// then fall back to [RelationshipWriterRequest.Can].
+	CanScoped func(action, subjectType, subjectID string) bool
 }
 
 // Identifier is a JSON:API resource identifier.

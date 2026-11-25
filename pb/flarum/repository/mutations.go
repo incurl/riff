@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"encoding/json"
 	"regexp"
 	"strings"
 	"time"
@@ -140,10 +141,20 @@ func (r *Repository) CreatePost(userID, discussionID, content, contentHTML strin
 
 // UpdateDiscussionTitle renames a discussion.
 //
-// The editor is not recorded on the discussion itself: upstream Flarum
-// keeps the rename in the post history, which the forum's v1 scope does
-// not carry yet.
-func (r *Repository) UpdateDiscussionTitle(id, title, _ string) error {
+// Upstream Flarum keeps the rename in the POST HISTORY: it writes a post of
+// the type `discussionRenamed` whose content is `[oldTitle, newTitle]`, so
+// the stream shows that the discussion was renamed and when.
+//
+// The port had the post TYPE and the frontend COMPONENT, and never created
+// the post — so a rename was invisible in the stream. The content is an
+// ARRAY, and the frontend reads `post.content()[0]` and
+// `post.content()[1]`: the first ELEMENT, not the first character.
+//
+// The event post does not count towards the discussion's comment count and
+// does not become its last post: it is a record of an event, not a reply.
+// Upstream's `AbstractEventPost` is excluded from the comment count for
+// the same reason.
+func (r *Repository) UpdateDiscussionTitle(id, title, editorID string) error {
 	collection, err := r.collection("discussions")
 	if err != nil {
 		return err
@@ -152,9 +163,68 @@ func (r *Repository) UpdateDiscussionTitle(id, title, _ string) error {
 	if err != nil {
 		return err
 	}
+
+	oldTitle := record.GetString("title")
+
 	record.Set("title", title)
 	record.Set("slug", slugForTitle(title))
-	return r.app.Save(record)
+
+	return r.app.RunInTransaction(func(txApp core.App) error {
+		if err := txApp.Save(record); err != nil {
+			return err
+		}
+
+		return createRenamedEventPost(txApp, id, editorID, oldTitle, title)
+	})
+}
+
+// createRenamedEventPost writes the `discussionRenamed` event post.
+//
+// The content is `[oldTitle, newTitle]` as a JSON array, stored as text
+// because the `content` column is an editor field — and decoded back into
+// an array by the API (`api.postContent`), because the frontend indexes
+// into it.
+func createRenamedEventPost(app core.App, discussionID, editorID, oldTitle, newTitle string) error {
+	posts, err := app.FindCollectionByNameOrId("forum_posts")
+	if err != nil {
+		return err
+	}
+
+	content, err := json.Marshal([]string{oldTitle, newTitle})
+	if err != nil {
+		return err
+	}
+
+	post := core.NewRecord(posts)
+	post.Set("discussion", discussionID)
+	post.Set("user", editorID)
+	post.Set("number", nextPostNumber(app, discussionID))
+	post.Set("content", string(content))
+	post.Set("content_html", "")
+	post.Set("content_type", "text/html")
+	post.Set("type", "discussionRenamed")
+
+	return app.Save(post)
+}
+
+// nextPostNumber returns the number the next post in a discussion takes.
+//
+// An EVENT post takes a number too — it sits in the stream — but it does
+// not become the discussion's last post and does not raise its comment
+// count, so the number is computed rather than taken from the discussion's
+// own counter.
+func nextPostNumber(app core.App, discussionID string) int {
+	discussions, err := app.FindCollectionByNameOrId("forum_discussions")
+	if err != nil {
+		return 1
+	}
+
+	discussion, err := app.FindRecordById(discussions, discussionID)
+	if err != nil {
+		return 1
+	}
+
+	return discussion.GetInt("last_post_number") + 1
 }
 
 // UpdatePostContent edits a post's content.

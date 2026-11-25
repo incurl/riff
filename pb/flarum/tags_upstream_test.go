@@ -609,6 +609,115 @@ func TestTags_TheAdminPageSavesTheCountSettings(t *testing.T) {
 	require.Equal(t, http.StatusCreated, recorder.Code, recorder.Body.String())
 }
 
+// TestTags_AScopedPermissionIsStoredWithItsScope pins the write the admin
+// grid's tag column makes.
+//
+// The grid's dropdown sends the SCOPED KEY (`tag{id}.{permission}`), and
+// the server splits it into the forum's own permission name and the tag's
+// id, which it stores in the row's own scope column.
+//
+// The failure this pins is the one the scope exists to prevent: a scoped
+// grant stored as a GLOBAL one grants access to EVERYBODY, and a
+// restricted tag stops being restricted.
+func TestTags_AScopedPermissionIsStoredWithItsScope(t *testing.T) {
+	app, handler := newTestForum(t)
+
+	cookies := testSuperuser(t, app)
+
+	tag := seedTag(t, app, "Restricted", "restricted")
+
+	// The grid's dropdown: the scoped key, and the group it is granted to.
+	body := `{"permission":"tag` + tag.Id + `.viewForum","groupIds":["` + domain.GroupMemberID + `"]}`
+
+	recorder := doWithHeaders(t, handler, http.MethodPost, "/forum/api/permission", body, cookies,
+		map[string]string{"X-CSRF-Token": "csrf-token"})
+	require.Equal(t, http.StatusNoContent, recorder.Code, recorder.Body.String())
+
+	// The row carries the scope.
+	records, err := app.FindAllRecords(mustCollection(t, app, "forum_permissions"))
+	require.NoError(t, err)
+
+	matched := false
+
+	for _, row := range records {
+		if row.GetString("permission") != domain.PermissionViewForum {
+			continue
+		}
+
+		if row.GetString("scope") == tag.Id {
+			matched = true
+		}
+	}
+
+	require.True(t, matched, "the scoped row must carry the tag's id as its scope")
+}
+
+// setTagRestricted makes a tag restricted.
+//
+// A restricted tag has its own permission scope: who may attach it is
+// asked about the tag ITSELF.
+func setTagRestricted(t *testing.T, app core.App, tagID string, restricted bool) error {
+	t.Helper()
+
+	collection, err := app.FindCollectionByNameOrId("forum_tags")
+	require.NoError(t, err)
+
+	record, err := app.FindRecordById(collection, tagID)
+	require.NoError(t, err)
+
+	record.Set("is_restricted", restricted)
+
+	return app.Save(record)
+}
+
+// TestTags_AScopedPermissionIsEnforcedForThatTagOnly pins the POINT of
+// the scope.
+//
+// A restricted tag asks the permission service about the tag ITSELF, so
+// the grant that matters is the one scoped to that tag. A grant stored
+// globally would let every member attach the tag — the restricted tag
+// would restrict nobody.
+//
+// The three steps are the whole chain: the admin grid writes a scoped
+// row, the row carries the tag's id, and the permission service applies
+// a scoped row ONLY to its own subject.
+func TestTags_AScopedPermissionIsEnforcedForThatTagOnly(t *testing.T) {
+	app, handler := newTestForum(t)
+
+	adminCookies := testSuperuser(t, app)
+
+	restricted := seedTag(t, app, "Restricted", "restricted")
+	require.NoError(t, setTagRestricted(t, app, restricted.Id, true))
+
+	other := seedTag(t, app, "Other", "other")
+	require.NoError(t, setTagRestricted(t, app, other.Id, true))
+
+	// The admin grid's tag column: the scoped key. `startDiscussion` is
+	// upstream's own scoped permission — it is what a restricted tag
+	// gates: who may start a discussion in it.
+	body := `{"permission":"tag` + restricted.Id + `.startDiscussion","groupIds":["` + domain.GroupMemberID + `"]}`
+
+	recorder := doWithHeaders(t, handler, http.MethodPost, "/forum/api/permission", body, adminCookies,
+		map[string]string{"X-CSRF-Token": "csrf-token"})
+	require.Equal(t, http.StatusNoContent, recorder.Code, recorder.Body.String())
+
+	_, memberCookies := memberSession(t, app, "scope_member")
+
+	// The tag's own resource says whether the member may start a
+	// discussion in it — and that answer is the SCOPED one.
+	restrictedAttributes := resourceAttributes(t, handler, "tags/"+restricted.Id, memberCookies)
+	require.Equal(t, true, restrictedAttributes["canStartDiscussion"],
+		"the scoped grant must let the member start a discussion in that tag")
+
+	// ...and NOT in the tag they were not granted: the scope is the
+	// tag's own id, so a grant for one tag says nothing about another.
+	// Upstream's TagPolicy answers a restricted tag from its scoped
+	// permission ALONE, so a restricted tag with no grant is closed.
+	otherAttributes := resourceAttributes(t, handler, "tags/"+other.Id, memberCookies)
+	require.Equal(t, false, otherAttributes["canStartDiscussion"],
+		"a restricted tag with no scoped grant is closed to the member")
+}
+
 // TestTags_ThePermissionKeysTranslate pins that upstream's permission
 // names map onto the forum's own, and that a TAG-SCOPED key carries
 // its scope.
@@ -628,5 +737,26 @@ func TestTags_ThePermissionKeysTranslate(t *testing.T) {
 	// A key that names no scope has none.
 	key, scope = domain.ForumPermissionKeyAndScope("discussion.reply")
 	require.Equal(t, domain.PermissionReply, key)
+	require.Empty(t, scope)
+
+	// THIS PORT'S tag ids are PocketBase ids, not upstream's integers, so
+	// a scoped key carries a 15-character alphanumeric id. A parser that
+	// demanded a NUMERIC id would not split it, and the grant would be
+	// stored as a GLOBAL row — a restricted tag granting access to
+	// everybody.
+	key, scope = domain.ForumPermissionKeyAndScope("tagabc123def456ghi.viewForum")
+	require.Equal(t, domain.PermissionViewForum, key)
+	require.Equal(t, "abc123def456ghi", scope)
+
+	// A permission whose name merely STARTS with "tag" is not a scoped
+	// key: it names no tag, so it is passed through unchanged — a key the
+	// forum does not know round-trips under its own name.
+	key, scope = domain.ForumPermissionKeyAndScope("tagBypassTagCounts")
+	require.Equal(t, "tagBypassTagCounts", key)
+	require.Empty(t, scope)
+
+	// A key that names no tag at all is left alone.
+	key, scope = domain.ForumPermissionKeyAndScope("tag.discussion.reply")
+	require.Equal(t, "tag.discussion.reply", key)
 	require.Empty(t, scope)
 }

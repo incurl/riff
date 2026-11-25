@@ -19,6 +19,24 @@ type PermissionChecker interface {
 	// See [PermissionService.CanAsModerator] for why the distinction
 	// matters.
 	CanAsModerator(ctx context.Context, actor Actor, action, subjectType, subjectID string) (bool, error)
+
+	// CanScoped reports whether the actor holds a permission for the
+	// subject ALONE.
+	//
+	// It is upstream's restricted-tag question, and upstream's answer is
+	// an EXACT MATCH: `User::hasPermission('tag5.startDiscussion')` is
+	// `in_array('tag5.startDiscussion', $groups' permissions)`, so a group
+	// that holds the GLOBAL `startDiscussion` does NOT satisfy it.
+	//
+	// The global grant is not consulted, because a restricted tag that
+	// inherits the global grant restricts nobody. This is what upstream's
+	// `TagPolicy` does for a restricted tag: it returns the scoped
+	// answer ALONE, and the global fallback in `Gate::allows()` is never
+	// reached — the policy COVERED the question.
+	//
+	// A subject with no scoped rule of its own is governed by the global
+	// grant, so this answers the same as [PermissionChecker.Can] for it.
+	CanScoped(ctx context.Context, actor Actor, action, subjectType, subjectID string) (bool, error)
 }
 
 // Actor is the caller a permission check runs for.
@@ -143,20 +161,32 @@ func (s *PermissionService) Can(ctx context.Context, actor Actor, action, subjec
 		return false, err
 	}
 
-	if s.bus != nil {
-		s.bus.DispatchAfter(ctx, Event{
-			Name:   "forum.permission.checked",
-			Actor:  actor.UserID,
-			Target: action,
-			Data: map[string]any{
-				"subjectType": subjectType,
-				"subjectID":   subjectID,
-				"allowed":     allowed,
-			},
-		})
-	}
+	s.dispatchChecked(ctx, actor, action, subjectType, subjectID, allowed)
 
 	return allowed, nil
+}
+
+// dispatchChecked notifies the observers of a permission check.
+//
+// It is shared by every check form, so a listener sees the SCOPED checks
+// as well as the global ones — otherwise an audit plugin would watch the
+// permissions an administrator grants while missing the ones a
+// restricted tag actually decides.
+func (s *PermissionService) dispatchChecked(ctx context.Context, actor Actor, action, subjectType, subjectID string, allowed bool) {
+	if s.bus == nil {
+		return
+	}
+
+	s.bus.DispatchAfter(ctx, Event{
+		Name:   "forum.permission.checked",
+		Actor:  actor.UserID,
+		Target: action,
+		Data: map[string]any{
+			"subjectType": subjectType,
+			"subjectID":   subjectID,
+			"allowed":     allowed,
+		},
+	})
 }
 
 // CanAsModerator reports whether the actor holds a permission that was
@@ -215,7 +245,81 @@ func (s *PermissionService) CanAsModerator(ctx context.Context, actor Actor, act
 	return allowed, nil
 }
 
+// CanScoped reports whether the actor holds a permission for the subject
+// ALONE.
+//
+// It is upstream's restricted-tag question. Upstream's `User::hasPermission`
+// is an EXACT STRING MATCH against the group's permission rows, and the
+// scope is part of the permission STRING (upstream's `group_permission`
+// table has no scope column — a restricted tag's grant is the literal row
+// `tag5.startDiscussion`). So a group holding the GLOBAL
+// `startDiscussion` does NOT satisfy a check for `tag5.startDiscussion`.
+//
+// The forum keeps the scope in its own column and rebuilds the scoped
+// name from it, which is the same thing with the split made explicit.
+//
+// There is NO global fallback, and that is the whole point. Upstream's
+// `TagPolicy` returns the scoped answer ALONE for a restricted tag:
+//
+//	if ($tag->is_restricted) {
+//	    return $actor->hasPermission("tag{$id}.{$ability}");
+//	}
+//
+// and the global fallback in `Gate::allows()` is never reached — the
+// policy COVERED the question. A fallback here would open every
+// restricted tag to every member, because the member group holds
+// `startDiscussion` globally — and a restricted tag that restricts
+// nobody is worse than no restricted tag at all, because the operator
+// believes it is closed.
+//
+// An administrator holds every permission outright, as upstream's
+// `hasPermission` does.
+func (s *PermissionService) CanScoped(ctx context.Context, actor Actor, action, subjectType, subjectID string) (bool, error) {
+	if actor.IsAdmin {
+		return true, nil
+	}
+
+	groupIDs := actor.groupSet()
+	if len(groupIDs) == 0 {
+		return false, nil
+	}
+
+	rows, err := s.store.PermissionRowsFor(groupIDs, action)
+	if err != nil {
+		return false, err
+	}
+
+	// The subject's own rules, and only them.
+	allowed := false
+	for _, row := range rows {
+		if row.Scope == subjectID && row.Allowed {
+			allowed = true
+
+			break
+		}
+	}
+
+	s.dispatchChecked(ctx, actor, action, subjectType, subjectID, allowed)
+
+	return allowed, nil
+}
+
 // lookup resolves the permission rows for an actor.
+//
+// The model is upstream's: a permission row names a group, an action and
+// an optional scope, and a row with an empty scope applies to every
+// subject of that type.
+//
+// A scoped rule applies to its subject only; an unscoped one applies
+// to every subject. A scoped allow beats an unscoped deny, which is
+// what makes a restricted tag work: the tag grants access to the
+// groups that may see it, and the global deny does not override that.
+//
+// A subject that HAS a scoped rule is governed by it ALONE — the global
+// grant is not consulted. That is upstream's exact match (see
+// [PermissionService.CanScoped]), and it is what makes a restricted tag
+// restrict: the member group holds `startDiscussion` globally, so a
+// fallback would open every restricted tag to every member.
 func (s *PermissionService) lookup(actor Actor, action, subjectID string) (bool, error) {
 	groupIDs := actor.groupSet()
 	if len(groupIDs) == 0 {
@@ -254,11 +358,32 @@ func (s *PermissionService) lookup(actor Actor, action, subjectID string) (bool,
 	if scopedAllow {
 		return true, nil
 	}
+
+	// The subject has its own rules, and they answer the question on
+	// their own.
+	if subjectID != "" && hasScopedRule(rows, subjectID) {
+		return false, nil
+	}
+
 	if unscopedAllow {
 		return true, nil
 	}
 	_ = unscopedDeny
 	return false, nil
+}
+
+// hasScopedRule reports whether the rows carry a rule for a subject.
+//
+// It is the question "is this subject governed by its own rules?", and
+// the answer decides whether the global grant applies to it.
+func hasScopedRule(rows []PermissionRow, subjectID string) bool {
+	for _, row := range rows {
+		if row.Scope == subjectID {
+			return true
+		}
+	}
+
+	return false
 }
 
 // groupSet returns the actor's effective groups.

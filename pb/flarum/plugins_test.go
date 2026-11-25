@@ -370,6 +370,110 @@ func TestTags_ChangingTagsNeedsTheAllowTagChangeSetting(t *testing.T) {
 	require.Equal(t, false, attributes["canTag"], "the control must not be offered when the save would be refused")
 }
 
+// TestForum_RenamingADiscussionRecordsAnEventPost pins the stream's record
+// of a rename.
+//
+// Upstream keeps the rename in the POST HISTORY: a post of the type
+// `discussionRenamed` whose content is `[oldTitle, newTitle]`. The port had
+// the post type and the frontend COMPONENT — and never created the post, so
+// a rename was invisible in the stream.
+//
+// The content must reach the frontend as an ARRAY: `post.content()[0]` and
+// `post.content()[1]` are the two titles, and a string would make them its
+// first two CHARACTERS.
+func TestForum_RenamingADiscussionRecordsAnEventPost(t *testing.T) {
+	app, handler := newTestForum(t)
+
+	author, authorCookies := memberSession(t, app, "rename_author")
+	setForumSetting(t, app, "allow_renaming", "-1")
+
+	discussionID, _ := seedDiscussionWithAuthor(t, app, author.Id, "Old title", "Hello")
+
+	body := `{"data":{"type":"discussions","attributes":{"title":"New title"}}}`
+
+	recorder := doWithHeaders(t, handler, http.MethodPatch, "/forum/api/discussions/"+discussionID, body, authorCookies,
+		map[string]string{"X-CSRF-Token": "csrf-token"})
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	recorder = do(t, handler, http.MethodGet, "/forum/api/posts?filter[discussion]="+discussionID, "", authorCookies)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	document := decodeDocument(t, recorder)
+	resources, ok := document.Data.([]any)
+	require.True(t, ok, "the data should be a resource collection")
+	require.Len(t, resources, 2, "the first post and the rename event post")
+
+	var eventPost map[string]any
+
+	for _, entry := range resources {
+		candidate, ok := entry.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		attributes, ok := candidate["attributes"].(map[string]any)
+		if !ok {
+			continue
+		}
+
+		if attributes["type"] == "discussionRenamed" {
+			eventPost = attributes
+		}
+	}
+
+	require.NotNil(t, eventPost, "the stream must carry the rename event post: %v", resources)
+
+	content, ok := eventPost["content"].([]any)
+	require.True(t, ok, "the event post's content must be an ARRAY, not a string: %v", eventPost["content"])
+	require.Len(t, content, 2, "the content is [oldTitle, newTitle]")
+	require.Equal(t, "Old title", content[0])
+	require.Equal(t, "New title", content[1])
+}
+
+// TestForum_ARenameDoesNotChangeTheCommentCount pins that an event post is
+// not a reply.
+//
+// Upstream's `AbstractEventPost` is excluded from the discussion's comment
+// count: it records an event, it is not something anyone said. A rename
+// that raised the count would make the discussion's reply count disagree
+// with the number of replies in its stream.
+func TestForum_ARenameDoesNotChangeTheCommentCount(t *testing.T) {
+	app, handler := newTestForum(t)
+
+	author, authorCookies := memberSession(t, app, "rename_count_author")
+	setForumSetting(t, app, "allow_renaming", "-1")
+
+	discussionID, _ := seedDiscussionWithAuthor(t, app, author.Id, "Before", "Hello")
+
+	recorder := do(t, handler, http.MethodGet, "/forum/api/discussions/"+discussionID, "", authorCookies)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	before := decodeDocument(t, recorder)
+	beforeResource, ok := before.Data.(map[string]any)
+	require.True(t, ok, "the data should be a resource object")
+	beforeAttributes, ok := beforeResource["attributes"].(map[string]any)
+	require.True(t, ok, "the discussion must carry attributes")
+	beforeCount := beforeAttributes["commentCount"]
+
+	body := `{"data":{"type":"discussions","attributes":{"title":"After"}}}`
+
+	recorder = doWithHeaders(t, handler, http.MethodPatch, "/forum/api/discussions/"+discussionID, body, authorCookies,
+		map[string]string{"X-CSRF-Token": "csrf-token"})
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	recorder = do(t, handler, http.MethodGet, "/forum/api/discussions/"+discussionID, "", authorCookies)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	after := decodeDocument(t, recorder)
+	afterResource, ok := after.Data.(map[string]any)
+	require.True(t, ok, "the data should be a resource object")
+	afterAttributes, ok := afterResource["attributes"].(map[string]any)
+	require.True(t, ok, "the discussion must carry attributes")
+
+	require.Equal(t, beforeCount, afterAttributes["commentCount"],
+		"an event post is not a reply and must not raise the comment count")
+}
+
 // TestTags_ChangingTheTagsRecordsAnEventPost pins the stream's record of it.
 //
 // Upstream creates a `discussionTagged` post when a discussion's tags

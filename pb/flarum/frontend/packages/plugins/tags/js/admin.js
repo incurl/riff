@@ -18,8 +18,15 @@
 import Extend from 'flarum/common/extenders';
 import { Tag } from './models';
 import TagsPage from './admin/TagsPage';
+import addTagsPermissionScope from './admin/addTagsPermissionScope';
 
 export const extend = [
+  // The permission scope: a RESTRICTED tag gets its own column in the
+  // admin permission grid, so a permission can be granted for that tag
+  // alone. The Go layer enforces the scope; without this the grid could
+  // not GRANT one.
+  addTagsPermissionScope(),
+
   // The store needs to know the `tags` type, or the page's tag list is
   // refused.
   new Extend.Store().add('tags', Tag),

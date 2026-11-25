@@ -137,7 +137,7 @@ func (p *Plugin) addTagHandler(e *core.RequestEvent) error {
 	// A restricted tag has its own permission scope: only the groups
 	// that may see it may attach it.
 	if tag.IsRestricted {
-		allowed, err := api.Can(e, domain.PermissionEditTag, api.TypeTag, tag.ID)
+		allowed, err := canInTag(e, domain.PermissionEditTag, tag)
 		if err != nil || !allowed {
 			return api.WriteError(e, http.StatusForbidden, api.CodePermissionDenied, "You are not allowed to use that tag.")
 		}
@@ -243,6 +243,38 @@ func tagResource(tag *domain.Tag) api.Resource {
 	}
 }
 
+// canInTag reports whether the caller may perform the action in the tag.
+//
+// A RESTRICTED tag has its own permission scope, and the scope answers
+// the question ALONE: the global grant is not consulted.
+//
+// This is upstream's `TagPolicy`: for a restricted tag it returns
+// `$actor->hasPermission("tag{$id}.{$ability}")` — an EXACT match
+// against the group's permission rows — and the global fallback in
+// `Gate::allows()` is never reached, because the policy COVERED the
+// question. Upstream's `User::hasPermission` is an exact string match,
+// so a group holding the global `startDiscussion` does NOT satisfy a
+// check for `tag5.startDiscussion`.
+//
+// The port's fallback would have opened every restricted tag to every
+// member, because the member group holds `startDiscussion` globally —
+// and a restricted tag that restricts nobody is worse than no restricted
+// tag at all, because the operator believes it is closed.
+//
+// An unrestricted tag has no scope of its own, so the ordinary check
+// answers it.
+func canInTag(e *core.RequestEvent, action string, tag *domain.Tag) (bool, error) {
+	if tag == nil {
+		return false, nil
+	}
+
+	if tag.IsRestricted {
+		return api.CanScoped(e, action, api.TypeTag, tag.ID)
+	}
+
+	return api.Can(e, action, api.TypeTag, tag.ID)
+}
+
 // tagResourceFor renders a tag for a specific caller.
 //
 // It is the form the endpoints use, because the `can*` attributes and
@@ -250,14 +282,14 @@ func tagResource(tag *domain.Tag) api.Resource {
 func (*Plugin) tagResourceFor(e *core.RequestEvent, tag *domain.Tag) api.Resource {
 	resource := tagResource(tag)
 
-	canStart, err := api.Can(e, domain.PermissionStartDiscussion, api.TypeTag, tag.ID)
+	canStart, err := canInTag(e, domain.PermissionStartDiscussion, tag)
 	if err != nil {
 		canStart = false
 	}
 
 	// A tag may be attached to a discussion by a caller who may start
 	// a discussion in it — upstream's `addToDiscussion`.
-	canAdd, err := api.Can(e, domain.PermissionStartDiscussion, api.TypeTag, tag.ID)
+	canAdd, err := canInTag(e, domain.PermissionStartDiscussion, tag)
 	if err != nil {
 		canAdd = false
 	}
@@ -271,7 +303,7 @@ func (*Plugin) tagResourceFor(e *core.RequestEvent, tag *domain.Tag) api.Resourc
 
 	// The `storedSlug` is only visible to a caller who may edit the
 	// tag, which is upstream's rule.
-	canEdit, err := api.Can(e, domain.PermissionEditTag, api.TypeTag, tag.ID)
+	canEdit, err := canInTag(e, domain.PermissionEditTag, tag)
 	if err != nil {
 		canEdit = false
 	}

@@ -105,7 +105,7 @@ func (p *Plugin) updateTagHandler(e *core.RequestEvent) error {
 		return api.WriteError(e, http.StatusNotFound, api.CodeNotFound, "That tag does not exist.")
 	}
 
-	allowed, err := api.Can(e, domain.PermissionEditTag, api.TypeTag, existing.ID)
+	allowed, err := canInTag(e, domain.PermissionEditTag, existing)
 	if err != nil {
 		return api.WriteError(e, http.StatusInternalServerError, api.CodeInternal, "The tag could not be saved.")
 	}
@@ -175,7 +175,7 @@ func (*Plugin) deleteTagHandler(e *core.RequestEvent) error {
 		return api.WriteError(e, http.StatusNotFound, api.CodeNotFound, "That tag does not exist.")
 	}
 
-	allowed, err := api.Can(e, domain.PermissionDeleteTag, api.TypeTag, existing.ID)
+	allowed, err := canInTag(e, domain.PermissionDeleteTag, existing)
 	if err != nil {
 		return api.WriteError(e, http.StatusInternalServerError, api.CodeInternal, "The tag could not be deleted.")
 	}

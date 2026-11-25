@@ -906,6 +906,12 @@ func (m *Module) PluginSettingSchemas() []plugin.SettingsSchema {
 // The keys are translated into upstream's names, because the admin
 // application registers upstream's names
 // (`permission: 'discussion.reply'`) and looks them up verbatim.
+//
+// The SCOPED rows are in the same map, under their scoped key
+// (`tag{id}.{permission}`): the admin grid's tag column asks about
+// exactly that key, so a scoped grant that is not in this map is
+// invisible to the grid — the column would show that nobody holds the
+// permission even though the row says otherwise.
 func (m *Module) adminPermissions() map[string][]string {
 	stored, err := m.repo.PermissionMap()
 	if err != nil {
@@ -918,6 +924,13 @@ func (m *Module) adminPermissions() map[string][]string {
 	for permission, groups := range stored {
 		key := domain.UpstreamPermissionKey(permission)
 		permissions[key] = append(permissions[key], groups...)
+	}
+
+	scoped, err := m.repo.ScopedPermissionMap()
+	if err == nil {
+		for key, groups := range scoped {
+			permissions[key] = append(permissions[key], groups...)
+		}
 	}
 
 	return permissions

@@ -331,6 +331,24 @@ func (m *Module) pluginCan(ctx context.Context, actorID string) func(action, sub
 	}
 }
 
+// pluginCanScoped is the scoped form of [Module.pluginCan]: the
+// subject's own rules answer the question, and the global grant is not
+// consulted.
+//
+// It is what a RESTRICTED tag asks, and it is upstream's exact match —
+// see [domain.PermissionChecker.CanScoped].
+func (m *Module) pluginCanScoped(ctx context.Context, actorID string) func(action, subjectType, subjectID string) bool {
+	actor := m.pluginActor(actorID)
+
+	return func(action, subjectType, subjectID string) bool {
+		if actor.UserID == "" {
+			return false
+		}
+		allowed, err := m.permissions.CanScoped(ctx, actor, action, subjectType, subjectID)
+		return err == nil && allowed
+	}
+}
+
 // pluginActor resolves the domain actor for an account id.
 func (m *Module) pluginActor(actorID string) domain.Actor {
 	if actorID == "" {
@@ -409,13 +427,14 @@ func (m *Module) boot(ctx context.Context) error {
 			m.api.AddRelationshipWriter(writer.Resource, writer.Name,
 				func(ctx context.Context, req api.RelationshipWriteRequest) error {
 					return writer.Write(ctx, &plugin.RelationshipWriteRequest{
-						App:      m.app,
-						ActorID:  req.ActorID,
-						RecordID: req.RecordID,
-						Type:     req.Type,
-						IDs:      req.IDs,
-						Creating: req.Creating,
-						Can:      m.pluginCan(ctx, req.ActorID),
+						App:       m.app,
+						ActorID:   req.ActorID,
+						RecordID:  req.RecordID,
+						Type:      req.Type,
+						IDs:       req.IDs,
+						Creating:  req.Creating,
+						Can:       m.pluginCan(ctx, req.ActorID),
+						CanScoped: m.pluginCanScoped(ctx, req.ActorID),
 					})
 				})
 		}

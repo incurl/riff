@@ -108,6 +108,23 @@ func Can(e *core.RequestEvent, action, subjectType, subjectID string) (bool, err
 	return server.permissions.Can(e.Request.Context(), server.domainActor(e), action, subjectType, subjectID)
 }
 
+// CanScoped reports whether the caller may perform the action on the
+// subject ALONE.
+//
+// It is the plugin-facing form of the restricted-subject check, and it
+// is what a RESTRICTED tag asks: the subject's own rules answer the
+// question, and the global grant is not consulted — upstream's exact
+// match. A tag that inherited the global grant would restrict nobody.
+//
+// See [domain.PermissionChecker.CanScoped] for the model.
+func CanScoped(e *core.RequestEvent, action, subjectType, subjectID string) (bool, error) {
+	server := serverFromContext(e.Request.Context())
+	if server == nil {
+		return false, errUnauthenticated("The forum is not available.")
+	}
+	return server.permissions.CanScoped(e.Request.Context(), server.domainActor(e), action, subjectType, subjectID)
+}
+
 // VerifyCSRF checks a mutating request's CSRF token.
 func VerifyCSRF(e *core.RequestEvent) error {
 	return session.VerifyCSRF(e)

@@ -439,7 +439,8 @@ func (r *Repository) ReplacePermission(permission, scope string, groupIDs []stri
 //
 // The scoped rows are not included: upstream's table has no scope, and
 // the admin page's grid is global. A scoped row (a restricted tag) is
-// read by the tag plugin, not by the grid.
+// read by the tag plugin, not by the grid — the grid's TAG COLUMN reads
+// it through [Repository.ScopedPermissionMap].
 func (r *Repository) PermissionMap() (map[string][]string, error) {
 	collection, err := r.collection("permissions")
 	if err != nil {
@@ -472,4 +473,73 @@ func (r *Repository) PermissionMap() (map[string][]string, error) {
 	}
 
 	return permissions, nil
+}
+
+// ScopedPermissionMap returns the granted permissions that carry a
+// scope, keyed by the SCOPED KEY.
+//
+// The key is the upstream spelling the admin grid asks about: a scoped
+// row for the tag `abc` and the permission `startDiscussion` is keyed
+// `tagabc.startDiscussion`.
+//
+// It is a SEPARATE map from [Repository.PermissionMap] because the two
+// answer different questions: the global map is the grid's global
+// column, and this one is a restricted tag's column. A grid that merged
+// them would show a global grant as if it were the tag's own, and the
+// tag's column would light up the wrong badges.
+//
+// The scope is the tag's id, so the key is rebuilt from it rather than
+// stored: the permission table keeps the scope in its own column, and
+// the grid asks about the key.
+func (r *Repository) ScopedPermissionMap() (map[string][]string, error) {
+	collection, err := r.collection("permissions")
+	if err != nil {
+		return nil, err
+	}
+	records, err := r.app.FindAllRecords(collection)
+	if err != nil {
+		return nil, err
+	}
+
+	permissions := map[string][]string{}
+	for _, record := range records {
+		if !record.GetBool("allowed") {
+			continue
+		}
+
+		scope := strings.TrimSpace(record.GetString("scope"))
+		if scope == "" {
+			continue
+		}
+
+		permission := record.GetString("permission")
+		if permission == "" {
+			continue
+		}
+
+		groupID := record.GetString("group")
+		if groupID == "" {
+			continue
+		}
+
+		key := ScopedPermissionKey(scope, permission)
+		permissions[key] = append(permissions[key], groupID)
+	}
+
+	return permissions, nil
+}
+
+// ScopedPermissionKey builds the grid's key for a scoped permission.
+//
+// It is upstream's spelling: `tag{id}.{permission}`. The id is the
+// subject's own id — a tag's id — and it is NOT numeric in this port,
+// because the ids are PocketBase's.
+func ScopedPermissionKey(scope, permission string) string {
+	scope = strings.TrimSpace(scope)
+	permission = strings.TrimSpace(permission)
+	if scope == "" || permission == "" {
+		return permission
+	}
+
+	return "tag" + scope + "." + permission
 }

@@ -212,6 +212,13 @@ func ForumPermissionKey(upstream string) string {
 // its own COLUMN, so the two are separated here: the key becomes the
 // forum's own name and the scope becomes the tag's id.
 //
+// The id is the tag's own id, and THIS PORT'S tag ids are PocketBase
+// ids — 15 characters of digits and letters — not upstream's integers.
+// A parser that demanded a NUMERIC id therefore never split a scoped
+// key written by this port's own admin grid, and the grant was stored
+// as a GLOBAL row: a restricted tag that granted access to everybody.
+// The id is validated as an id, not as a number.
+//
 // A key that names no tag scope is returned with an empty scope.
 func ForumPermissionKeyAndScope(upstream string) (string, string) {
 	upstream = strings.TrimSpace(upstream)
@@ -222,7 +229,7 @@ func ForumPermissionKeyAndScope(upstream string) (string, string) {
 	// A tag-scoped key: `tag5.viewForum`.
 	if rest, ok := strings.CutPrefix(upstream, tagScopePrefix); ok {
 		id, remainder, found := strings.Cut(rest, ".")
-		if found && id != "" && isNumeric(id) {
+		if found && isTagScopeID(id) {
 			return translatePermissionKey(remainder), id
 		}
 	}
@@ -249,18 +256,33 @@ func translatePermissionKey(upstream string) string {
 	return upstream
 }
 
-// isNumeric reports whether a string is made of digits only.
+// isTagScopeID reports whether a string can be the id part of a
+// tag-scoped permission key.
 //
-// It is the tag id in a scoped key, and PocketBase's ids are 15
-// characters of digits and letters — but upstream's tag ids are
-// integers, so the scope is numeric.
-func isNumeric(value string) bool {
+// It is the tag's own id, and this port's tag ids are PocketBase ids —
+// 15 characters of digits and letters. Upstream's are integers, so both
+// spellings have to be accepted.
+//
+// The check exists to tell a SCOPED key from a plain permission whose
+// name merely starts with "tag": `tagBypassTagCounts` is a permission the
+// forum may know, and it names no tag. The rule is that the id must be a
+// run of id characters — letters and digits — and must not be empty.
+func isTagScopeID(value string) bool {
+	if value == "" {
+		return false
+	}
+
 	for _, r := range value {
-		if r < '0' || r > '9' {
+		switch {
+		case r >= '0' && r <= '9':
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		default:
 			return false
 		}
 	}
-	return value != ""
+
+	return true
 }
 
 // UpstreamPermissionKey translates one of the forum's own permission
