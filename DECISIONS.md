@@ -5,6 +5,89 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## THE COUNT RULES ARE A RANGE, NOT AN EXACT COUNT (2026-11-25)
+
+Two bugs, found while auditing the tag plugin's settings against
+upstream's, and both of them made an operator's setting do NOTHING.
+
+**A STORED SETTING IS `types.JSONRaw`, AND `types.JSONRaw` IS NOT
+`[]byte`.** The settings column is a JSON field, so a stored value
+arrives as raw JSON bytes under a DISTINCT NAMED TYPE. A reader that
+switches on `case []byte:` does NOT match it — the type switch is
+exact, and `types.JSONRaw` is its own type, not an alias — so the
+value falls through to the reader's default and the setting reads as
+UNSET. The tags plugin's `settingInt` had exactly that switch, so
+`flarum-tags.max_primary_tags` was ignored: raising it changed
+nothing. The reader now goes through `api.SettingString`, which
+handles every shape the column can arrive in.
+
+**THE COUNT RULE HAS A SHAPE, AND THE SHAPE WAS WRONG.** Upstream
+writes it as:
+
+```php
+$min === $max ? "size:$min" : "between:$min,$max"
+```
+
+A minimum EQUAL to the maximum is an EXACT count — one primary tag
+means exactly one primary tag — while a minimum DIFFERENT from the
+maximum is a RANGE. This port always demanded "exactly the minimum",
+so a set of two primary tags was refused even with the maximum raised
+to two. The default (one primary tag, at most one) IS the exact-count
+case, which is why the range case was so easy to miss.
+
+**THE TWO SIDES OF A SETTING MUST AGREE.** The setting names the
+value; the READER decides what the forum does with it. A reader that
+falls through to its default is a setting the admin portal shows and
+the forum ignores — and the operator has no way to tell which is
+which. Both the gamification's default metric/period and the tags'
+four count settings were in that state.
+
+## A PLUGIN DECLARES THE SETTINGS IT READS (2026-11-25)
+
+The admin portal could reach a plugin's extension page but showed no
+settings on it: every plugin's `admin.js` bundle was
+`export const extend = []`. Eleven settings were READ by the server and
+editable NOWHERE.
+
+**THE SETTINGS ARE THE SERVER'S TO DECLARE.** A plugin declares the
+settings it reads (`plugin.AddSettings`), and the module publishes them
+in the admin payload with their DEFAULT values, so the form shows the
+value the forum would actually use. The frontend bundle registers the
+FORM (`Extend.Admin().setting(...)`) — the admin application renders a
+setting that a bundle registered and nothing else, so a declared
+setting with no bundle is a setting the operator cannot reach.
+
+**A SETTING NOBODY READS IS A CONTROL THAT CHANGES NOTHING.** The audit
+compared upstream's settings against the ones the server consults, and
+found six declared-but-never-read constants: the polls' `maxOptions`
+and `enableDiscussionPolls` (this port has no poll CREATION path, so
+there is nothing to gate), and the gamification's `firstPostOnly`,
+`autoUpvotePosts`, `upVotesOnly` and `viewRankingPage`. They were
+REMOVED rather than exposed: a switch that changes nothing is worse
+than no switch, because the operator turns it and the forum does not
+move. The same reasoning kept upstream's `sticky` settings out — they
+gate a query this port does not run.
+
+**THE SETTINGS MUST BE STRINGS IN THE ADMIN PAYLOAD.** Upstream's
+settings column is TEXT, so `Settings::all()` hands the admin
+application a map of strings and the application types every setting as
+`Stream<string>`. This port's `forum_settings.value` column is a JSON
+field, so a stored value arrives as the JSON type it was written as — a
+number as `float64`, and in practice as raw JSON bytes
+(`types.JSONRaw`). The admin payload now normalises every setting to a
+string, the way upstream's table holds them. Without that, a number
+lands in a stream typed as a string, the form saves it back as a
+number, and a boolean switch reads `value !== '0'` against a value
+that is neither `"0"` nor `0`.
+
+**THE KEY IS THE CONTRACT, AND IT IS UPSTREAM'S.** Every setting keeps
+upstream's own key (`flarum-likes.like_own_post`,
+`flarum-tags.min_primary_tags`, `fof-gamification.allowSelfVotes`), so
+an operator's saved setting carries over and means what it means
+upstream. The Go side and the frontend bundle must agree on it, and
+the tests pin both directions: a declared setting the server does not
+read, and a registered setting the server does not read, each fail.
+
 ## AN EXTENSION ID IS A PATH SEGMENT (2026-11-25)
 
 The admin application's extension page — the per-plugin settings page —

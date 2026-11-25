@@ -7,7 +7,10 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/pocketbase/pocketbase/core"
+
 	"github.com/incurl/riff/pb/flarum/domain"
+	"github.com/incurl/riff/pb/flarum/plugins/tags"
 )
 
 // The tags plugin against upstream `flarum/tags`.
@@ -385,6 +388,105 @@ func TestTags_TheTagCountsAreEnforced(t *testing.T) {
 	// With the primary tag it passes.
 	body = `{"data":{"attributes":{"title":"Counted","content":"Hello"},` +
 		`"relationships":{"tags":{"data":[{"type":"tags","id":"` + primary.Id + `"}]}}}}`
+
+	recorder = doWithHeaders(t, handler, http.MethodPost, "/forum/api/discussions", body, authorCookies,
+		map[string]string{"X-CSRF-Token": "csrf-token"})
+	require.Equal(t, http.StatusCreated, recorder.Code, recorder.Body.String())
+}
+
+// TestTags_TheCountSettingsAreHonoured pins upstream's four count
+// settings: `flarum-tags.min_primary_tags`,
+// `flarum-tags.max_primary_tags`, `flarum-tags.min_secondary_tags` and
+// `flarum-tags.max_secondary_tags`.
+//
+// The rules are enforced on the WHOLE tag set, so the test raises the
+// PRIMARY maximum to two and attaches two primary tags: with the
+// default maximum of one, that set is refused — and with the setting
+// raised, it is accepted.
+//
+// The setting has to be READ for that to happen. The settings column
+// is a JSON field, so a stored value arrives as raw JSON bytes
+// (`types.JSONRaw`), and `types.JSONRaw` is a DISTINCT NAMED TYPE —
+// a switch on `case []byte:` does NOT match it. A reader that handles
+// only the plain byte slice falls through to its default, the setting
+// reads as UNSET, and the forum silently ignores what the operator
+// saved.
+func TestTags_TheCountSettingsAreHonoured(t *testing.T) {
+	app, handler := newTestForum(t)
+
+	_, authorCookies := memberSession(t, app, "tag_setting")
+
+	setForumSetting(t, app, "allow_tag_change", "-1")
+
+	// Two primary tags.
+	first := seedTag(t, app, "First", "first")
+	second := seedTag(t, app, "Second", "second")
+
+	for _, tag := range []*core.Record{first, second} {
+		record, err := app.FindRecordById(mustCollection(t, app, "forum_tags"), tag.Id)
+		require.NoError(t, err)
+		record.Set("is_primary", true)
+		record.Set("position", 0)
+		require.NoError(t, app.Save(record))
+	}
+
+	body := `{"data":{"attributes":{"title":"Two","content":"Hello"},` +
+		`"relationships":{"tags":{"data":[{"type":"tags","id":"` + first.Id + `"},{"type":"tags","id":"` + second.Id + `"}]}}}}`
+
+	// The default maximum is ONE primary tag, so the set is refused.
+	recorder := doWithHeaders(t, handler, http.MethodPost, "/forum/api/discussions", body, authorCookies,
+		map[string]string{"X-CSRF-Token": "csrf-token"})
+	require.Equal(t, http.StatusUnprocessableEntity, recorder.Code, recorder.Body.String())
+
+	// Raising the maximum admits it.
+	setForumSetting(t, app, tags.SettingMaxPrimaryTags, "2")
+
+	recorder = doWithHeaders(t, handler, http.MethodPost, "/forum/api/discussions", body, authorCookies,
+		map[string]string{"X-CSRF-Token": "csrf-token"})
+	require.Equal(t, http.StatusCreated, recorder.Code, recorder.Body.String())
+}
+
+// TestTags_TheCountSettingsHonourTheMinimum pins that raising the
+// MAXIMUM does not remove the MINIMUM.
+//
+// The rule is a RANGE when the two differ: `min <= count <= max`. A
+// reader that only checked the maximum would admit a discussion with
+// NO primary tag as soon as the maximum was raised — and the minimum
+// is the setting that says "a discussion must carry a primary tag".
+func TestTags_TheCountSettingsHonourTheMinimum(t *testing.T) {
+	app, handler := newTestForum(t)
+
+	_, authorCookies := memberSession(t, app, "tag_minimum")
+
+	setForumSetting(t, app, "allow_tag_change", "-1")
+
+	primary := seedTag(t, app, "Primary", "primary")
+	primaryRecord, err := app.FindRecordById(mustCollection(t, app, "forum_tags"), primary.Id)
+	require.NoError(t, err)
+	primaryRecord.Set("is_primary", true)
+	primaryRecord.Set("position", 0)
+	require.NoError(t, app.Save(primaryRecord))
+
+	// The minimum is 1 and the maximum is 2, so the range applies.
+	setForumSetting(t, app, tags.SettingMaxPrimaryTags, "2")
+
+	// A SECONDARY tag is not a primary one, so a set of one breaks
+	// the primary minimum.
+	secondary := seedTag(t, app, "Secondary", "secondary")
+	secondaryRecord, err := app.FindRecordById(mustCollection(t, app, "forum_tags"), secondary.Id)
+	require.NoError(t, err)
+	secondaryRecord.Set("position", nil)
+	require.NoError(t, app.Save(secondaryRecord))
+
+	body := `{"data":{"attributes":{"title":"NoTag","content":"Hello"},` +
+		`"relationships":{"tags":{"data":[{"type":"tags","id":"` + secondary.Id + `"}]}}}}`
+
+	recorder := doWithHeaders(t, handler, http.MethodPost, "/forum/api/discussions", body, authorCookies,
+		map[string]string{"X-CSRF-Token": "csrf-token"})
+	require.Equal(t, http.StatusUnprocessableEntity, recorder.Code, recorder.Body.String())
+
+	// Lowering the minimum to zero admits it.
+	setForumSetting(t, app, tags.SettingMinPrimaryTags, "0")
 
 	recorder = doWithHeaders(t, handler, http.MethodPost, "/forum/api/discussions", body, authorCookies,
 		map[string]string{"X-CSRF-Token": "csrf-token"})

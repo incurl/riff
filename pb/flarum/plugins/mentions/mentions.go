@@ -39,6 +39,18 @@ const Version = "1.0.0"
 // is the full number, so the UI can say "and 3 more".
 const MaxMentionedBy = 4
 
+// SettingAllowUsernameFormat is upstream's own key, and it gates the
+// BARE mention form.
+//
+// Upstream's `ConfigureMentions::addUserId` reads it and, when it is
+// off, refuses to resolve a `@username` to an account — the quoted
+// `@"Display Name"#id` form still resolves. This port recognises the
+// bare form only, so the setting gates the whole of it here.
+//
+// Upstream's installed default is 1 (the bare form resolves), and it
+// is the default this port falls back to as well.
+const SettingAllowUsernameFormat = "flarum-mentions.allow_username_format"
+
 // NotificationType is the kind of notification a mention produces.
 //
 // It is upstream's `UserMentionedBlueprint::getType()` (`userMentioned`).
@@ -167,6 +179,20 @@ func (p *Plugin) Register(_ context.Context, ext *plugin.Extenders) error {
 	})
 
 	// --- the frontend --------------------------------------------------
+	// --- the settings ---------------------------------------------------
+	// The one setting upstream's extension declares, with upstream's
+	// key: `flarum-mentions.allow_username_format`.
+	ext.AddSettings(plugin.SettingsSchema{
+		Fields: []plugin.SettingField{
+			{
+				Key:     SettingAllowUsernameFormat,
+				Label:   "Allow the @username mention format",
+				Type:    "bool",
+				Default: "1",
+			},
+		},
+	})
+
 	ext.AddAsset(plugin.AssetBundle{
 		PluginID: PluginID,
 		Version:  Version,

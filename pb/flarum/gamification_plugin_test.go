@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/incurl/riff/pb/flarum/domain"
+	"github.com/incurl/riff/pb/flarum/plugins/gamification"
 )
 
 // The Gamification plugin is the reference implementation of a plugin that
@@ -268,6 +269,60 @@ func TestGamification_TheLeaderboardRanksByMetric(t *testing.T) {
 	firstEntry := entries[0]
 	require.Equal(t, "leaderboard-entries", firstEntry["type"])
 	require.Contains(t, firstEntry["id"], "posts-all-", "the id must name the ranking: %v", firstEntry["id"])
+}
+
+// TestGamification_TheDefaultMetricAndPeriodAreHonoured pins
+// upstream's `fof-gamification.defaultMetric` and
+// `fof-gamification.defaultPeriod`.
+//
+// A request that names no metric falls back to the setting, and a
+// request that names an unknown one is a validation failure — so the
+// setting's value has to be one the server KNOWS, and the two
+// settings are what the admin portal offers the operator.
+//
+// The default is what the leaderboard shows when nobody asks for
+// anything, so the id of the top entry names the ranking it came
+// from.
+func TestGamification_TheDefaultMetricAndPeriodAreHonoured(t *testing.T) {
+	app, handler := newTestForum(t)
+
+	_, second := memberSession(t, app, "game_default")
+
+	discussionID, _ := seedDiscussion(t, app, "Default", "Hello")
+	postID := postIDOf(t, app, discussionID)
+
+	require.Equal(t, http.StatusOK, voteAs(t, handler, postID, "up", second).Code)
+
+	// The setting names a metric and a period the server knows.
+	setForumSetting(t, app, gamification.SettingDefaultMetric, gamification.MetricVotes)
+	setForumSetting(t, app, gamification.SettingDefaultPeriod, gamification.PeriodAllTime)
+
+	recorder := do(t, handler, http.MethodGet, "/forum/api/leaderboard", "", second)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	entries := leaderboardEntries(t, recorder)
+	require.NotEmpty(t, entries, "the seeded discussion must appear")
+
+	require.Contains(t, entries[0]["id"], "votes-all-",
+		"the default metric and period must decide the ranking: %v", entries[0]["id"])
+}
+
+// TestGamification_TheDefaultMetricAndPeriodAreValidated pins that a
+// default naming a metric the server does not know is a validation
+// failure rather than an empty board.
+//
+// The setting is the operator's choice, and the server is the
+// authority on which metrics exist. An empty board reads as "nobody
+// has scored", which is a different and wrong statement.
+func TestGamification_TheDefaultMetricAndPeriodAreValidated(t *testing.T) {
+	app, handler := newTestForum(t)
+
+	cookies := testSuperuser(t, app)
+
+	setForumSetting(t, app, gamification.SettingDefaultMetric, "nonsense")
+
+	recorder := do(t, handler, http.MethodGet, "/forum/api/leaderboard", "", cookies)
+	require.Equal(t, http.StatusUnprocessableEntity, recorder.Code, recorder.Body.String())
 }
 
 // TestGamification_AnUnknownMetricIsAValidationFailure pins that a metric

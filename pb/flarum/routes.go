@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/pocketbase/dbx"
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/pocketbase/pocketbase/tools/router"
+	"github.com/pocketbase/pocketbase/tools/types"
 
 	"github.com/incurl/riff/pb/flarum/api"
 	"github.com/incurl/riff/pb/flarum/domain"
@@ -672,6 +674,30 @@ func (m *Module) adminSettings() map[string]any {
 	}
 	settings["extensions_enabled"] = mustJSON(enabled)
 
+	// The plugins' declared settings carry their DEFAULTS, so the
+	// admin application shows a setting's value even before an
+	// operator has saved one.
+	//
+	// The default is the value the plugin's own reader falls back to,
+	// so the form and the forum agree: a form that showed "1" while
+	// the forum used "0" would be a setting the operator could not
+	// trust.
+	for _, schema := range m.PluginSettingSchemas() {
+		for _, field := range schema.Fields {
+			if field.Key == "" {
+				continue
+			}
+			if _, taken := settings[field.Key]; taken {
+				// A stored setting wins over the default.
+				continue
+			}
+			if field.Default == nil {
+				continue
+			}
+			settings[field.Key] = field.Default
+		}
+	}
+
 	// The forum's own settings win.
 	if stored, err := m.repo.AllSettings(); err == nil {
 		for key, value := range stored {
@@ -679,7 +705,134 @@ func (m *Module) adminSettings() map[string]any {
 		}
 	}
 
+	// EVERY setting is a STRING, the way upstream's settings table
+	// holds them.
+	//
+	// Upstream's settings column is TEXT, so `Settings::all()` hands
+	// the admin application a map of strings and the application types
+	// every setting as `Stream<string>`. This port's settings column
+	// is a JSON field, so a stored value arrives as the JSON type it
+	// was written as — a number as `float64`, a boolean as `bool`.
+	//
+	// That mismatch is not cosmetic: the admin application reads a
+	// setting into a `Stream<string>`, so a number lands in a stream
+	// typed as a string, and the form saves it back as a number. A
+	// boolean switch reads `!!value && value !== '0'`, which happens
+	// to work for a JSON `false`, but the SETTING the operator edits
+	// is then a number where upstream's is the string "0" — and the
+	// server's own reader has to cope with both.
+	//
+	// Normalising here means the admin application sees what upstream
+	// shows it: strings.
+	for key, value := range settings {
+		settings[key] = adminSettingString(value)
+	}
+
 	return settings
+}
+
+// adminSettingString renders a setting value the way upstream's
+// settings table holds it.
+//
+// Upstream stores every setting as a string, so a boolean is "1" or
+// "0" and a number is its decimal form. The two keys the admin
+// application PARSES as JSON are exempt: they are JSON documents, and
+// their value must stay a document.
+func adminSettingString(value any) any {
+	switch typed := value.(type) {
+	case string:
+		return typed
+	case bool:
+		if typed {
+			return "1"
+		}
+		return "0"
+	case float64:
+		return strconv.FormatFloat(typed, 'f', -1, 64)
+	case float32:
+		return strconv.FormatFloat(float64(typed), 'f', -1, 32)
+	case int:
+		return strconv.Itoa(typed)
+	case int64:
+		return strconv.FormatInt(typed, 10)
+	case json.RawMessage:
+		return adminSettingStringFromJSON(typed)
+	case types.JSONRaw:
+		return adminSettingStringFromJSON(typed)
+	default:
+		return value
+	}
+}
+
+// adminSettingStringFromJSON renders a JSON-encoded setting value as
+// the string upstream's settings table would hold.
+//
+// The settings table's `value` column is a JSON field, so a stored
+// value arrives as RAW JSON BYTES (`types.JSONRaw`). A number arrives
+// as `0`, a boolean as `true`, and a string as `"0"` — WITH ITS
+// QUOTES, because it is a JSON string.
+//
+// The quotes are stripped, because upstream's settings are the bare
+// text: a boolean switch reads `value !== '0'`, and a quoted `"0"`
+// is neither `0` nor `"0"`'s unquoted sense — it would read as ON.
+func adminSettingStringFromJSON(raw []byte) any {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" {
+		return ""
+	}
+
+	// A JSON string arrives quoted: the quotes are part of the
+	// encoding, not of the value.
+	if strings.HasPrefix(trimmed, `"`) {
+		var text string
+		if err := json.Unmarshal(raw, &text); err == nil {
+			return text
+		}
+		return trimmed
+	}
+
+	// A JSON document (an object or an array) stays a document: the
+	// admin application PARSES those (`isExtensionEnabled` does
+	// `JSON.parse(app.data.settings.extensions_enabled)`), and a
+	// quoted document would not parse.
+	if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
+		return trimmed
+	}
+
+	// A number, a boolean or null.
+	var number float64
+	if err := json.Unmarshal(raw, &number); err == nil {
+		return strconv.FormatFloat(number, 'f', -1, 64)
+	}
+
+	var flag bool
+	if err := json.Unmarshal(raw, &flag); err == nil {
+		if flag {
+			return "1"
+		}
+		return "0"
+	}
+
+	return trimmed
+}
+
+// PluginSettingSchemas returns every plugin's declared settings.
+//
+// A plugin declares the settings it READS, so the admin application
+// can show each one with the value the forum would use for it.
+//
+// It is exported because the contract it describes spans the two
+// halves of the forum: the schema names the settings, and the
+// plugin's admin bundle registers the form that edits them. A caller
+// that wants to check the two agree needs both.
+func (m *Module) PluginSettingSchemas() []plugin.SettingsSchema {
+	var schemas []plugin.SettingsSchema
+
+	for _, extenders := range m.plugins.PluginExtenders() {
+		schemas = append(schemas, extenders.Settings()...)
+	}
+
+	return schemas
 }
 
 // adminPermissions returns the granted permissions, per permission.

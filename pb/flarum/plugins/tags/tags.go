@@ -14,6 +14,7 @@ package tags
 
 import (
 	"context"
+	"strconv"
 
 	"github.com/pkg/errors"
 	"github.com/pocketbase/pocketbase/core"
@@ -206,6 +207,42 @@ func (p *Plugin) Register(_ context.Context, ext *plugin.Extenders) error {
 	})
 
 	// --- layer 3: the frontend ----------------------------------------
+	// --- the settings ---------------------------------------------------
+	// The four count settings upstream's extension declares, with
+	// upstream's keys.
+	//
+	// They are declared HERE because the server READS them: the
+	// defaults are what the forum falls back to when a setting is
+	// unset, and they must be the same values the admin portal shows.
+	ext.AddSettings(plugin.SettingsSchema{
+		Fields: []plugin.SettingField{
+			{
+				Key:     SettingMinPrimaryTags,
+				Label:   "Minimum primary tags",
+				Type:    "number",
+				Default: strconv.Itoa(DefaultMinPrimaryTags),
+			},
+			{
+				Key:     SettingMaxPrimaryTags,
+				Label:   "Maximum primary tags",
+				Type:    "number",
+				Default: strconv.Itoa(DefaultMaxPrimaryTags),
+			},
+			{
+				Key:     SettingMinSecondaryTags,
+				Label:   "Minimum secondary tags",
+				Type:    "number",
+				Default: strconv.Itoa(DefaultMinSecondaryTags),
+			},
+			{
+				Key:     SettingMaxSecondaryTags,
+				Label:   "Maximum secondary tags",
+				Type:    "number",
+				Default: strconv.Itoa(DefaultMaxSecondaryTags),
+			},
+		},
+	})
+
 	ext.AddAsset(plugin.AssetBundle{
 		PluginID: PluginID,
 		Version:  Version,

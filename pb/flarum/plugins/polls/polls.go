@@ -55,15 +55,6 @@ const (
 
 // The setting keys the plugin reads.
 //
-// They are upstream's own keys, so an operator's saved settings carry
-// over.
-const (
-	// SettingEnableDiscussionPolls turns discussion polls on.
-	SettingEnableDiscussionPolls = "fof-polls.enableDiscussionPolls"
-	// SettingMaxOptions caps how many options a poll may carry.
-	SettingMaxOptions = "fof-polls.maxOptions"
-)
-
 // The JSON:API types the plugin owns.
 //
 // They are upstream's own names, because the frontend's store is keyed

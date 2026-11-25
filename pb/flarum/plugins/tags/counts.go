@@ -34,10 +34,10 @@ const (
 // primary tag, up to three secondary ones, and no secondary tag
 // required.
 const (
-	defaultMinPrimaryTags   = 1
-	defaultMaxPrimaryTags   = 1
-	defaultMinSecondaryTags = 0
-	defaultMaxSecondaryTags = 3
+	DefaultMinPrimaryTags   = 1
+	DefaultMaxPrimaryTags   = 1
+	DefaultMinSecondaryTags = 0
+	DefaultMaxSecondaryTags = 3
 )
 
 // tagCounts reads the four count settings.
@@ -51,15 +51,23 @@ const (
 // the mutation handler, and it is the write path that enforces the
 // minimums.
 func tagCounts(app core.App) (minPrimary, maxPrimary, minSecondary, maxSecondary int) {
-	minPrimary = settingInt(app, SettingMinPrimaryTags, defaultMinPrimaryTags)
-	maxPrimary = settingInt(app, SettingMaxPrimaryTags, defaultMaxPrimaryTags)
-	minSecondary = settingInt(app, SettingMinSecondaryTags, defaultMinSecondaryTags)
-	maxSecondary = settingInt(app, SettingMaxSecondaryTags, defaultMaxSecondaryTags)
+	minPrimary = settingInt(app, SettingMinPrimaryTags, DefaultMinPrimaryTags)
+	maxPrimary = settingInt(app, SettingMaxPrimaryTags, DefaultMaxPrimaryTags)
+	minSecondary = settingInt(app, SettingMinSecondaryTags, DefaultMinSecondaryTags)
+	maxSecondary = settingInt(app, SettingMaxSecondaryTags, DefaultMaxSecondaryTags)
 
 	return minPrimary, maxPrimary, minSecondary, maxSecondary
 }
 
 // settingInt reads an integer forum setting.
+//
+// The value goes through `api.SettingString`, because the settings
+// column is a JSON field: a STORED setting arrives as raw JSON bytes
+// (`types.JSONRaw`), and `types.JSONRaw` is a DISTINCT NAMED TYPE —
+// a switch on `case []byte:` does NOT match it, so a reader that
+// handles only the plain byte slice falls through to its default and
+// the setting reads as UNSET. That is how "the setting is not read"
+// happens, silently.
 func settingInt(app core.App, key string, fallback int) int {
 	value, err := api.SettingValueAt(app, key, fallback)
 	if err != nil {
@@ -73,13 +81,14 @@ func settingInt(app core.App, key string, fallback int) int {
 		return int(typed)
 	case float64:
 		return int(typed)
-	case []byte:
-		return parseInt(string(typed), fallback)
-	case string:
-		return parseInt(typed, fallback)
-	default:
+	}
+
+	text, ok := api.SettingString(value)
+	if !ok {
 		return fallback
 	}
+
+	return parseInt(text, fallback)
 }
 
 // parseInt reads an integer out of a textual value.
@@ -143,27 +152,22 @@ func countTagsByKind(tags []*domain.Tag) (primary, secondary int) {
 // The rules are skipped for a caller who may BYPASS them, which is
 // upstream's `bypassTagCounts` permission.
 func validateTagCounts(app core.App, tags []*domain.Tag) error {
-	if err := validateTagMinimums(app, tags); err != nil {
-		return err
-	}
-
-	return validateTagMaximums(app, tags)
-}
-
-// validateTagMinimums refuses a tag set that is below the minimums.
-func validateTagMinimums(app core.App, tags []*domain.Tag) error {
-	minPrimary, _, minSecondary, _ := tagCounts(app)
+	minPrimary, maxPrimary, minSecondary, maxSecondary := tagCounts(app)
 
 	primary, secondary := countTagsByKind(tags)
 
-	if err := checkTagCount("primary", primary, minPrimary, maxOf(minPrimary)); err != nil {
+	if err := checkTagCount("primary", primary, minPrimary, maxPrimary); err != nil {
 		return err
 	}
 
-	return checkTagCount("secondary", secondary, minSecondary, maxOf(minSecondary))
+	return checkTagCount("secondary", secondary, minSecondary, maxSecondary)
 }
 
 // validateTagMaximums refuses a tag set that is above the maximums.
+//
+// The attach and detach paths use it ALONE: a minimum is a property
+// of a FINISHED tag set, so checking it per attachment would refuse
+// the first tag of a discussion that is about to get its second.
 func validateTagMaximums(app core.App, tags []*domain.Tag) error {
 	_, maxPrimary, _, maxSecondary := tagCounts(app)
 
@@ -204,11 +208,23 @@ func mayBypassTagCounts(can func(action, subjectType, subjectID string) bool) bo
 	return can(domain.PermissionBypassTagCounts, api.TypeTag, "")
 }
 
-// maxOf returns the value itself, so a minimum can be checked as an
-// exact count.
-func maxOf(value int) int { return value }
-
 // checkTagCount checks one kind's count against its bounds.
+//
+// It is upstream's `validateTagCount`, and upstream's rule has a SHAPE
+// to it:
+//
+//	$min === $max ? "size:$min" : "between:$min,$max"
+//
+// So a minimum EQUAL to the maximum is an EXACT count — one primary
+// tag means exactly one primary tag — while a minimum DIFFERENT from
+// the maximum is a RANGE, and a count anywhere between the two is
+// allowed.
+//
+// The exact-count case is the DEFAULT (one primary tag, at most one),
+// which is why the range case is so easy to miss: a reader that
+// always demanded "exactly the minimum" would refuse a count of two
+// primary tags even with the maximum raised to two, and the
+// operator's setting would silently do nothing.
 func checkTagCount(kind string, count, min, max int) error {
 	if min == max {
 		if count == min {

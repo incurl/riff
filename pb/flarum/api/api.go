@@ -732,13 +732,19 @@ func (s *Server) canTagDiscussionAs(ctx context.Context, actor session.Actor, di
 // The name is upstream's.
 const allowTagChangeSetting = "allow_tag_change"
 
-// settingString reads a setting's value as a string.
+// SettingString reads a setting's value as a string.
 //
 // The settings column is a PocketBase JSONField, so the value comes
 // back as `types.JSONRaw` (a []byte of JSON). A JSON string decodes to
 // the string it holds; a JSON number decodes to its text form, because
 // the upstream settings are compared against "10" and "-1" as text.
-func settingString(value any) (string, bool) {
+//
+// It is EXPORTED because a plugin's own reader needs it, and a
+// reader that only handles `value.(string)` never matches: the stored
+// value is raw JSON bytes, so the switch falls through to the
+// fallback and the setting reads as UNSET — silently, and in a way
+// that looks like the setting was never saved.
+func SettingString(value any) (string, bool) {
 	switch v := value.(type) {
 	case string:
 		return v, true
@@ -802,7 +808,7 @@ func (s *Server) settingValue(key string) (string, error) {
 		return "", err
 	}
 
-	setting, ok := settingString(value)
+	setting, ok := SettingString(value)
 	if !ok {
 		return fallback, nil
 	}

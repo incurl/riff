@@ -1,0 +1,276 @@
+package flarum
+
+import (
+	"net/http"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/incurl/riff/pb/flarum/plugins/gamification"
+	"github.com/incurl/riff/pb/flarum/plugins/likes"
+	"github.com/incurl/riff/pb/flarum/plugins/mentions"
+	"github.com/incurl/riff/pb/flarum/plugins/tags"
+)
+
+// TestForum_TheAdminPayloadCarriesThePluginSettings pins that every
+// setting a plugin READS reaches the admin application with its
+// DEFAULT value.
+//
+// The admin application reads `app.data.settings` to render the
+// settings form. A setting that is absent from the payload renders as
+// an EMPTY field — so an operator looking at a boolean sees it off,
+// whatever the forum is actually doing. The forum's own reader falls
+// back to the plugin's declared default, so the form and the forum
+// would disagree about the very same setting.
+//
+// The keys are upstream's own, so an operator's saved setting carries
+// over and means what it means upstream.
+func TestForum_TheAdminPayloadCarriesThePluginSettings(t *testing.T) {
+	app, handler, _ := newTestForumModule(t)
+
+	admin := testSuperuser(t, app)
+
+	recorder := do(t, handler, http.MethodGet, "/forum/admin", "", sessionCookies(admin[0].Value, admin[1].Value))
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	payload := bootPayloadOf(t, recorder)
+
+	for _, tc := range []struct {
+		key   string
+		value any
+	}{
+		{likes.SettingLikeOwnPost, "1"},
+		{mentions.SettingAllowUsernameFormat, "1"},
+		{tags.SettingMinPrimaryTags, strconv.Itoa(tags.DefaultMinPrimaryTags)},
+		{tags.SettingMaxPrimaryTags, strconv.Itoa(tags.DefaultMaxPrimaryTags)},
+		{tags.SettingMinSecondaryTags, strconv.Itoa(tags.DefaultMinSecondaryTags)},
+		{tags.SettingMaxSecondaryTags, strconv.Itoa(tags.DefaultMaxSecondaryTags)},
+		{gamification.SettingAllowSelfVotes, "1"},
+		{gamification.SettingDefaultMetric, gamification.MetricPosts},
+		{gamification.SettingDefaultPeriod, gamification.PeriodYear},
+	} {
+		require.Contains(t, payload.Settings, tc.key,
+			"the admin payload must carry %q, or the settings form shows it empty", tc.key)
+		require.Equal(t, tc.value, payload.Settings[tc.key],
+			"the admin payload's %q must carry the value the forum falls back to", tc.key)
+	}
+}
+
+// TestForum_AStoredPluginSettingWinsOverTheDefault pins that a
+// saved setting beats the declared default.
+//
+// The default is a fallback for a setting that is UNSET. Once an
+// operator has saved one, the saved value is the answer — and the
+// form must show what the forum will do, not what it did before the
+// operator touched it.
+func TestForum_AStoredPluginSettingWinsOverTheDefault(t *testing.T) {
+	app, handler := newTestForum(t)
+
+	admin := testSuperuser(t, app)
+
+	setForumSetting(t, app, likes.SettingLikeOwnPost, "0")
+
+	recorder := do(t, handler, http.MethodGet, "/forum/admin", "", sessionCookies(admin[0].Value, admin[1].Value))
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	payload := bootPayloadOf(t, recorder)
+
+	require.Contains(t, payload.Settings, likes.SettingLikeOwnPost)
+	require.Equal(t, "0", payload.Settings[likes.SettingLikeOwnPost],
+		"a stored setting must win over the declared default")
+}
+
+// TestForum_ThePluginSettingsAreTheOnesTheServerReads pins that the
+// settings the admin portal offers are the settings the server READS.
+//
+// A setting nobody reads is a control that changes nothing, and one
+// the admin portal shows as if it did. The test therefore compares the
+// declared schema against the settings the server actually consults,
+// and it fails when a plugin declares a setting it does not read —
+// which is how the dead constants (the polls' `maxOptions`, the
+// gamification's `firstPostOnly`) were found.
+//
+// The read side is the SOURCE of truth, so the test lists the keys
+// each plugin's reader consults. A new reader must add its key here,
+// and a removed reader must remove its key — otherwise the schema and
+// the reader drift apart and one of them is lying.
+func TestForum_ThePluginSettingsAreTheOnesTheServerReads(t *testing.T) {
+	_, _, module := newTestForumModule(t)
+
+	read := map[string]bool{
+		likes.SettingLikeOwnPost:            true,
+		mentions.SettingAllowUsernameFormat: true,
+		tags.SettingMinPrimaryTags:          true,
+		tags.SettingMaxPrimaryTags:          true,
+		tags.SettingMinSecondaryTags:        true,
+		tags.SettingMaxSecondaryTags:        true,
+		gamification.SettingAllowSelfVotes:  true,
+		gamification.SettingDefaultMetric:   true,
+		gamification.SettingDefaultPeriod:   true,
+	}
+
+	for _, schema := range module.PluginSettingSchemas() {
+		for _, field := range schema.Fields {
+			require.True(t, read[field.Key],
+				"the plugin declares the setting %q, but nothing reads it: a control that changes nothing",
+				field.Key)
+		}
+	}
+}
+
+// TestForum_TheAdminSettingsAreStrings pins that the admin payload
+// carries every setting as a STRING.
+//
+// Upstream's settings column is TEXT, so `Settings::all()` hands the
+// admin application a map of strings, and the application types every
+// setting as `Stream<string>` (`AdminPage.setting` does
+// `Stream<string>(app.data.settings[key] ?? fallback)`).
+//
+// This port's settings column is a JSON field, so a stored value
+// arrives as the JSON type it was written as — a number as `float64`,
+// a boolean as `bool`, and in practice as raw JSON bytes
+// (`types.JSONRaw`). A number in a stream typed as a string is saved
+// back as a number, and a boolean switch reads `value !== '0'` against
+// a value that is neither `"0"` nor `0`.
+//
+// The two keys the admin application PARSES as JSON stay documents:
+// `extensions_enabled` is an array, and `JSON.parse` of a quoted
+// document throws.
+func TestForum_TheAdminSettingsAreStrings(t *testing.T) {
+	app, handler := newTestForum(t)
+
+	admin := testSuperuser(t, app)
+
+	// A setting stored as a JSON string, a number and a boolean.
+	setForumSetting(t, app, likes.SettingLikeOwnPost, "0")
+	setForumSetting(t, app, tags.SettingMaxPrimaryTags, "3")
+	setForumSetting(t, app, gamification.SettingDefaultMetric, gamification.MetricVotes)
+
+	recorder := do(t, handler, http.MethodGet, "/forum/admin", "", sessionCookies(admin[0].Value, admin[1].Value))
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	payload := bootPayloadOf(t, recorder)
+
+	for _, key := range []string{
+		likes.SettingLikeOwnPost,
+		tags.SettingMaxPrimaryTags,
+		gamification.SettingDefaultMetric,
+	} {
+		require.IsType(t, "", payload.Settings[key],
+			"the setting %q must be a string, because the admin application types every setting as one", key)
+	}
+
+	require.Equal(t, "0", payload.Settings[likes.SettingLikeOwnPost])
+	require.Equal(t, "3", payload.Settings[tags.SettingMaxPrimaryTags])
+	require.Equal(t, gamification.MetricVotes, payload.Settings[gamification.SettingDefaultMetric])
+
+	// The JSON documents stay documents: `isExtensionEnabled` parses
+	// this one, and `JSON.parse` of a quoted document throws.
+	enabled, ok := payload.Settings["extensions_enabled"].(string)
+	require.True(t, ok, "extensions_enabled must be a string")
+	require.Contains(t, enabled, "[", "extensions_enabled must stay a JSON document: %s", enabled)
+}
+
+// TestForum_TheAdminBundlesRegisterTheUpstreamSettings pins that each
+// plugin's ADMIN bundle registers the settings it declares.
+//
+// The two halves of the contract are separate: the Go side declares
+// the settings the server reads, and the frontend bundle registers the
+// form that edits them. The bundle is the only place the form can
+// live — the admin application renders a setting that a bundle
+// registered, and NOTHING else.
+//
+// The check reads the bundle's SOURCE, because the contract is the
+// key the bundle registers, and a key that survives minification is
+// still the key.
+func TestForum_TheAdminBundlesRegisterTheUpstreamSettings(t *testing.T) {
+	for _, tc := range []struct {
+		plugin   string
+		settings []string
+	}{
+		{"likes", []string{likes.SettingLikeOwnPost}},
+		{"mentions", []string{mentions.SettingAllowUsernameFormat}},
+		{"tags", []string{
+			tags.SettingMinPrimaryTags,
+			tags.SettingMaxPrimaryTags,
+			tags.SettingMinSecondaryTags,
+			tags.SettingMaxSecondaryTags,
+		}},
+		{"gamification", []string{
+			gamification.SettingAllowSelfVotes,
+			gamification.SettingDefaultMetric,
+			gamification.SettingDefaultPeriod,
+		}},
+	} {
+		source := readVendoredFrontendFile(t,
+			filepath.Join("pb/flarum/frontend/packages/plugins", tc.plugin, "js/admin.js"))
+
+		for _, key := range tc.settings {
+			require.Contains(t, source, key,
+				"the %s admin bundle must register the setting %q", tc.plugin, key)
+		}
+
+		// The bundle must use the admin application's own vocabulary,
+		// or the form renders the wrong control.
+		require.Contains(t, source, "Extend.Admin()",
+			"the %s admin bundle must register through Extend.Admin()", tc.plugin)
+	}
+}
+
+// TestForum_TheAdminBundlesCarryNoDeadSettings pins that a plugin's
+// admin bundle registers no setting the server does not read.
+//
+// This is the other half of the previous test: the bundle is the form,
+// and a form field for a setting nobody reads is a control that
+// changes nothing — the operator turns it and nothing happens, which
+// is worse than the control being absent.
+func TestForum_TheAdminBundlesCarryNoDeadSettings(t *testing.T) {
+	read := map[string]bool{
+		likes.SettingLikeOwnPost:            true,
+		mentions.SettingAllowUsernameFormat: true,
+		tags.SettingMinPrimaryTags:          true,
+		tags.SettingMaxPrimaryTags:          true,
+		tags.SettingMinSecondaryTags:        true,
+		tags.SettingMaxSecondaryTags:        true,
+		gamification.SettingAllowSelfVotes:  true,
+		gamification.SettingDefaultMetric:   true,
+		gamification.SettingDefaultPeriod:   true,
+	}
+
+	// The setting key as it appears in a bundle: a quoted string.
+	keyPattern := regexp.MustCompile(`setting:\s*'([^']+)'`)
+
+	for _, plugin := range []string{"likes", "mentions", "tags", "gamification"} {
+		source := readVendoredFrontendFile(t,
+			filepath.Join("pb/flarum/frontend/packages/plugins", plugin, "js/admin.js"))
+
+		for _, match := range keyPattern.FindAllStringSubmatch(source, -1) {
+			require.True(t, read[match[1]],
+				"the %s admin bundle registers the setting %q, but nothing reads it", plugin, match[1])
+		}
+	}
+}
+
+// TestForum_TheSettingDefaultsMatchTheReaders pins that a plugin's
+// declared default is the value its own reader falls back to.
+//
+// A default that disagrees with the reader is a setting the admin
+// portal shows one value for and the forum uses another for — and the
+// operator has no way to tell which is which.
+func TestForum_TheSettingDefaultsMatchTheReaders(t *testing.T) {
+	_, _, module := newTestForumModule(t)
+
+	for _, schema := range module.PluginSettingSchemas() {
+		for _, field := range schema.Fields {
+			require.NotNil(t, field.Default,
+				"the setting %q has no default, so the admin form shows an empty field", field.Key)
+			require.NotEmpty(t, field.Label,
+				"the setting %q has no label", field.Key)
+			require.Contains(t, []string{"bool", "number", "text", "select"}, field.Type,
+				"the setting %q has the type %q, which the admin application does not render", field.Key, field.Type)
+		}
+	}
+}

@@ -252,6 +252,83 @@ settings read/write endpoints and the extension manifest endpoint, and
 the admin SPA boots — but the forum does not yet implement every admin
 screen's backend.
 
+## 10a. The plugin settings are upstream's keys, but only the ones the server reads
+
+Upstream's extensions register their settings on their extension page,
+with upstream's own keys (`flarum-likes.like_own_post`,
+`flarum-tags.min_primary_tags`, `fof-polls.maxOptions`, …). An
+operator's saved setting therefore carries over, and the setting means
+what it means upstream.
+
+This port exposes the settings **the server READS** and no others. The
+split is deliberate, and the audit that produced it is worth stating:
+
+| Plugin | Upstream's settings | Exposed here |
+| --- | --- | --- |
+| `likes` | `like_own_post` | `like_own_post` |
+| `mentions` | `allow_username_format` | `allow_username_format` |
+| `tags` | `min/max_primary_tags`, `min/max_secondary_tags` | all four |
+| `gamification` | about twenty | `allowSelfVotes`, `defaultMetric`, `defaultPeriod` |
+| `polls` | eight | none |
+| `sticky` | three | none |
+| `lock`, `suspend`, `markdown`, `statistics`, `uploads` | none (permissions and custom pages only) | none |
+
+**A setting nobody reads is a control that changes nothing.** The
+`polls` plugin's `maxOptions` and `enableDiscussionPolls` were declared
+as constants but never read — this port has no poll CREATION path, so
+there is nothing for them to gate — and the gamification's
+`firstPostOnly`, `autoUpvotePosts`, `upVotesOnly` and
+`viewRankingPage` were declared and never read either. Exposing them
+would have put four switches and two number fields on an admin page
+that changed nothing, which is worse than their absence: the operator
+turns a switch and the forum does not move.
+
+The dead constants were REMOVED rather than exposed. The audit is
+pinned by `TestForum_ThePluginSettingsAreTheOnesTheServerReads` and
+`TestForum_TheAdminBundlesCarryNoDeadSettings`.
+
+**The tag COUNT RULES are a RANGE, not an exact count.** Upstream
+writes the rule as `$min === $max ? "size:$min" : "between:$min,$max"`:
+a minimum equal to the maximum is an exact count (one primary tag
+means exactly one primary tag), while a minimum different from the
+maximum is a range. This port always demanded "exactly the minimum",
+so a set of two primary tags was refused even with
+`flarum-tags.max_primary_tags` raised to two — the operator's setting
+did nothing. The rule now matches upstream's.
+
+**The upstream SETTINGS PAGES are not ported.** Upstream's `tags` and
+`gamification` extensions use a CUSTOM admin page — a tag tree, a rank
+editor, an image uploader — rather than the plain settings list, and
+`polls` groups its settings into four fieldsets. This port registers
+the SETTINGS with the plain registry, so the form is the standard
+settings list rather than upstream's bespoke page. The upstream
+`sticky` settings are not exposed at all: `pin_sticky_on_all_discussions`
+and `only_sticky_unread_discussions` gate a query this port does not
+run (the discussion list does not pin sticky discussions to the top),
+and `enable_display_excerpt` needs a `firstPostExcerpt` attribute and
+an `excerptDisplayEnabled` forum attribute, neither of which exists
+here.
+
+**The settings are STRINGS in the admin payload.** Upstream's settings
+column is TEXT, so `Settings::all()` hands the admin application a map
+of strings and the application types every setting as `Stream<string>`.
+This port's `forum_settings.value` column is a JSON field, so a stored
+value arrives as the JSON type it was written as — a number as
+`float64`, a boolean as `bool`, and in practice as raw JSON bytes
+(`types.JSONRaw`). The admin payload normalises every setting to a
+string, so the form sees what upstream shows it. Without that, a number
+lands in a stream typed as a string and the form saves it back as a
+number, and a boolean switch reads `value !== '0'` against a value
+that is neither `"0"` nor `0`.
+
+**The two halves of the contract are separate.** The Go side declares
+the settings the server reads (`plugin.AddSettings`), and the plugin's
+admin bundle registers the form that edits them
+(`Extend.Admin().setting(...)`). The admin application renders a
+setting that a bundle registered and nothing else, so a declared
+setting with no bundle is a setting the operator cannot reach. Both
+halves must agree on the KEY, and the test pins that they do.
+
 ## 11. The permission rows cannot express ownership
 
 Upstream Flarum's policies take the actor AND the subject, and the

@@ -350,7 +350,7 @@ func (s *Server) listUsersHandler(e *core.RequestEvent) error {
 // A setting that cannot be read falls back to the default, so a
 // missing or unreadable setting never blanks the forum document.
 func settingTextOr(settings map[string]any, key, fallback string) string {
-	value, ok := settingString(settings[key])
+	value, ok := SettingString(settings[key])
 	if !ok {
 		return fallback
 	}

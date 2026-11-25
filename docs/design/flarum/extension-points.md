@@ -21,10 +21,32 @@ method corresponds to one extender area.
 | `AddRelationship` | Models/fields | Contribute a relationship to a JSON:API resource. |
 | `AddPermission` | Permissions | Register a permission handler. |
 | `AddAsset` | Frontend assets | Declare the plugin's JS/CSS bundles. |
-| `AddSettings` | Settings | Declare an admin settings schema. |
+| `AddSettings` | Settings | Declare the admin settings the plugin reads. |
 
 The container and the event bus are fields on the extender, so a plugin
 binds services and subscribes to events through the same object.
+
+### `AddSettings` and the admin form
+
+`AddSettings` declares the settings a plugin **reads**. The declared
+schema is the server's half of the contract: it names each setting by
+its FULL key (`flarum-likes.like_own_post`, not a name within a group)
+and says what the plugin falls back to when the setting is unset.
+
+The module publishes the schema in the admin boot payload with those
+defaults, so the form shows the value the forum would actually use.
+
+The form itself is the plugin's frontend bundle's job: the admin
+application renders a setting that a bundle registered with
+`Extend.Admin().setting(...)` and nothing else. A declared setting
+with no bundle is a setting the operator cannot reach, and a registered
+setting the server does not read is a control that changes nothing —
+so the two halves must agree on the KEY.
+
+A setting the server does not read must NOT be declared. The
+`TestForum_ThePluginSettingsAreTheOnesTheServerReads` and
+`TestForum_TheAdminBundlesCarryNoDeadSettings` tests pin both
+directions. See [the deviations](deviations.md#10a-the-plugin-settings-are-upstreams-keys-but-only-the-ones-the-server-reads).
 
 ## The container
 

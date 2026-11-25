@@ -188,6 +188,24 @@ func (p *Plugin) Register(_ context.Context, ext *plugin.Extenders) error {
 		},
 	})
 
+	// --- the settings ---------------------------------------------------
+	// The one setting upstream's extension declares, with upstream's
+	// key: `flarum-likes.like_own_post`.
+	//
+	// It is declared HERE because the server READS it: the default is
+	// what the forum falls back to when the setting is unset, and it
+	// must be the same value the admin portal shows.
+	ext.AddSettings(plugin.SettingsSchema{
+		Fields: []plugin.SettingField{
+			{
+				Key:     SettingLikeOwnPost,
+				Label:   "Allow liking your own posts",
+				Type:    "bool",
+				Default: "1",
+			},
+		},
+	})
+
 	// --- layer 3: the frontend ----------------------------------------
 	ext.AddAsset(plugin.AssetBundle{
 		PluginID: PluginID,

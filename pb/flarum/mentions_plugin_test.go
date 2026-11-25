@@ -144,6 +144,68 @@ func TestMentions_APostStoresItsMentions(t *testing.T) {
 	require.Equal(t, bob.Id, rows[0].GetString("user"), "the mention should name the mentioned account")
 }
 
+// TestMentions_TheUsernameFormatCanBeTurnedOff pins upstream's
+// `flarum-mentions.allow_username_format`.
+//
+// Upstream's `ConfigureMentions::addUserId` reads the setting and,
+// when it is off, refuses to resolve a `@username` to an account — the
+// quoted `@"Display Name"#id` form still resolves. This port
+// recognises the bare form only, so turning the setting off stops a
+// bare mention from resolving at all.
+//
+// The default is ON: upstream's migration writes 1, and a mention that
+// resolves to nobody notifies nobody, so the default has to be the
+// permissive one.
+func TestMentions_TheUsernameFormatCanBeTurnedOff(t *testing.T) {
+	app, handler := newTestForum(t)
+
+	alice := testUser(t, app, "alice")
+
+	token, err := alice.NewAuthToken()
+	require.NoError(t, err)
+	cookies := sessionCookies(token, "csrf-token")
+
+	// The setting is off.
+	setForumSetting(t, app, mentions.SettingAllowUsernameFormat, "0")
+
+	body := postBody(t, app, alice.Id, "hey @bob, look at this")
+	recorder := do(t, handler, http.MethodPost, "/forum/api/posts", body, cookies)
+	require.Equal(t, http.StatusCreated, recorder.Code, recorder.Body.String())
+
+	postID := postWithContent(t, app, alice.Id, "hey @bob, look at this")
+	require.Empty(t, mentionRows(t, app, postID),
+		"a bare mention must not resolve while the username format is off")
+}
+
+// TestMentions_TheUsernameFormatIsOnByDefault pins that the bare
+// mention resolves without the operator touching the setting.
+//
+// The settings table starts EMPTY on a fresh instance, so the reader
+// falls back to the declared default. Upstream's installed default is
+// 1, and a mention that resolves to nobody notifies nobody — so a
+// default of "off" would silently break every mention on a fresh
+// instance.
+func TestMentions_TheUsernameFormatIsOnByDefault(t *testing.T) {
+	app, handler := newTestForum(t)
+
+	alice := testUser(t, app, "alice")
+	bob := testUser(t, app, "bob")
+
+	token, err := alice.NewAuthToken()
+	require.NoError(t, err)
+	cookies := sessionCookies(token, "csrf-token")
+
+	body := postBody(t, app, alice.Id, "hey @bob, look at this")
+	recorder := do(t, handler, http.MethodPost, "/forum/api/posts", body, cookies)
+	require.Equal(t, http.StatusCreated, recorder.Code, recorder.Body.String())
+
+	postID := postWithContent(t, app, alice.Id, "hey @bob, look at this")
+
+	rows := mentionRows(t, app, postID)
+	require.Len(t, rows, 1, "a bare mention should resolve by default")
+	require.Equal(t, bob.Id, rows[0].GetString("user"), "the mention should name the mentioned account")
+}
+
 // TestMentions_AnUnknownUsernameIsInert pins Step 4.
 //
 // A mention of an account that does not exist is dropped: it does not

@@ -55,17 +55,13 @@ const (
 //
 // They are upstream's own keys, so an operator's saved settings carry
 // over and the admin page (upstream's, vendored) reads what it expects.
+//
+// They are the settings this port READS. Upstream's page carries
+// about twenty more, but a setting nobody reads is a control that
+// changes nothing — and one the admin portal would show as if it did.
 const (
-	// SettingFirstPostOnly limits voting to a discussion's first post.
-	SettingFirstPostOnly = "fof-gamification.firstPostOnly"
 	// SettingAllowSelfVotes allows voting for one's own post.
 	SettingAllowSelfVotes = "fof-gamification.allowSelfVotes"
-	// SettingAutoUpvote gives the author an automatic upvote.
-	SettingAutoUpvote = "fof-gamification.autoUpvotePosts"
-	// SettingUpVotesOnly hides the downvote control.
-	SettingUpVotesOnly = "fof-gamification.upVotesOnly"
-	// SettingViewRankingPage gates the leaderboard.
-	SettingViewRankingPage = "fof-gamification.viewRankingPage"
 	// SettingDefaultMetric is the leaderboard's default metric.
 	SettingDefaultMetric = "fof-gamification.defaultMetric"
 	// SettingDefaultPeriod is the leaderboard's default period.
@@ -250,6 +246,42 @@ func (p *Plugin) Register(_ context.Context, ext *plugin.Extenders) error {
 	})
 
 	// --- layer 3: the frontend ------------------------------------------
+	// --- the settings ---------------------------------------------------
+	// The settings the plugin READS, with upstream's keys.
+	//
+	// They are declared HERE because the server READS them: the
+	// defaults are what the forum falls back to when a setting is
+	// unset, and they must be the same values the admin portal shows.
+	//
+	// The four that upstream's page carries but this port does not
+	// READ are NOT declared: a setting nobody reads is a control that
+	// changes nothing, and the admin portal showing one would be a
+	// lie about what the forum does.
+	ext.AddSettings(plugin.SettingsSchema{
+		Fields: []plugin.SettingField{
+			{
+				Key:     SettingAllowSelfVotes,
+				Label:   "Allow voting for your own posts",
+				Type:    "bool",
+				Default: "1",
+			},
+			{
+				Key:     SettingDefaultMetric,
+				Label:   "Default leaderboard metric",
+				Type:    "select",
+				Default: MetricPosts,
+				Options: []string{MetricPosts, MetricDiscussions, MetricUpvotes, MetricVotes},
+			},
+			{
+				Key:     SettingDefaultPeriod,
+				Label:   "Default leaderboard period",
+				Type:    "select",
+				Default: PeriodYear,
+				Options: []string{PeriodDay, PeriodWeek, PeriodMonth, PeriodYear, PeriodAllTime},
+			},
+		},
+	})
+
 	ext.AddAsset(plugin.AssetBundle{
 		PluginID: PluginID,
 		Version:  Version,

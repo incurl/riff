@@ -48,26 +48,46 @@ type Migration struct {
 
 // SettingsSchema declares a plugin's admin settings.
 //
-// The schema is registered in the admin settings page and persisted
-// through the forum_settings collection.
+// The settings are FLAT keys, not groups: a setting's key is the whole
+// key it is stored under (`flarum-likes.like_own_post`), which is
+// upstream's own spelling — an operator's saved setting carries over,
+// and the admin application looks the setting up by that key.
+//
+// The schema is the SERVER's half of the contract: it names the
+// settings the plugin reads and the value each falls back to. The
+// admin application's half — the form the setting is edited on — is
+// the plugin's frontend bundle, which registers it with
+// `Extend.Admin().setting(...)`.
+//
+// The two halves must agree on the KEY: the server reads the setting
+// by it, and the form writes it by it.
 type SettingsSchema struct {
-	// Key identifies the setting group.
-	Key string
-	// Title is the human-readable group name.
-	Title string
-	// Fields describes the individual settings in the group.
+	// Fields describes the individual settings.
 	Fields []SettingField
 }
 
-// SettingField is one configurable value in a plugin's settings group.
+// SettingField is one configurable value in a plugin's settings.
 type SettingField struct {
-	// Key is the setting's key within the group.
+	// Key is the setting's key, e.g. "flarum-likes.like_own_post".
+	//
+	// It is the FULL key, not a name within a group: the settings
+	// table is a flat key/value store, and upstream's keys are
+	// prefixed with the extension's name.
 	Key string
 	// Label is the human-readable label.
 	Label string
-	// Type is the input type, e.g. "text", "boolean", "select".
+	// Type is the input type: "bool", "number" or "text".
+	//
+	// It is the admin application's own vocabulary
+	// (`FormGroup`'s `BooleanSettingTypes` and friends), so the
+	// schema and the form that renders it speak the same language.
 	Type string
 	// Default is the value used when the setting is unset.
+	//
+	// It is what the server falls back to, so it MUST be the value
+	// the plugin's own reader uses. A default here that disagrees
+	// with the reader's is a setting the admin portal shows one
+	// value for and the forum uses another for.
 	Default any
 	// Options are the allowed values for a "select" field.
 	Options []string

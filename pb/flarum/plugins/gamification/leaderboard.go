@@ -416,13 +416,20 @@ func leaderboardEntryID(metric, period string, position int) string {
 }
 
 // settingString reads a string forum setting.
+//
+// The value goes through `api.SettingString`, because the settings
+// column is a JSON field: a STORED setting arrives as raw JSON bytes
+// (`types.JSONRaw`), not as a Go string. A reader that switches only
+// on `value.(string)` therefore never matches, the setting reads as
+// unset, and the forum silently ignores what the operator saved —
+// which is how "the setting is not read" happens.
 func settingString(e *core.RequestEvent, key, fallback string) string {
 	value, err := api.SettingValue(e, key, fallback)
 	if err != nil {
 		return fallback
 	}
 
-	text, ok := value.(string)
+	text, ok := api.SettingString(value)
 	if !ok || text == "" {
 		return fallback
 	}
