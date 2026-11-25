@@ -264,6 +264,112 @@ func TestTags_AFreshDiscussionCarriesTheChosenTags(t *testing.T) {
 	require.Equal(t, tag.Id, identifier["id"])
 }
 
+// TestTags_AnExistingDiscussionsTagsCanBeChanged pins the control's write.
+//
+// The control saves the discussion with the `tags` RELATIONSHIP, and the
+// server's writer REPLACES the set — a tag the client left out is removed.
+//
+// The gate is the author's own, and it needs `allow_tag_change`: the
+// setting is explicitly about changing tags AFTER posting, so a create and
+// a change are different questions (see `writeDiscussionTags`).
+func TestTags_AnExistingDiscussionsTagsCanBeChanged(t *testing.T) {
+	app, handler := newTestForum(t)
+
+	author, authorCookies := memberSession(t, app, "tag_change_author")
+	setForumSetting(t, app, "allow_tag_change", "-1")
+
+	primary := seedTag(t, app, "Primary", "primary")
+	primaryRecord, err := app.FindRecordById(mustCollection(t, app, "forum_tags"), primary.Id)
+	require.NoError(t, err)
+	primaryRecord.Set("is_primary", true)
+	require.NoError(t, app.Save(primaryRecord))
+
+	other := seedTag(t, app, "Other", "other")
+	otherRecord, err := app.FindRecordById(mustCollection(t, app, "forum_tags"), other.Id)
+	require.NoError(t, err)
+	otherRecord.Set("is_primary", true)
+	require.NoError(t, app.Save(otherRecord))
+
+	// The author's OWN discussion: the author rule is about the author.
+	discussionID, _ := seedDiscussionWithAuthor(t, app, author.Id, "Tagged", "Hello")
+	attachTag(t, app, discussionID, primary.Id)
+
+	// The set REPLACES: the primary tag goes, the other arrives.
+	//
+	// Both are PRIMARY, because the count rules are about the KIND: a set
+	// of one SECONDARY tag breaks the primary minimum (upstream's own
+	// wording — "the number of primary tags must be exactly 1"), which is
+	// a different rule and is pinned elsewhere.
+	body := `{"data":{"type":"discussions","relationships":{"tags":{"data":[{"type":"tags","id":"` +
+		other.Id + `"}]}}}}`
+
+	recorder := doWithHeaders(t, handler, http.MethodPatch, "/forum/api/discussions/"+discussionID, body, authorCookies,
+		map[string]string{"X-CSRF-Token": "csrf-token"})
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	recorder = do(t, handler, http.MethodGet, "/forum/api/discussions/"+discussionID, "", nil)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	document := decodeDocument(t, recorder)
+	resource, ok := document.Data.(map[string]any)
+	require.True(t, ok, "the data should be a resource object")
+
+	relationships, ok := resource["relationships"].(map[string]any)
+	require.True(t, ok, "the resource must carry relationships")
+
+	tags, ok := relationships["tags"].(map[string]any)
+	require.True(t, ok, "the discussion must carry a tags relationship")
+
+	data, ok := tags["data"].([]any)
+	require.True(t, ok, "the tags relationship must carry identifiers")
+	require.Len(t, data, 1, "the set is REPLACED: the old tag is gone")
+	require.Equal(t, other.Id, data[0].(map[string]any)["id"])
+}
+
+// TestTags_ChangingTagsNeedsTheAllowTagChangeSetting pins the gate.
+//
+// The setting is upstream's: "when an author may still change a
+// discussion's tags after posting it". Its default is "never" — an unset
+// setting permits nothing — so a discussion whose author tries to change
+// the tags is REFUSED, and the `canTag` flag the control reads is false.
+//
+// The two halves have to agree: a control that is offered when the save
+// would be refused is a dead affordance, and a save that succeeds when the
+// control is absent would be a way around the setting.
+func TestTags_ChangingTagsNeedsTheAllowTagChangeSetting(t *testing.T) {
+	app, handler := newTestForum(t)
+
+	author, authorCookies := memberSession(t, app, "tag_change_gate_author")
+
+	tag := seedTag(t, app, "Gated", "gated")
+	tagRecord, err := app.FindRecordById(mustCollection(t, app, "forum_tags"), tag.Id)
+	require.NoError(t, err)
+	tagRecord.Set("is_primary", true)
+	require.NoError(t, app.Save(tagRecord))
+
+	discussionID, _ := seedDiscussionWithAuthor(t, app, author.Id, "Gated", "Hello")
+
+	body := `{"data":{"type":"discussions","relationships":{"tags":{"data":[{"type":"tags","id":"` +
+		tag.Id + `"}]}}}}`
+
+	// The setting is UNSET, which is upstream's default: never.
+	recorder := doWithHeaders(t, handler, http.MethodPatch, "/forum/api/discussions/"+discussionID, body, authorCookies,
+		map[string]string{"X-CSRF-Token": "csrf-token"})
+	require.Equal(t, http.StatusUnprocessableEntity, recorder.Code, recorder.Body.String())
+
+	// And the flag the control reads agrees: the author may not tag it.
+	recorder = do(t, handler, http.MethodGet, "/forum/api/discussions/"+discussionID, "", authorCookies)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	document := decodeDocument(t, recorder)
+	resource, ok := document.Data.(map[string]any)
+	require.True(t, ok, "the data should be a resource object")
+
+	attributes, ok := resource["attributes"].(map[string]any)
+	require.True(t, ok, "the discussion must carry attributes")
+	require.Equal(t, false, attributes["canTag"], "the control must not be offered when the save would be refused")
+}
+
 // TestTags_TheForumDocumentCarriesTheCountSettings pins the limits the
 // composer's picker enforces.
 //

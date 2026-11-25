@@ -552,6 +552,9 @@ filtering, and still open for authoring.
 - `addTagComposer()` — the composer's tag picker, the tags travelling with
   the discussion, a tag page's tag preselected, and the minimums enforced
   before submitting.
+- `addTagControl()` — the discussion page's "Edit tags" button, which opens
+  the same picker seeded with the discussion's CURRENT tags and saves the
+  result as the `tags` relationship.
 - The four COUNT settings on the forum document (`minPrimaryTags` and its
   three siblings), so the picker knows the limits before an author chooses
   anything. The server enforces the same counts, so a picker that ignored
@@ -559,10 +562,8 @@ filtering, and still open for authoring.
 
 **Not built**, and why each is a real absence rather than an oversight:
 
-- `addTagControl()` — the tag button on a discussion page (change a
-  discussion's tags after posting). The composer's picker is there, so a
-  discussion can be CREATED with tags, but an existing discussion's tags can
-  only be changed through the API.
+- `addTagControl()` — the tag button on a discussion page, and the save that
+  carries the new set.
 - `discussionTagged` PostTypes — a rename or tag change is stored as a post of
   that type, and the port renders no component for it, so a stream shows those
   events as ordinary posts.

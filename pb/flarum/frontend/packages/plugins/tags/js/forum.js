@@ -42,6 +42,7 @@ import GlobalSearchState from 'flarum/forum/states/GlobalSearchState';
 import { Tag } from './models';
 import { currentTag, loadTags, sortTags, tagsLabel } from './helpers';
 import { addTagComposer } from './addTagComposer';
+import addTagControl from './addTagControl';
 import TagHero from './components/TagHero';
 import TagsIndexPage from './components/TagsIndexPage';
 
@@ -69,6 +70,7 @@ export const extend = [
       addTagLabels();
       addTagFilter();
       addTagComposer();
+      addTagControl();
 
       // One shared tag-list request for the whole page load: the labels, the
       // sidebar and `/tags` all read from it.
