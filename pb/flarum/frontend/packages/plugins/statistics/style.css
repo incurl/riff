@@ -1,0 +1,134 @@
+/* The Statistics extension's admin styles. */
+
+.StatisticsWidget-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.StatisticsWidget-title {
+  margin: 0;
+  flex: 1 1 auto;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.StatisticsWidget-entity,
+.StatisticsWidget-period {
+  width: auto;
+  margin: 0;
+}
+
+.StatisticsWidget-totals {
+  display: flex;
+  gap: 24px;
+  margin: 16px 0 8px;
+  flex-wrap: wrap;
+}
+
+.StatisticsWidget-total {
+  display: flex;
+  flex-direction: column;
+}
+
+.StatisticsWidget-totalValue {
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+.StatisticsWidget-totalLabel {
+  font-size: 12px;
+  color: var(--muted-color);
+}
+
+.StatisticsWidget-error {
+  padding: 12px 0;
+  color: var(--error-color, #d83e3e);
+}
+
+/* The chart. The SVG is scaled by width, so the viewBox supplies the
+   aspect ratio and this file supplies the colours. */
+.StatisticsChart-svg {
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+.StatisticsChart-gridLine {
+  stroke: var(--control-bg, #e8ecf3);
+  stroke-width: 1;
+}
+
+.StatisticsChart-axisLabel {
+  fill: var(--muted-color, #667c99);
+  font-size: 11px;
+}
+
+.StatisticsChart-line--current {
+  stroke: var(--primary-color, #4d698e);
+}
+
+.StatisticsChart-line--previous {
+  stroke: var(--muted-color, #667c99);
+  stroke-dasharray: 4 3;
+}
+
+.StatisticsChart-legend {
+  display: flex;
+  gap: 16px;
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  font-size: 12px;
+  color: var(--muted-color, #667c99);
+}
+
+.StatisticsChart-legendItem {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.StatisticsChart-legendSwatch {
+  width: 12px;
+  height: 2px;
+  background: var(--primary-color, #4d698e);
+}
+
+.StatisticsChart-legendItem--previous .StatisticsChart-legendSwatch {
+  background: var(--muted-color, #667c99);
+}
+
+.StatisticsChart--empty {
+  padding: 24px 0;
+  color: var(--muted-color, #667c99);
+  text-align: center;
+}
+
+/* The dashboard's compact variant. */
+.MiniStatisticsWidget-list {
+  display: flex;
+  gap: 24px;
+  list-style: none;
+  margin: 12px 0;
+  padding: 0;
+  flex-wrap: wrap;
+}
+
+.MiniStatisticsWidget-item {
+  display: flex;
+  flex-direction: column;
+}
+
+.MiniStatisticsWidget-value {
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+.MiniStatisticsWidget-label {
+  font-size: 12px;
+  color: var(--muted-color);
+}

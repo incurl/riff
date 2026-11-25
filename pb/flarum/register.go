@@ -377,15 +377,33 @@ func (m *Module) boot(ctx context.Context) error {
 	// attribute and relationship contributions reach the wire.
 	for _, extenders := range m.plugins.PluginExtenders() {
 		for _, attribute := range extenders.Attributes() {
-			m.api.AddAttribute(attribute.Resource, attribute.Name, func(ctx context.Context, req api.AttributeRequest) (any, error) {
+			attribute := attribute
+
+			value := func(ctx context.Context, req api.AttributeRequest) (any, error) {
 				return attribute.Value(ctx, &plugin.AttributeRequest{
 					App:      m.app,
 					ActorID:  req.ActorID,
 					RecordID: req.RecordID,
 					Type:     req.Type,
+					IsAdmin:  req.IsAdmin,
 					Can:      m.pluginCan(ctx, req.ActorID),
 				})
-			})
+			}
+
+			if attribute.Visible == nil {
+				m.api.AddAttribute(attribute.Resource, attribute.Name, value)
+				continue
+			}
+
+			m.api.AddVisibleAttribute(attribute.Resource, attribute.Name, func(req api.AttributeRequest) bool {
+				return attribute.Visible(&plugin.AttributeRequest{
+					App:      m.app,
+					ActorID:  req.ActorID,
+					RecordID: req.RecordID,
+					Type:     req.Type,
+					IsAdmin:  req.IsAdmin,
+				})
+			}, value)
 		}
 		for _, writer := range extenders.RelationshipWriters() {
 			m.api.AddRelationshipWriter(writer.Resource, writer.Name,

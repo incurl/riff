@@ -183,7 +183,8 @@ func (s *Server) discussionResource(e *core.RequestEvent, discussion *domain.Dis
 	// The plugins' own attributes: `isLocked`/`canLock` from the Lock
 	// plugin, `isSticky`/`canSticky` from Sticky. Without this the
 	// frontend reads them as undefined and draws no control and no badge.
-	if err := s.applyPluginAttributes(e.Request.Context(), &resource, s.actor(e).ID(), discussion.ID); err != nil {
+	actor := s.actor(e)
+	if err := s.applyPluginAttributes(e.Request.Context(), &resource, actor.ID(), discussion.ID, actor.User != nil && actor.User.IsAdmin); err != nil {
 		return Resource{}, err
 	}
 
@@ -562,12 +563,33 @@ func (s *Server) ForumDocument(e *core.RequestEvent) (Resource, error) {
 		"actor":  {Data: actorResource},
 	}
 
-	return Resource{
+	resource := Resource{
 		Type:          TypeForum,
 		ID:            "1",
 		Attributes:    attributes,
 		Relationships: relationships,
-	}, nil
+	}
+
+	// The plugins contribute to the FORUM DOCUMENT the same way they
+	// contribute to a record. Upstream's
+	// `Extend.ApiResource(ForumResource::class)->fields(...)` is what
+	// publishes a field on this document, and the Statistics extension
+	// uses it for `statisticsEntities` — the list a page lays its widgets
+	// out from before any number arrives.
+	//
+	// This is the BOOT payload's document too (`routes.go` calls this from
+	// the shell), which is the copy the SPA actually reads: the SPA reads
+	// the forum document out of the boot payload, never out of `GET /api/`.
+	actorID := ""
+	if actor.User != nil {
+		actorID = actor.User.ID
+	}
+	isAdmin := actor.User != nil && actor.User.IsAdmin
+	if err := s.applyPluginAttributes(e.Request.Context(), &resource, actorID, resource.ID, isAdmin); err != nil {
+		return Resource{}, err
+	}
+
+	return resource, nil
 }
 
 // groupIDs returns the ids of a group list.

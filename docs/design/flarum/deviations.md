@@ -273,6 +273,21 @@ split is deliberate, and the audit that produced it is worth stating:
 | `sticky` | three | none |
 | `lock`, `suspend`, `markdown`, `statistics`, `uploads` | none (permissions and custom pages only) | none |
 
+`statistics` declares no settings in either column, and its admin surface is
+a CUSTOM PAGE rather than a settings list — upstream's `StatisticsPage`, the
+totals, the entity and period selectors and the chart, plus the mini widget
+on the dashboard. That is the presentation half; the data half is
+`GET /api/statistics`, and `statisticsEntities` travels on the forum document
+to administrators only, exactly as upstream's `ForumResource` field does.
+
+The chart is drawn as INLINE SVG rather than with upstream's `frappe-charts`.
+The library is not in this port's dependency tree, and adding it for a single
+admin page is a dependency decision; the shape is upstream's (two series,
+this period against the previous one, the same windows). The one upstream
+control that is NOT ported is the chart's PNG export button, because
+`frappe-charts` is what implements the export — shipping a button that cannot
+save a file would be the dead-affordance problem again.
+
 **A setting nobody reads is a control that changes nothing.** The
 `polls` plugin's `maxOptions` and `enableDiscussionPolls` were declared
 as constants but never read — this port has no poll CREATION path, so

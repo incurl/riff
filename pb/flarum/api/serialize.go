@@ -89,13 +89,22 @@ func (s *Server) avatarURL(user *domain.User) string {
 // resource type plugins extend goes through it. A type that did not would
 // carry its plugin attributes nowhere, and the frontend would read them as
 // undefined — a missing `canLock` silently hides the lock control.
-func (s *Server) applyPluginAttributes(ctx context.Context, resource *Resource, actorID, recordID string) error {
+func (s *Server) applyPluginAttributes(ctx context.Context, resource *Resource, actorID, recordID string, isAdmin bool) error {
 	for _, source := range s.attributes[resource.Type] {
-		value, err := source.Value(ctx, AttributeRequest{
+		req := AttributeRequest{
 			ActorID:  actorID,
 			RecordID: recordID,
 			Type:     resource.Type,
-		})
+			IsAdmin:  isAdmin,
+		}
+
+		// An invisible field is ABSENT, not null — upstream's serializer
+		// does not emit it at all.
+		if source.Visible != nil && !source.Visible(req) {
+			continue
+		}
+
+		value, err := source.Value(ctx, req)
 		if err != nil {
 			return err
 		}
@@ -153,7 +162,11 @@ func (s *Server) userResourceWithGroups(actorID string, user *domain.User, group
 	// user today. A failure is logged rather than fatal: a user resource is
 	// rendered inside list responses, and losing a whole feed because one
 	// attribute could not be computed is the worse outcome.
-	if err := s.applyPluginAttributes(context.Background(), &resource, actorID, user.ID); err != nil {
+	// The caller's admin flag is not available on this path (it renders
+	// whatever user the request named, not the actor), so a contributor
+	// that gates on IsAdmin answers for a non-administrator here. The one
+	// such field, `statisticsEntities`, lives on the forum document.
+	if err := s.applyPluginAttributes(context.Background(), &resource, actorID, user.ID, false); err != nil {
 		s.logger.Debug("forum: a user attribute could not be computed", slog.String("error", err.Error()))
 	}
 

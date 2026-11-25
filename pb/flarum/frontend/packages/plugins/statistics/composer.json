@@ -1,0 +1,10 @@
+{
+  "name": "riff/statistics",
+  "description": "Forum statistics for the riff admin portal.",
+  "type": "flarum-extension",
+  "version": "1.0.0",
+  "license": "MIT",
+  "require": {
+    "flarum/core": "^2.0.0"
+  }
+}

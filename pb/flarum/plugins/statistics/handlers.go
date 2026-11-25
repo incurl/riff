@@ -2,6 +2,8 @@ package statistics
 
 import (
 	"net/http"
+	"net/url"
+	"strconv"
 	"time"
 
 	"github.com/pocketbase/pocketbase/core"
@@ -9,26 +11,43 @@ import (
 	"github.com/incurl/riff/pb/flarum/api"
 )
 
-// timedWindowDays is how far back the time series reaches.
+// timedWindowYears is how far back the default time series reaches.
 //
-// Upstream reports two years of days plus the last 25 hours by the hour.
-// One window is enough for the port's first cut: thirty days by day, which
-// is what the chart's default view shows.
-const timedWindowDays = 30
+// Upstream returns two years of days plus the last 25 hours by the hour
+// (`getTimedCounts`: `$startDate = new DateTime('-2 years')`), because its
+// widest selector — "last 12 months" — is drawn from the same payload and
+// the chart needs the PREVIOUS period's points too.
+const timedWindowYears = 2
+
+// hourlyWindow is how much of the tail is bucketed by the hour.
+//
+// Upstream: `$hourlyFrom = new DateTime('-25 hours')`. The extra hour
+// overlaps the last daily bucket so "today" has a shape rather than a
+// single point.
+const hourlyWindow = 25 * time.Hour
 
 // showStatisticsHandler serves GET /api/statistics.
 //
 // The contract is upstream's
 // (`flarum-statistics/src/Api/Controller/ShowStatisticsData.php`):
 //
-//	?period=lifetime          -> {"users": N, "discussions": N, "posts": N}
-//	?model=users&period=<any> -> {"<RFC 3339 timestamp>": N, ...}
+//	?period=lifetime                 -> {"users": N, "discussions": N, "posts": N}
+//	?model=users&period=timed        -> {"<unix seconds>": N, ...}
+//	?model=users&period=custom
+//	  &dateRange[start]=<unix sec>&dateRange[end]=<unix sec>
+//	                                 -> {"<unix seconds>": N, ...}
 //
 // and it is ADMIN-ONLY. Upstream calls `assertAdmin()` before it reads the
 // query at all, so a non-administrator learns nothing about the shape of
 // the request — this does the same, and answers 403 rather than the 404 the
 // rest of the forum uses for a hidden resource, because the endpoint's
 // existence is not a secret but the numbers are.
+//
+// THE KEYS ARE UNIX SECONDS, NOT TIMESTAMPS. The admin page's widget sums
+// the map over a window it computes in seconds
+// (`StatisticsWidget::getPeriodCount`: `const time = parseInt(t); if (time
+// >= period.start && time < period.end)`), so an RFC 3339 key is silently
+// skipped and every chart reads zero.
 func (p *Plugin) showStatisticsHandler(e *core.RequestEvent) error {
 	actor, err := api.CurrentActor(e)
 	if err != nil || actor.User == nil || !actor.User.IsAdmin {
@@ -43,27 +62,74 @@ func (p *Plugin) showStatisticsHandler(e *core.RequestEvent) error {
 		return p.writeLifetime(e)
 	}
 
-	if _, ok := p.entities[model]; !ok {
+	entity, ok := p.entities[model]
+	if !ok {
 		// A model is required for everything but the lifetime totals.
 		// Answering with an empty series instead would draw an empty chart
 		// and read as "no activity".
 		return api.WriteError(e, http.StatusUnprocessableEntity, api.CodeValidationFailed, "A model must be specified.")
 	}
 
-	return p.writeTimed(e, model)
+	if period == "custom" {
+		start, end, ok := customWindow(query)
+		if !ok {
+			return api.WriteError(e, http.StatusUnprocessableEntity, api.CodeValidationFailed, "A custom date range must be specified.")
+		}
+
+		// Upstream widens a custom range BACKWARDS by its own length
+		// (`$startDate = (new Carbon($startDate))->subtract($diff)`), so
+		// the chart can draw the previous period as a second series.
+		return writeTimed(e, entity, start.Add(-end.Sub(start)), end)
+	}
+
+	now := time.Now().UTC()
+	return writeTimed(e, entity, now.AddDate(-timedWindowYears, 0, 0), now)
+}
+
+// customWindow parses upstream's `dateRange[start]` / `dateRange[end]`.
+//
+// The values are UNIX SECONDS: the widget's date-range modal sends
+// `VALUE.getTime() / 1000`. Go's query parser leaves the brackets in the
+// key, so the lookup spells them out.
+func customWindow(query url.Values) (start, end time.Time, ok bool) {
+	startRaw := query.Get("dateRange[start]")
+	endRaw := query.Get("dateRange[end]")
+
+	startSeconds, err := strconv.ParseInt(startRaw, 10, 64)
+	if err != nil || startSeconds <= 0 {
+		return time.Time{}, time.Time{}, false
+	}
+
+	endSeconds, err := strconv.ParseInt(endRaw, 10, 64)
+	if err != nil || endSeconds <= 0 {
+		return time.Time{}, time.Time{}, false
+	}
+
+	start = time.Unix(startSeconds, 0).UTC()
+	end = time.Unix(endSeconds, 0).UTC()
+
+	if !end.After(start) {
+		return time.Time{}, time.Time{}, false
+	}
+
+	return start, end, true
 }
 
 // writeLifetime answers the totals for every entity.
 func (p *Plugin) writeLifetime(e *core.RequestEvent) error {
 	totals := make(map[string]int, len(p.entities))
 
-	for entity, physical := range p.entities {
-		collection, err := e.App.FindCollectionByNameOrId(physical)
+	for entity, spec := range p.entities {
+		collection, err := e.App.FindCollectionByNameOrId(spec.collection)
 		if err != nil {
 			return api.WriteError(e, http.StatusInternalServerError, api.CodeInternal, "The statistics could not be read.")
 		}
 
-		total, err := e.App.CountRecords(collection)
+		// The entity's predicate applies to the TOTAL too: upstream counts
+		// `$this->query($model)->count()`, and that query carries the
+		// `type = 'comment'` predicate. Counting every row here made the
+		// dashboard's total for posts include rename events.
+		total, err := e.App.CountRecords(collection, spec.exprs()...)
 		if err != nil {
 			return api.WriteError(e, http.StatusInternalServerError, api.CodeInternal, "The statistics could not be read.")
 		}
@@ -75,50 +141,95 @@ func (p *Plugin) writeLifetime(e *core.RequestEvent) error {
 	return e.JSON(http.StatusOK, totals)
 }
 
-// writeTimed answers a per-day series for one entity.
+// writeTimed answers a per-bucket series for one entity, keyed by UNIX
+// SECONDS.
 //
 // The grouping happens in Go rather than in SQL: PocketBase's own query API
 // cannot express a `GROUP BY` over a formatted date, and a raw query would
-// pin the plugin to one driver. The cost is bounded by the window (thirty
-// days), which is the same bound upstream puts on its chart.
+// pin the plugin to one driver. Upstream groups in SQL and is therefore
+// cheap over a large table; this reads the window's rows and buckets them,
+// which is the trade this port already made and is bounded by the window.
 //
-// A day with no records is ABSENT rather than zero, as upstream's is: the
-// chart draws a line through the points it is given, and filling every gap
-// would turn a quiet week into a flat line at zero.
-func (p *Plugin) writeTimed(e *core.RequestEvent, model string) error {
-	collection, err := e.App.FindCollectionByNameOrId(p.entities[model])
+// Two bucket sizes, as upstream has (`getTimedCounts`): everything older
+// than the hourly tail is bucketed by the DAY, and the tail by the HOUR.
+// Upstream runs it as two queries with an overlapping boundary and adds the
+// overlap together; one pass with a single predicate is the same answer
+// without the boundary arithmetic.
+//
+// A bucket with no records is ABSENT rather than zero, as upstream's is:
+// the chart draws a line through the points it is given, and filling every
+// gap would turn a quiet week into a flat line at zero.
+func writeTimed(e *core.RequestEvent, entity statEntity, from, to time.Time) error {
+	collection, err := e.App.FindCollectionByNameOrId(entity.collection)
 	if err != nil {
 		return api.WriteError(e, http.StatusInternalServerError, api.CodeInternal, "The statistics could not be read.")
 	}
 
-	from := time.Now().UTC().AddDate(0, 0, -timedWindowDays)
+	field := createdField(collection)
 
-	records, err := e.App.FindRecordsByFilter(
-		collection,
-		"created_at >= {:from}",
-		"created_at",
-		0,
-		0,
-		map[string]any{"from": from},
-	)
+	filter := field + " >= {:from}"
+	params := map[string]any{"from": from}
+	if entity.filterColumn != "" {
+		filter += " && " + entity.filterColumn + " = {:entityValue}"
+		params["entityValue"] = entity.filterValue
+	}
+
+	records, err := e.App.FindRecordsByFilter(collection, filter, field, 0, 0, params)
 	if err != nil {
 		return api.WriteError(e, http.StatusInternalServerError, api.CodeInternal, "The statistics could not be read.")
 	}
 
-	counts := make(map[string]int, len(records))
+	hourlyFrom := time.Now().UTC().Add(-hourlyWindow)
+
+	counts := make(map[int64]int, len(records))
 
 	for _, record := range records {
-		created := record.GetDateTime("created_at")
+		created := record.GetDateTime(field)
 		if created.IsZero() {
 			continue
 		}
 
-		// The key is the day, at midnight UTC, in the RFC 3339 form the
-		// frontend's `new Date()` parses.
-		day := created.Time().UTC().Truncate(24 * time.Hour)
-		counts[day.Format(time.RFC3339)]++
+		at := created.Time().UTC()
+		if at.Before(from) || at.After(to) {
+			continue
+		}
+
+		counts[bucketFor(at, hourlyFrom).Unix()]++
 	}
 
 	e.Response.Header().Set("Content-Type", api.ContentType)
 	return e.JSON(http.StatusOK, counts)
+}
+
+// bucketFor returns the bucket a row created at `at` is counted in.
+//
+// The last 25 hours are bucketed by the HOUR and everything older by the
+// DAY (`getTimedCounts`'s `$hourlyFrom`). It is a separate function because
+// `created_at` on the forum's collections is a PocketBase AUTODATE field:
+// the framework overwrites any value a test sets, so a row cannot be made
+// old and the rule has to be exercised directly.
+func bucketFor(at, hourlyFrom time.Time) time.Time {
+	if at.After(hourlyFrom) {
+		return at.Truncate(time.Hour)
+	}
+	return at.Truncate(24 * time.Hour)
+}
+
+// createdField resolves the column that carries a record's creation time.
+//
+// It is NOT always `created_at`. The forum's own collections declare that
+// column explicitly (repository/mutations.go stamps it on every write), but
+// the entity list also names the SHARED `users` collection, which is
+// PocketBase's own auth collection — its system timestamp fields are
+// `created` and `updated`, and there is no `created_at` at all.
+//
+// A hardcoded `created_at` therefore made `?model=users` a 500: PocketBase
+// rejects a filter that names a column the collection does not have. The
+// lifetime totals hid it, because they only count rows and never filter, and
+// the test only exercised `model=discussions`.
+func createdField(collection *core.Collection) string {
+	if collection.Fields.GetByName("created_at") != nil {
+		return "created_at"
+	}
+	return "created"
 }

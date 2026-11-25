@@ -225,18 +225,29 @@ func TestForum_ExtensionManifestIsServed(t *testing.T) {
 		Extensions []map[string]any `json:"extensions"`
 	}
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &manifest))
-	// Every first-party plugin that ships a frontend bundle is listed. The
-	// language pack is not: it declares a locale, not an asset bundle.
-	require.Len(t, manifest.Extensions, 10, "every bundled plugin must be listed")
-
 	ids := []string{}
 	for _, extension := range manifest.Extensions {
 		ids = append(ids, extension["id"].(string))
 	}
 
-	for _, want := range []string{"riff/tags", "riff/likes", "riff/uploads", "flarum/lock", "flarum/sticky", "flarum/suspend", "flarum/markdown", "flarum/mentions", "fof/gamification", "fof/polls"} {
-		require.Contains(t, ids, want)
+	// Every first-party plugin that ships a frontend bundle is listed. The
+	// language pack is not: it declares a locale, not an asset bundle.
+	//
+	// The COUNT is derived from the list rather than written out, so adding a
+	// bundled plugin is one edit instead of two — a hand-written total is a
+	// second source of truth, and it fails on the plugin that was added.
+	want := []string{
+		"riff/tags", "riff/likes", "riff/uploads",
+		"flarum/lock", "flarum/sticky", "flarum/suspend", "flarum/markdown", "flarum/mentions",
+		"flarum/statistics",
+		"fof/gamification", "fof/polls",
 	}
+
+	for _, id := range want {
+		require.Contains(t, ids, id)
+	}
+
+	require.Len(t, manifest.Extensions, len(want), "every bundled plugin must be listed")
 }
 
 // TestForum_PluginCollectionsAreCreated pins that the plugins' own

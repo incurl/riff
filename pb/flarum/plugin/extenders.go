@@ -102,6 +102,10 @@ type AttributeContributor struct {
 	Resource string
 	// Name is the attribute name.
 	Name string
+	// Visible decides whether the attribute is present at all; nil means
+	// always. It is upstream's `Field::visible()`, and an invisible field
+	// is ABSENT rather than null.
+	Visible func(req *AttributeRequest) bool
 	// Value computes the attribute for a record.
 	Value func(ctx context.Context, req *AttributeRequest) (any, error)
 }
@@ -116,6 +120,13 @@ type AttributeRequest struct {
 	RecordID string
 	// Type is the JSON:API resource type.
 	Type string
+	// IsAdmin reports whether the actor is an administrator.
+	//
+	// Upstream gates a field's visibility on the actor
+	// (`->visible(fn (object $model, Context $context) =>
+	// $context->getActor()->isAdmin())`), which is how the Statistics
+	// extension publishes `statisticsEntities` to administrators only.
+	IsAdmin bool
 	// Can reports whether the actor may perform an action on a subject.
 	//
 	// It is the forum's permission service, so a plugin's `can*` attribute
@@ -150,6 +161,13 @@ type RelationshipRequest struct {
 	RecordID string
 	// Type is the JSON:API resource type.
 	Type string
+	// IsAdmin reports whether the actor is an administrator.
+	//
+	// Upstream gates a field's visibility on the actor
+	// (`->visible(fn (object $model, Context $context) =>
+	// $context->getActor()->isAdmin())`), which is how the Statistics
+	// extension publishes `statisticsEntities` to administrators only.
+	IsAdmin bool
 	// Can reports whether the actor may perform an action on a subject.
 	//
 	// It is the forum's permission service, so a plugin's relationship

@@ -94,6 +94,16 @@ type ContentRenderer interface {
 type AttributeSource struct {
 	// Name is the attribute name.
 	Name string
+	// Visible decides whether the attribute is present at all.
+	//
+	// It is upstream's `Field::visible()`, and nil means "always". An
+	// INVISIBLE field is ABSENT from the document rather than null:
+	// upstream's serializer does not emit it, and a null is a different
+	// statement ("this field exists and has no value"). The distinction
+	// matters for a field a frontend branches on —
+	// `attribute<T[] | undefined>() ?? fallback` falls through for both,
+	// but `'statisticsEntities' in attributes` does not.
+	Visible func(req AttributeRequest) bool
 	// Value computes the attribute for a record.
 	Value func(ctx context.Context, req AttributeRequest) (any, error)
 }
@@ -106,6 +116,15 @@ type AttributeRequest struct {
 	RecordID string
 	// Type is the JSON:API resource type.
 	Type string
+	// IsAdmin reports whether the actor is an administrator.
+	//
+	// Upstream gates a field's VISIBILITY on the actor
+	// (`Field::visible(fn (object $model, Context $context) =>
+	// $context->getActor()->isAdmin())`), which is how the Statistics
+	// extension publishes `statisticsEntities` to administrators only. A
+	// contributor that does not ask cannot port such a field, so the flag
+	// travels with the request.
+	IsAdmin bool
 }
 
 // RelationshipSource computes a plugin-contributed relationship.
@@ -221,6 +240,20 @@ func (s *Server) IsAdministrator(userID string) bool {
 // contribution.
 func (s *Server) AddAttribute(resourceType, name string, value func(ctx context.Context, req AttributeRequest) (any, error)) {
 	s.attributes[resourceType] = append(s.attributes[resourceType], AttributeSource{Name: name, Value: value})
+}
+
+// AddVisibleAttribute registers a plugin-contributed attribute that is
+// present only for the callers `visible` admits.
+//
+// It is upstream's `Extend\ApiResource(...)->fields(fn () => [
+// Schema\Arr::make('statisticsEntities')->visible(...)])`: a field whose
+// visibility is a property of the ACTOR, not of the record.
+func (s *Server) AddVisibleAttribute(
+	resourceType, name string,
+	visible func(req AttributeRequest) bool,
+	value func(ctx context.Context, req AttributeRequest) (any, error),
+) {
+	s.attributes[resourceType] = append(s.attributes[resourceType], AttributeSource{Name: name, Visible: visible, Value: value})
 }
 
 // AddRelationship registers a plugin-contributed relationship.

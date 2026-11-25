@@ -34,7 +34,11 @@ const babelConfig = {
 module.exports = {
   testEnvironment: 'jsdom',
   rootDir: __dirname,
-  roots: ['<rootDir>/src'],
+  // A plugin may own a PURE module whose arithmetic is worth a unit test
+  // without a browser — the Statistics extension's period bucketing is the
+  // first. `<rootDir>` is packages/core, so `../plugins/<name>/js` is the
+  // sibling package's source tree.
+  roots: ['<rootDir>/src', '<rootDir>/../plugins/statistics/js'],
   setupFilesAfterEnv: ['<rootDir>/jest.setup.local.cjs'],
   transform: {
     '^.+\\.[tj]sx?$': ['babel-jest', babelConfig],

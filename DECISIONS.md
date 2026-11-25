@@ -5,6 +5,120 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## STATISTICS: THE PRESENTATION HALF, AND WHY THE KEYS ARE UNIX SECONDS (2026-11-25)
+
+The previous entry recorded that `GET /api/statistics` was reachable while
+the FEATURE was not. This one adds the presentation half — upstream's
+admin page and dashboard widget — and with it a correction to the wire
+contract that had to come first.
+
+**THE TIMED SERIES IS KEYED BY UNIX SECONDS, NOT BY TIMESTAMPS.** The
+port returned RFC 3339 date strings and a chart would have drawn ZERO
+every time, with a 200 on the wire and nothing in the console. Upstream's
+widget sums the payload over a window it computes in seconds:
+
+	StatisticsWidget::getPeriodCount
+	  const time = parseInt(t);
+	  if (time >= period.start && time < period.end) count += timed[time];
+
+`parseInt('2026-11-25T00:00:00Z')` is `NaN`; every comparison against it is
+false; the line is flat. This is the same class of failure as the
+`externalLink` and `statisticsEntities` bugs — a field the reader
+interprets in one type while the writer emits another — and the reason the
+new tests assert the TEXT of the keys (`^[0-9]+$`) and not just the shape.
+
+**THE WINDOW IS TWO YEARS PLUS 25 HOURLY POINTS, IN ONE PAYLOAD.**
+Upstream returns `-2 years` of days and the last 25 hours by the hour
+(`getTimedCounts`), because the widest selector — last 12 months — and the
+previous-period comparison line are both summed CLIENT-SIDE from that one
+response. A server that returned only "the period you asked for" would
+force a request per selector, and a server that returned 30 days (which
+this one did) makes eleven months of a year chart read as "no activity",
+which is a different and wrong statement.
+
+**THE ENTITY PREDICATE HAS TO REACH THE TOTALS TOO.** Upstream counts
+`$this->query($model)->count()`, and that query carries `type =
+'comment'` for posts. The port's lifetime totals called `CountRecords`
+with no filter, so a `discussionRenamed` post — a real row the collection
+stores so the stream can render rename events — was counted as a comment.
+One predicate, two spellings (`statEntity.exprs()` for the dbx COUNT path,
+a bound parameter for `FindRecordsByFilter`), so the two halves cannot
+disagree.
+
+**A FIELD'S VISIBILITY IS A PROPERTY OF THE ACTOR, NOT THE RECORD.**
+`statisticsEntities` is published on the forum document to administrators
+only, and an invisible field is ABSENT rather than null — upstream's
+serializer does not emit it, and `'key' in attributes` is a different
+question from `attributes.key !== undefined`. That needed two small core
+extensions: `AttributeContributor.Visible` (upstream's `Field::visible()`)
+and `IsAdmin` on the attribute request. The forum document now runs
+through `applyPluginAttributes` like every record does, which is also what
+puts the list in the BOOT payload — the copy the SPA reads.
+
+**THE CHART IS INLINE SVG, NOT `frappe-charts`.** Upstream imports
+`frappe-charts`. This port does not vendor it, and adding a chart library
+for one admin page is a dependency decision rather than an implementation
+detail. The drawing is a polyline in a `viewBox`; the SHAPE is upstream's
+(two series, this period against the previous, the same windows). The one
+upstream control that is consequently NOT ported is the chart's PNG
+export — `frappe-charts` is what implements `chart.export()`, and a button
+that cannot save a file is the dead-affordance problem this repo keeps
+removing.
+
+**`created_at` IS AN AUTODATE FIELD, SO A TEST CANNOT BACKDATE A ROW.**
+The bucketing rule (hours for the last 25, days before) is therefore a
+separate function with its own unit test rather than something exercised
+through a saved record — the framework overwrites any value a test sets,
+and a test that appeared to backdate would be asserting a fiction.
+
+## THE SHARED `users` COLLECTION HAS `created`, NOT `created_at` (2026-11-25)
+
+
+An audit of the forum's Statistics plugin asked the simple question "is
+`GET /api/statistics` accessible", and the answer was two different
+answers depending on which half you meant.
+
+**THE ENDPOINT IS REACHABLE; THE FEATURE IS NOT USABLE FROM THE
+BROWSER.** `GET {basePath}/api/statistics` answers 200 with the lifetime
+totals and 403 for anyone who is not an administrator, which is exactly
+upstream's `assertAdmin()` contract. But upstream's extension is an
+admin-panel page with charts, and this port deliberately ships no asset
+bundle for it (`plugins/statistics/statistics.go`'s package doc records
+why: a bundle that drew nothing is the empty-tag problem the module's
+startup check exists to surface). The consequences a reader will trip
+over: there is no page to open, `/api/extensions` does not list
+`flarum/statistics` at all (it lists plugins with asset bundles), and
+the forum document does not publish `statisticsEntities` the way
+upstream's `ForumResource` does. So the data half exists and the
+presentation half does not.
+
+**`?model=users` ANSWERED 500 AND `?model=discussions` DID NOT.** The
+handler filtered and grouped on a hardcoded `created_at`. That column is
+the forum's own convention — `repository/mutations.go` stamps it on every
+discussion and post — but the entity list also names the SHARED `users`
+collection, and that is PocketBase's own auth collection, whose system
+timestamp fields are `created` and `updated`. PocketBase rejects a filter
+naming a column the collection does not have, so the users series was an
+unconditional `500 internal_error`. Two things hid it:
+
+- the LIFETIME totals never filter — they call `CountRecords` — so
+  `?period=lifetime` reported `users: N` correctly the whole time;
+- the test exercised `model=discussions` only.
+
+Both are the kind of "the test covers the happy path of the thing next to
+the thing" gap this repo keeps finding. `createdField` now resolves the
+column per collection (`created_at` when it exists, `created` otherwise),
+and the two new tests drive EVERY entity in `p.entities` rather than one
+of them — the second one asserts the COUNT, because a fix that read the
+wrong column would answer 200 with an empty series, and an empty series
+renders as "no activity", which is a different and wrong statement. Both
+were mutation-checked by hardcoding `created_at` back: they go red with
+the exact production symptom.
+
+Generalised: any plugin that reports on collections of DIFFERENT
+provenance (forum-owned vs the shared users collection) cannot assume one
+timestamp column name.
+
 ## THE MEMOS SPA MOVES TO `/memos/`, AND `/community/` BECOMES A 308 (2026-11-25)
 
 The Memos SPA now answers at `https://<host>/memos/` instead of
