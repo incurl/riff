@@ -234,39 +234,3 @@ func TestUserdata_TheFileIsWrittenBesideTheTree(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(payload), "ja")
 }
-
-// TestBranding_TheReadAnswersTheShellsSiteName pins that the branding
-// store can load.
-//
-// Upstream's SPA reads `brandingConstraints` NESTED, so a flat response
-// leaves every limit `undefined`. The site name matches what the shell
-// substitutes for `{{__SITE_NAME__}}`, so the title and the name the SPA
-// renders cannot drift.
-func TestBranding_TheReadAnswersTheShellsSiteName(t *testing.T) {
-	_, _, handler := newTestAPI(t)
-
-	recorder := doJSON(t, handler, http.MethodGet, "/wiki/api/branding", nil, nil)
-	require.Equal(t, http.StatusOK, recorder.Code, "body: %s", recorder.Body.String())
-
-	branding := decodeJSON[brandingResponse](t, recorder)
-	assert.Equal(t, "Wiki", branding.SiteName)
-	assert.Empty(t, branding.LogoFile)
-	assert.NotNil(t, branding.BrandingConstraints.LogoExts,
-		"the constraint block must be an object, not null: the SPA reads brandingConstraints.logoExts")
-}
-
-// TestBranding_AWriteIsRefused pins that a branding save does not pretend
-// to succeed.
-//
-// The port has no branding store, and a 200 to an upload it did not keep
-// would tell the admin application the change landed.
-func TestBranding_AWriteIsRefused(t *testing.T) {
-	_, app, handler := newTestAPI(t)
-	user := testUser(t, app, "brander")
-
-	recorder := doJSON(t, handler, http.MethodPut, "/wiki/api/branding", map[string]any{
-		"siteName": "Other",
-	}, bearer(t, user))
-
-	assert.Equal(t, http.StatusNotImplemented, recorder.Code)
-}

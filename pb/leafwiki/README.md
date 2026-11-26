@@ -12,7 +12,8 @@ disk are the source of truth**.
 | `links.db` | in-memory backlink index on `app.Store()` |
 | `users.db`, `sessions.db`, `apikeys.db` | PocketBase `users` / `_superusers` + auth tokens |
 | per-user settings, favourites (`users.db`) | `userdata.json` beside the tree (see below) |
-| branding / SMTP / git backup | not ported: `GET /api/branding` reports the port's identity, the writes answer 501, and `/api/config` reports the rest disabled |
+| SMTP / git backup | not ported: `/api/config` reports them disabled |
+| branding (`branding.json`, `branding/`) | ported: the site name and the two images, at upstream's paths, written through `PUT`/`POST`/`DELETE /api/branding*` by an administrator |
 | revisions, share links, snapshots | not ported (yet) |
 | `<storage>/root/*.md`, `.order.json`, `assets/<pageId>/` | unchanged |
 
@@ -140,10 +141,12 @@ DELETE /wiki/api/pages/{id}/assets/{filename}      delete an attachment
 GET    /wiki/api/user-settings                     the caller's preferences
 PUT    /wiki/api/user-settings                     save them
 GET    /wiki/api/favorites                         the caller's favourite pages
-GET    /wiki/api/branding                          site name + upload limits
-PUT    /wiki/api/branding                          refused (501)
-POST   /wiki/api/branding/logo|favicon             refused (501)
-DELETE /wiki/api/branding/logo|favicon             refused (501)
+GET    /wiki/api/branding                          site name, images + upload limits (public)
+PUT    /wiki/api/branding                          rename the wiki (admin)
+POST   /wiki/api/branding/logo|favicon             upload an image (admin)
+DELETE /wiki/api/branding/logo|favicon             remove an image (admin)
+GET    /wiki/branding/{filename}                   the uploaded image bytes (public)
+GET    /wiki/favicon.ico                           the uploaded favicon, or 404 (public)
 GET    /wiki/assets/{pageId}/{filename}            attachment bytes
 GET    /wiki/api/search?q=…&tags=…                 full-text + tag search
 GET    /wiki/api/search/status                     index status
@@ -222,8 +225,8 @@ div).
 ## Not ported
 
 Revisions, favorites, share links, snapshots/restore, git backup, SMTP (password
-reset/invites), TOTP, API-key management, branding uploads, page imports
-and the resync job have no equivalent yet. `/api/config` reports them as disabled
+reset/invites), TOTP, API-key management, page imports and the resync job
+have no equivalent yet. `/api/config` reports them as disabled
 rather than letting the SPA discover a 404. A Markdown import is still possible by
 copying files into `root/`: they are adopted on the next reload.
 

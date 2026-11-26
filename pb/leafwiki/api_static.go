@@ -43,12 +43,14 @@ func (s *Server) staticAssetHandler(e *core.RequestEvent) error {
 	return e.FileFS(s.ui.dist, "static/"+cleaned)
 }
 
-// faviconHandler serves the SPA's favicon.
+// faviconHandler serves the SPA's default favicon.
 //
-// LeafWiki serves a branding-configured favicon when the admin uploaded one
-// and falls back to the default leaf SVG otherwise. This port has no branding
-// upload, so the built-in icon is served; the file comes from the SPA build
-// (Vite copies public/ into dist/).
+// An administrator's uploaded favicon is served from `/branding/<file>` —
+// that is the URL the shell advertises and the SPA rewrites its
+// `<link rel="icon">` to — so this route is what answers when there is no
+// upload. The file comes from the SPA build (Vite copies `public/` into
+// `dist/`), which is why a checkout without a build still gets a 404 rather
+// than a broken image.
 func (s *Server) faviconHandler(e *core.RequestEvent) error {
 	if s.ui.dist != nil {
 		if raw, err := fs.ReadFile(s.ui.dist, "favicon.svg"); err == nil && len(raw) > 0 {

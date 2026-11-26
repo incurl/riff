@@ -51,6 +51,9 @@ type Server struct {
 	// favourites, which belong to an ACCOUNT and have no page to live
 	// in.
 	userdata *userdata
+	// branding is the wiki's own identity: the site name and the two
+	// images, at upstream's paths (`branding.json`, `branding/`).
+	branding *brandingStore
 }
 
 // Register mounts the wiki on the given app.
@@ -110,6 +113,7 @@ func newServer(app core.App, opts Options) (*Server, error) {
 		assets:   newAssets(tree.store, opts.MaxUploadBytes),
 		ui:       ui,
 		userdata: newUserdata(tree.store.storageDir),
+		branding: newBrandingStore(tree.store.storageDir),
 	}
 	return server, nil
 }

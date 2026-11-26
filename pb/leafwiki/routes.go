@@ -47,15 +47,26 @@ func (s *Server) mount(r *router.Router[*core.RequestEvent]) {
 	r.GET(api+"/favorites", s.favoritesHandler)
 
 	// --- branding -----------------------------------------------------
-	// The read is served (the SPA applies the favicon and the site name
-	// from it); the writes are refused with a 501 rather than a 200 that
-	// changes nothing. See api_branding.go.
+	// The operators' controls for the wiki's own identity: the site name and
+	// the two images. The READ is public (the SPA loads it on every mount and
+	// a guest sees the name), the WRITES are administrator-only, and the
+	// image route is the one the SPA builds (`<base>/branding/<file>`).
+	//
+	// An unrouted path here is not a 404: the SPA catch-all answers it with
+	// the shell and a 200, the SPA's `fetchWithAuth` finds no JSON in the
+	// body and resolves to `null`, and the caller reads a field off it —
+	// which is the "Cannot read properties of null (reading 'faviconFile')"
+	// an operator saw when saving the site name. See api_branding.go.
 	r.GET(api+"/branding", s.brandingHandler)
-	r.PUT(api+"/branding", s.brandingWriteHandler)
-	r.POST(api+"/branding/logo", s.brandingWriteHandler)
-	r.DELETE(api+"/branding/logo", s.brandingWriteHandler)
-	r.POST(api+"/branding/favicon", s.brandingWriteHandler)
-	r.DELETE(api+"/branding/favicon", s.brandingWriteHandler)
+	r.PUT(api+"/branding", s.brandingUpdateHandler)
+	r.POST(api+"/branding/logo", s.brandingUploadHandler(brandingLogo))
+	r.DELETE(api+"/branding/logo", s.brandingDeleteHandler(brandingLogo))
+	r.POST(api+"/branding/favicon", s.brandingUploadHandler(brandingFavicon))
+	r.DELETE(api+"/branding/favicon", s.brandingDeleteHandler(brandingFavicon))
+	r.GET(p+"/branding/{filename}", s.brandingAssetHandler)
+	// Browsers ask for /favicon.ico on their own, before the SPA rewrites the
+	// <link rel="icon">. A 404 keeps the shell's /favicon.svg.
+	r.GET(p+"/favicon.ico", s.faviconICOHandler)
 
 	// --- pages --------------------------------------------------------
 	// The page tree is dispatched by hand rather than registered as one

@@ -1,6 +1,7 @@
 package leafwiki
 
 import (
+	"html"
 	"io/fs"
 	"net/http"
 	"path"
@@ -42,8 +43,12 @@ func (s *Server) spaHandler(e *core.RequestEvent) error {
 //
 //   - {{__BASE_PATH__}} becomes the mount prefix, which the SPA reads from
 //     the base-path meta tag and uses for every API call and route;
-//   - {{__FAVICON_HREF__}} becomes the prefix + "/favicon.svg";
-//   - {{__PAGE_TITLE__}} and {{__SITE_NAME__}} become the wiki's name;
+//   - {{__FAVICON_HREF__}} becomes the uploaded favicon's URL, or the
+//     prefix + "/favicon.svg" when an administrator has not uploaded one;
+//   - {{__PAGE_TITLE__}} and {{__SITE_NAME__}} become the wiki's name, from
+//     the branding store rather than a literal — the shell is what the
+//     browser tab and the first frame show, so a name that only reached the
+//     SPA would leave the tab reading the old one until React mounted;
 //   - {{__BODY__}} becomes empty (upstream server-renders the shell's
 //     contents there; this port has no server-side rendering, and React
 //     mounts into the empty div).
@@ -61,10 +66,22 @@ func (s *Server) spaHandler(e *core.RequestEvent) error {
 func (s *Server) renderIndex() string {
 	rendered := string(s.ui.index())
 
+	// The site name and the favicon are the STORED ones, the same values
+	// `GET /api/branding` serves: the shell is rendered before the app boots,
+	// so a name the shell did not know would be the name the browser tab
+	// keeps showing until the SPA's first load, and a favicon the shell did
+	// not know is one the browser never picks up at all.
+	siteName := html.EscapeString(s.branding.siteName())
+
+	faviconHref := s.opts.Prefix + "/favicon.svg"
+	if file := s.branding.faviconFile(); file != "" {
+		faviconHref = s.opts.Prefix + "/branding/" + file
+	}
+
 	rendered = strings.ReplaceAll(rendered, tokenBasePath, s.opts.Prefix)
-	rendered = strings.ReplaceAll(rendered, tokenTitle, "Wiki")
-	rendered = strings.ReplaceAll(rendered, tokenSiteName, "Wiki")
-	rendered = strings.ReplaceAll(rendered, tokenFavicon, s.opts.Prefix+"/favicon.svg")
+	rendered = strings.ReplaceAll(rendered, tokenTitle, siteName)
+	rendered = strings.ReplaceAll(rendered, tokenSiteName, siteName)
+	rendered = strings.ReplaceAll(rendered, tokenFavicon, html.EscapeString(faviconHref))
 	rendered = strings.ReplaceAll(rendered, tokenBody, "")
 
 	// The Vite base-path rewrite. The leading quote is part of the match so

@@ -71,7 +71,10 @@ func TestRenderIndex_RewritesTheViteBasePath(t *testing.T) {
 	// The tokens the SPA depends on must all be substituted.
 	assert.Contains(t, rendered, `content="/wiki"`, "the SPA reads the base path from this meta tag")
 	assert.Contains(t, rendered, `href="/wiki/favicon.svg"`, "the favicon must live under the mount prefix")
-	assert.Contains(t, rendered, "<title>Wiki</title>")
+	// The title is the branding store's site name. A `Server` assembled without
+	// one (this test) answers upstream's default, which is what an
+	// unconfigured wiki shows.
+	assert.Contains(t, rendered, "<title>"+defaultBrandingSiteName+"</title>")
 	assert.Contains(t, rendered, `<div id="root"></div>`, "the body placeholder must be emptied")
 	assert.NotContains(t, rendered, "{{__", "no placeholder may survive the render")
 }

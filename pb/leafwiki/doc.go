@@ -62,10 +62,20 @@
 //	POST   /wiki/api/auth/refresh-token                  re-mint the session cookie
 //	GET    /wiki/api/auth/me                             current user (or null)
 //	POST   /wiki/api/auth/logout                         clear the session cookie
+//	GET    /wiki/api/branding                            site name, images + limits
+//	PUT    /wiki/api/branding                            rename the wiki (admin)
+//	POST   /wiki/api/branding/{logo,favicon}             upload an image (admin)
+//	DELETE /wiki/api/branding/{logo,favicon}             remove an image (admin)
+//	GET    /wiki/branding/{filename}                     the uploaded image bytes
+//	GET    /wiki/favicon.ico                             the uploaded favicon, or 404
 //
 // Every mutating route requires an authenticated caller unless the operator
 // opted into anonymous editing with [Options.PublicWrite] (env
 // RIFF_WIKI_PUBLIC_WRITE=1). Reads are public: the wiki is a wiki.
+//
+// The branding routes are the exception to that: they change the SITE's
+// identity rather than a page, so they ask for the `admin` role (a PocketBase
+// superuser) whatever [Options.PublicWrite] says.
 //
 // The package imports no other riff package at runtime; it can be lifted into
 // another PocketBase project together with its migration.
