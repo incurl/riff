@@ -5,6 +5,105 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## THE POLLS EXTENSION, ALIGNED WITH UPSTREAM (2026-11-26)
+
+The polls plugin was ported, wired, and **quietly broken in four ways at once**:
+an anonymous visitor crashed the process, a multi-vote poll could not store its
+second vote, the poll never actually rendered, and a guest was handed every
+voter's vote. The audit lived in `docs/design/flarum/polls-alignment-handoff.md`;
+this records what the fixes are and the traps they hold.
+
+**A NIL `User` IS NOT A MISSING SERVER.** `actorIDOf` read `actor.User.ID` after
+checking only that the ACTOR resolved. `session.Actor.User` is nil for an
+anonymous caller, so every guest who fetched a poll dereferenced nil — and a nil
+dereference in a request handler takes the PROCESS down, not the request. One
+unauthenticated visitor killed the server. `session.Actor.ID()` already answers
+`""` for a guest, which is what `actorIDOf` wanted.
+
+**AN `included` WALK CANNOT REACH A PLUGIN'S RESOURCE, AND THAT IS THE QUIETEST
+FAILURE IN THIS CODEBASE.** The frontend resolves a relationship through the
+STORE, not through the identifier: `Model.hasMany` is
+`data.map((d) => store.getById(d.type, d.id))`, and the store is filled from
+`payload.included`. The walk switches on the resource type, so a
+plugin-contributed relation (`posts.polls`) produced the IDENTIFIER and no
+RESOURCE — `getById` returned `undefined`, the frontend's own
+`if (!poll) continue;` skipped it, and the poll was in the database with the UI
+showing nothing and NO ERROR ANYWHERE. The fix is a `ResourceSerializer`
+extension point (`plugin/extenders.go` declares it, `api/api.go` holds a narrow
+registry, `register.go` adapts) — the same sibling-package discipline the
+`AttributeContributor` → `AttributeSource` adapter follows, because `api` must
+not import `plugin`.
+
+**THE WALK DISPATCHES ON THE RELATED TYPE, NOT THE SOURCE TYPE.** The first cut
+of the serializer registry kept the walk's original `switch sourceType` and
+looked the plugin up by the SOURCE type, so a post's `polls` relation never
+found the `polls` serializer. An identifier carries its own type, and that is
+authoritative: the relation's `data` says what it points at.
+
+**A TO-MANY RELATION'S `data` IS AN ARRAY, AND READING ONE IDENTIFIER OUT OF IT
+NEVER MATCHES.** The walk's reader understood only a to-one shape, so
+`user.groups` — a to-many — was never followed: the branch that resolved the
+groups was dead code, and `GET /api/users/{id}` answered
+`included types = []`. The frontend reads the absence as "no groups", so an
+account renders without its badge and KEEPS that record until a reload.
+
+**A DEFAULT INCLUDE IS A PATH, NOT A NAME.** Upstream's post endpoint carries
+`['polls', 'polls.options', 'polls.myVotes', 'polls.myVotes.option']`, and the
+walk has to follow each dotted chain hop by hop. Wrapping `polls.options` as a
+single relation name matched nothing, so the poll arrived with no options and no
+ticked box — the reader could not tell their vote was missing.
+
+**A PLUGIN'S `Identifier` HAS NO JSON TAGS.** The adapter copied
+`plugin.Relationship.Data` straight onto the wire, and a Go struct without tags
+serialises its FIELD NAMES: the payload read `{"Type":"polls","ID":"abc"}`
+where JSON:API requires `{"type","id"}`. `store.getById(data.type, …)` was
+`undefined` — the relation read as absent, with a 200 on the wire. The adapter
+now converts to the API package's own `Identifier`.
+
+**THE UNIQUE INDEX WAS ON `(poll, user)`, NOT `(poll, option, user)`.** The
+comment above the line and the decision log below it both said the three-column
+index; the code had two. A voter could therefore hold only ONE vote row per
+poll, so `allow_multiple_votes` was impossible and the vote route 500'd on the
+second option. The creation step now writes the right index, and a SEPARATE,
+IDEMPOTENT migration step repairs existing instances — a plugin migration that
+has already been recorded does not run again, so changing the creation step
+alone would fix only a fresh install.
+
+**A GUEST'S `myVotes` IS EMPTY, NOT EVERY VOTE.** `voteIDs` read an empty user
+id as "no filter", and an anonymous caller has no id — so the guest's `myVotes`
+NAMED EVERY VOTER. That is a privacy leak, not a rendering bug. The two
+questions are now two functions (`allVoteIdentifiers` / `myVoteIdentifiers`),
+because one function cannot mean both.
+
+**THE VOTE PERMISSION IS SCOPED TO THE DISCUSSION.** Upstream's policy is
+`$actor->can('polls.vote', $discussion)`, and this port's key table already maps
+upstream's `discussion.polls.vote` onto `votePoll`. The check asked with the
+POLL id, so a grant made for a discussion could never match. The flag and the
+write path now ask the same question with the same scope. A TAG-scoped
+`discussion.polls.vote` is still not honoured: resolving which of a discussion's
+tags are restricted needs the tags extension's own data, and the port has no
+seam for one plugin to read another's collection. The grant that governs voting
+today is the global one.
+
+**AN EXTENSION'S OWN CATALOGUE IS LOADED BEFORE THE ACTIVE LOCALE'S.** The poll
+called `trans('fof-polls.forum.poll_ended')` and shipped no catalogue, so the UI
+rendered the raw key. `plugin.AssetBundle` gained a `Locale` field, compiled by
+the extension's own `build-locale.cjs` with the SHARED `locale-compile.cjs`.
+The ORDER is load-bearing: `addTranslations` merges into the current locale's
+map, so the extension's English must be added FIRST and the locale's own copy
+LAST, or the extension's English would win over the operator's language. The
+Chinese pack gained a `fof-polls.yml` and its `SOURCES` list gained the file,
+so a Chinese instance carries the extension's strings in Chinese.
+
+**A GUEST GETS A LIVE POLL CONTROL.** Upstream's `PollState.canSelect` returns
+true for a guest ON PURPOSE: the control is offered and the click opens the
+login modal. Refusing to render it instead leaves the reader with a poll they
+cannot interact with and no explanation.
+
+Pinned by `go test -count=1 -run 'TestPolls_' ./pb/flarum/`,
+`go test -count=1 -run 'TestForum_TheUserShowCarriesItsGroups|TestForum_TheNestedIncludeIsFollowed' ./pb/flarum/`,
+and the frontend's `pluginBundles` suite.
+
 ## THE ADMIN BUNDLE IS A DIFFERENT CORE BUNDLE (2026-11-25)
 
 The admin app went blank: one `TypeError` out of `bootExtensions` and nothing
