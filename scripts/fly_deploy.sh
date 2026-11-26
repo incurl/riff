@@ -19,10 +19,13 @@
 # "docker.io/library/riff:dev"`. The push step is therefore load-bearing
 # and not silently absorbed here.
 #
-# The smoke test path is caddy-routed (the
-# `[http_service.checks].path` setting in fly.toml also points at it);
-# `/api/health` at the root would 404 against caddy's `file_server` and
-# 503 the whole edge.
+# The smoke test path is the *sub-path* the SPA is mounted under
+# (`/memos/api/health` for the default Caddyfile.fly.community layout).
+# It is caddy-routed, exactly like the `[http_service.checks].path`
+# setting in fly.toml, so it proves the whole chain: Fly edge -> caddy ->
+# prefix strip -> riff -> PocketBase. A root `/api/health` is routed too
+# (see smoke test 4), but it exercises a different chain and would not
+# catch a broken /memos/* strip.
 
 set -eu
 
@@ -70,7 +73,7 @@ echo ">> fly deploy -a ${RIFF_FLY_APP} --image ${RIFF_FLY_REGISTRY} -y"
 fly deploy -a "${RIFF_FLY_APP}" --image "${RIFF_FLY_REGISTRY}" -y
 
 # --- Smoke tests -------------------------------------------------------------
-# Three checks, all must pass:
+# Four checks, all must pass:
 #   1. The caddy-routed riff health endpoint (SPA sub-path mount is alive).
 #   2. The static site is reachable at the document root. `Caddyfile.fly.community`
 #      (the default) serves the baked Jekyll _site/ at /, so a GET / must
@@ -84,6 +87,15 @@ fly deploy -a "${RIFF_FLY_APP}" --image "${RIFF_FLY_REGISTRY}" -y
 #      stripping the prefix would 404 every absolute /forum/assets/...
 #      bundle URL the SPA shell ships.
 #
+#   4. PocketBase's OWN endpoints answer at the host ROOT: `/_/` (the
+#      dashboard shell) and `/api/health` (the REST API). Both must be
+#      200 WITH NO REDIRECT. A 308 to /memos/_/ or /memos/api/health
+#      means the root proxy blocks (/`/_`, `/_/*`, `/api`, `/api/*`) are
+#      missing or the @spa matcher is not excluding them — the URLs
+#      PocketBase's own docs, its first-boot install link and every API
+#      client use. A client that does not follow a redirect on POST never
+#      reaches the API at all in that state.
+#
 # Checks 2 and 3 use -m timeout (not -fsS) because `-f` makes curl exit non-zero
 # on 3xx and we explicitly want to inspect the 308 to assert which
 # redirect target caddy chose. The case-statement below greps
@@ -92,13 +104,13 @@ fly deploy -a "${RIFF_FLY_APP}" --image "${RIFF_FLY_REGISTRY}" -y
 # slashes on the static site itself).
 
 echo
-echo ">> Smoke test 1/3: curl -fsS -m ${RIFF_FLY_SMOKE_TIMEOUT} https://${RIFF_FLY_SMOKE_HOST}${RIFF_FLY_SMOKE_PATH}"
+echo ">> Smoke test 1/4: curl -fsS -m ${RIFF_FLY_SMOKE_TIMEOUT} https://${RIFF_FLY_SMOKE_HOST}${RIFF_FLY_SMOKE_PATH}"
 curl -fsS -m "${RIFF_FLY_SMOKE_TIMEOUT}" "https://${RIFF_FLY_SMOKE_HOST}${RIFF_FLY_SMOKE_PATH}"
 echo
 echo "OK: ${RIFF_FLY_SMOKE_PATH} on ${RIFF_FLY_SMOKE_HOST} is healthy."
 
 echo
-echo ">> Smoke test 2/3: curl -sS -m ${RIFF_FLY_SMOKE_TIMEOUT} -o /dev/null -w 'http_code=%{http_code} redirect_url=%{redirect_url}\\n' https://${RIFF_FLY_SMOKE_HOST}/"
+echo ">> Smoke test 2/4: curl -sS -m ${RIFF_FLY_SMOKE_TIMEOUT} -o /dev/null -w 'http_code=%{http_code} redirect_url=%{redirect_url}\\n' https://${RIFF_FLY_SMOKE_HOST}/"
 _root_probe=$(curl -sS -m "${RIFF_FLY_SMOKE_TIMEOUT}" -o /dev/null -w 'http_code=%{http_code} redirect_url=%{redirect_url}' "https://${RIFF_FLY_SMOKE_HOST}/" || true)
 echo "${_root_probe}"
 _root_code=$(echo "${_root_probe}" | sed -n 's/^http_code=\([0-9][0-9][0-9]\).*/\1/p')
@@ -131,7 +143,7 @@ case "${_root_code}" in
 esac
 
 echo
-echo ">> Smoke test 3/3: curl -sS -m ${RIFF_FLY_SMOKE_TIMEOUT} -o /dev/null -w 'http_code=%{http_code} redirect_url=%{redirect_url}\n' https://${RIFF_FLY_SMOKE_HOST}${RIFF_FLY_FORUM_PATH}"
+echo ">> Smoke test 3/4: curl -sS -m ${RIFF_FLY_SMOKE_TIMEOUT} -o /dev/null -w 'http_code=%{http_code} redirect_url=%{redirect_url}\n' https://${RIFF_FLY_SMOKE_HOST}${RIFF_FLY_FORUM_PATH}"
 _forum_probe=$(curl -sS -m "${RIFF_FLY_SMOKE_TIMEOUT}" -o /dev/null -w 'http_code=%{http_code} redirect_url=%{redirect_url}' "https://${RIFF_FLY_SMOKE_HOST}${RIFF_FLY_FORUM_PATH}" || true)
 echo "${_forum_probe}"
 _forum_code=$(echo "${_forum_probe}" | sed -n 's/^http_code=\([0-9][0-9][0-9]\).*/\1/p')
@@ -163,3 +175,35 @@ case "${_forum_code}" in
     exit 1
     ;;
 esac
+
+echo
+echo ">> Smoke test 4/4: curl -sS -m ${RIFF_FLY_SMOKE_TIMEOUT} -o /dev/null -w 'http_code=%{http_code} redirect_url=%{redirect_url}\\n' https://${RIFF_FLY_SMOKE_HOST}/_/ and /api/health"
+
+# PocketBase's own surface, at the ROOT of the host. Both paths are
+# served VERBATIM by the caddy blocks for /_ , /_/* , /api and /api/* ,
+# so a redirect here means those blocks are missing or the @spa matcher
+# is not excluding them.
+for _pb_path in /_/ /api/health; do
+  _pb_probe=$(curl -sS -m "${RIFF_FLY_SMOKE_TIMEOUT}" -o /dev/null -w 'http_code=%{http_code} redirect_url=%{redirect_url}' "https://${RIFF_FLY_SMOKE_HOST}${_pb_path}" || true)
+  echo "${_pb_path} -> ${_pb_probe}"
+  _pb_code=$(echo "${_pb_probe}" | sed -n 's/^http_code=\([0-9][0-9][0-9]\).*/\1/p')
+  _pb_redirect=$(echo "${_pb_probe}" | sed -n 's/^.*redirect_url=\(.*\)$/\1/p')
+  case "${_pb_code}" in
+    200)
+      ;;
+    3[0-9][0-9])
+      echo "FAIL: ${_pb_path} on ${RIFF_FLY_SMOKE_HOST} is being redirected -> ${_pb_redirect}" >&2
+      echo "      PocketBase's own endpoints must answer at the ROOT of the host," >&2
+      echo "      verbatim. Add the /_ , /_/* , /api and /api/* handle blocks to" >&2
+      echo "      scripts/Caddyfile.fly.community AND those four paths to the @spa" >&2
+      echo "      matcher's 'not path' exclusion list, or the SPA redirect wins." >&2
+      exit 1
+      ;;
+    *)
+      echo "FAIL: ${_pb_path} on ${RIFF_FLY_SMOKE_HOST} returned ${_pb_code}" >&2
+      echo "      (expected 200: the PocketBase dashboard / REST API at the root)." >&2
+      exit 1
+      ;;
+  esac
+done
+echo "OK: /_/ and /api/health on ${RIFF_FLY_SMOKE_HOST} reach PocketBase at the root."

@@ -181,11 +181,18 @@ swap_size_mb = 512
   # CADDYFILE=Caddyfile.fly.community, the riff listener is reverse-proxied
   # under /memos/*; the prefix is stripped before forwarding, so
   # /memos/api/health hits riff's 127.0.0.1:8090/api/health and returns
-  # {"message":"API is healthy.","code":200,"data":{}}. The root /api/health
-  # would be served by caddy's file_server against the static site (404) and
-  # the check would mark every machine critical, which Fly's edge proxy
-  # then propagates as a 503 to every region. (For CADDYFILE=Caddyfile.fly
-  # the SPA is at the root and the check would be /api/health again.)
+  # {"message":"API is healthy.","code":200,"data":{}}.
+  #
+  # The root /api/health is proxied VERBATIM to riff as well (see the
+  # /_ , /_/* , /api and /api/* handle blocks in that Caddyfile), so it
+  # would work here too. The check deliberately stays on the PREFIXED path
+  # anyway: this is the one probe that proves the whole /memos/* chain —
+  # Fly edge, caddy, handle_path strip, riff — and the root proxy is a
+  # different chain that can break independently (its own smoke-test stage
+  # in scripts/fly_deploy.sh covers it).
+  #
+  # (For CADDYFILE=Caddyfile.fly the SPA is at the root, riff owns the
+  # hostname, and the check is /api/health.)
   [[http_service.checks]]
     interval = "15s"
     timeout = "5s"

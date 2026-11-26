@@ -54,6 +54,10 @@
 #                                                internally and the SPA
 #                                                builds absolute /forum/...
 #                                                URLs.
+#   https://<host>/_/...                    ->  the PocketBase dashboard,
+#                                                on riff, path VERBATIM
+#   https://<host>/api/...                  ->  the PocketBase REST API,
+#                                                on riff, path VERBATIM
 #   https://<host>/memos (no slash)         ->  308 redirect to /memos/
 #                                                so the SPA never boots
 #                                                against a parent-only URL
@@ -217,6 +221,40 @@
 		import proxy
 	}
 
+	# 2d. PocketBase's OWN endpoints, at the host root: /_/ is the
+	# dashboard (admin UI) and /api/* the REST API. They are the same
+	# handlers the /memos/* prefix strip reaches at /memos/_/ and
+	# /memos/api/*, served a second time unprefixed — and, importantly,
+	# NOT 308'd into the SPA by the @spa rule below.
+	#
+	# The path is NOT rewritten. PocketBase serves both from the root of
+	# its listener and knows nothing about /memos/, so stripping or
+	# prefixing here would turn /api/collections into /collections and
+	# PocketBase would answer with the SPA fallback — index.html with a
+	# 200, which an API client parses as data.
+	#
+	# Without this block the @spa matcher below answered /_/ with a 308
+	# to /memos/_/ and /api/health with a 308 to /memos/api/health. The
+	# redirect itself is survivable, but it is not what PocketBase's own
+	# docs, its first-boot install link (`.../_/#/pbinstall/<token>`) or
+	# any API client assume, and a proxy (or a client that does not
+	# follow a cross-path redirect on POST) breaks on it.
+	#
+	# This is not a new attack surface: they are the same collection
+	# rules and the same superuser gate, reached by a second URL.
+	handle /_ {
+		import proxy
+	}
+	handle /_/* {
+		import proxy
+	}
+	handle /api {
+		import proxy
+	}
+	handle /api/* {
+		import proxy
+	}
+
 	# 3. SPA-only paths: redirect to /memos/<path>. The named
 	# matcher @spa excludes anything that already has a more specific
 	# handler above (/memos, /memos/*) and the static site's
@@ -253,8 +291,15 @@
 	# sibling module with their own handle blocks above, and a 308 to
 	# /memos/forum would both lose the prefix the SPA needs and land
 	# on the wrong app.
+	#
+	# /_ , /_/* , /api and /api/* are excluded for the same reason
+	# again, and they had NO exclusion before their proxy blocks were
+	# added: /_/ used to answer 308 -> /memos/_/ and /api/health 308 ->
+	# /memos/api/health. Both landed on the right handler eventually, but
+	# not at the URL PocketBase documents, and a client that refuses to
+	# follow a redirect on POST never got there at all.
 	@spa {
-		not path / /memos /memos/* /community /community/* /wiki /wiki/* /forum /forum/* /assets /assets/* /docs /docs/* /download /download/* /firmware /firmware/* /hardware /hardware/* /reader /reader/* /workflow /workflow/* /youtube /youtube/* /favicon.svg /CNAME /index.html
+		not path / /memos /memos/* /community /community/* /wiki /wiki/* /forum /forum/* /_ /_/* /api /api/* /assets /assets/* /docs /docs/* /download /download/* /firmware /firmware/* /hardware /hardware/* /reader /reader/* /workflow /workflow/* /youtube /youtube/* /favicon.svg /CNAME /index.html
 	}
 	handle @spa {
 		redir * /memos{uri} 308
