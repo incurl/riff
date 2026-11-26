@@ -127,6 +127,13 @@ export class PollOption extends Model {
  * One vote: an account's vote for an option.
  */
 export class PollVote extends Model {
+  /**
+   * The poll the vote belongs to.
+   *
+   * Upstream's `PollVote` declares `pollId` and `optionId` as
+   * ATTRIBUTES, and the frontend reads them by name. The port's server
+   * sends them, and this model reads them.
+   */
   pollId() {
     return Model.attribute('pollId').call(this);
   }

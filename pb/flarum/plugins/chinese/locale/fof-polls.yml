@@ -1,0 +1,30 @@
+# The Polls extension's Simplified Chinese catalogue.
+#
+# Upstream's namespace is `fof-polls:`, and the keys are upstream's own
+# (https://github.com/rob006-software/flarum-translations).
+#
+# Only the keys this port renders are carried: the admin settings page,
+# the polls directory, the poll groups and the drafts workflow are
+# surfaces this port does not have, and a key for a surface that does
+# not exist is a key nothing reads.
+fof-polls:
+  forum:
+    days_remaining: 投票将于 {time} 结束。
+    no_permission: 你没有投票权限
+    poll_ended: 此投票已结束。
+    public_poll: 查看投票者
+    max_votes_allowed: '此投票最多可选择 {max, plural, other {# 个选项}}。'
+    polls_count: '{count, plural, other {{count} 票}}'
+    poll_never_ends: 投票永不结束
+    answers: 选项
+    poll:
+      cannot_change_vote: 投票后无法更改你的选择。
+      submit_button: 投票
+      total_votes: '{count, plural, other {共 {count} 票}}'
+    votes_modal:
+      title: 投票者
+    modal:
+      no_voters: 暂无投票
+    tooltip:
+      badge: 投票
+      votes: '{count, plural, other {{count} 票}}'

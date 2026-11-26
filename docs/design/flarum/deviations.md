@@ -651,12 +651,15 @@ if copied:
    attrs are never consulted — the extension overrides `style()` and
    `className()` instead.
 2. **`include=tags`.** Upstream pushes `tags,parent` into the list request's
-   `include`. This port's `included` array only builds the resources the CORE
-   knows (users, posts, groups); a tag resource belongs to the plugin's own
-   serialiser. The store is filled by `GET /api/tags` instead, which loads every
-   tag once per page load, and `discussion.tags()` resolves against it. Asking
-   for an include the server cannot answer would be a silent half-answer —
-   which is exactly what an earlier attempt at `filter[tag]` produced.
+   `include`. This port's `included` array can now reach a plugin's resources —
+   the polls work added the `ResourceSerializer` extension point, and the walk
+   dispatches on the RELATED type — but the tags plugin does not register one,
+   so a tag resource is still not buildable from the walk. The store is filled
+   by `GET /api/tags` instead, which loads every tag once per page load, and
+   `discussion.tags()` resolves against it. Asking for an include the server
+   cannot answer would be a silent half-answer — which is exactly what an
+   earlier attempt at `filter[tag]` produced. A tag serializer is the natural
+   next step: it would also let `included` carry the tags a discussion shows.
 
 That last one is the reason `discussion.tags()` is guarded: `Model.hasMany` maps
 a relationship's identifiers through the store WITHOUT dropping the ones that
@@ -688,6 +691,43 @@ Two more adaptations, both forced by the composer:
    `req.Creating` and asks the ordinary question instead: may this actor
    start a discussion with this tag (`canStartDiscussion`, the same answer
    the picker used to decide whether to offer it).
+
+### 16c. What `polls` implements in the SPA, and what it does not
+
+Upstream's `fof/polls` is a large extension — discussion polls, global polls,
+poll groups, image uploads, scheduled publishing, a drafts workflow, a polls
+directory page and a ranking board. This port implements the CORE of it, and
+the alignment work closed the gaps that made even that core misbehave.
+
+**Not ported**, and each is a surface of its own where half is worse than none:
+
+- **global polls** (`post_id` null, a dedicated page, `isGlobal`'s write path);
+- **poll groups** (`fof/polls`'s `poll_groups` and their pages);
+- **image uploads** (the poll's image, the option's image, the WebP conversion);
+- **scheduled publishing** and the **drafts workflow**;
+- **the polls directory page** and the ranking board;
+- **the admin settings page** — this port's polls have no settings of their own
+  (`maxOptions` and `enableDiscussionPolls` were declared but nothing read
+  them, and a control that changes nothing is worse than no control — see
+  §10a);
+- **the poll editor** — a poll can be created by the plugin's own tooling, but
+  the frontend has no `AddPoll` modal, so `canEdit` is always false.
+
+**A TAG-scoped `discussion.polls.vote` is not honoured.** Upstream's vote policy
+is `$actor->can('polls.vote', $discussion)`, and the tags extension's
+`DiscussionPolicy` makes a RESTRICTED tag's own grant answer for the discussion.
+This port scopes the vote check to the discussion (the poll-scoped check it
+shipped with could never match a discussion grant), but it cannot make a
+restricted tag decide: which of a discussion's tags are restricted is the tags
+extension's data, and there is no seam for one plugin to read another's
+collection. The global grant is what governs voting. A seam — a
+`PermissionHandler` the tags plugin could register, which the framework declares
+(`plugin.AddPermission`) but the module never wires — is the natural fix.
+
+**A guest gets a live control.** Upstream's `PollState.canSelect` returns true
+for an anonymous caller on purpose: the control is offered and the click opens
+the login modal. Refusing to render it leaves the reader with a poll they cannot
+interact with and no explanation.
 
 ## 16a. The endpoints the admin and forum call that are not routed
 

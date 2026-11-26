@@ -56,6 +56,28 @@ type Server struct {
 	// relationshipWriters holds the plugin-contributed WRITE sides of
 	// the relationships.
 	relationshipWriters map[string][]RelationshipWriterSource
+	// resourceSerializers holds the plugin-contributed resource
+	// serializers, keyed by their JSON:API type.
+	//
+	// They are how the `included` walk reaches a plugin's OWN resource
+	// types — the polls extension's `polls`, `poll_options` and
+	// `poll_votes`.
+	resourceSerializers map[string]ResourceSerializer
+	// defaultIncludes holds the plugin-contributed default include
+	// paths, keyed by the resource type they hang off.
+	//
+	// They are upstream's `addDefaultInclude`: the polls extension adds
+	// `['polls', 'polls.options', 'polls.myVotes', 'polls.myVotes.option']`
+	// to the POST resource, and the frontend needs every link of those
+	// chains in the response.
+	defaultIncludes map[string][]string
+	// pluginRelationships holds the plugin-contributed relations, keyed
+	// by the resource type they hang off.
+	//
+	// They are the relations the `included` walk may follow on a
+	// plugin's own resource type — the polls extension's poll carries
+	// `options`, `votes` and `myVotes`.
+	pluginRelationships map[string][]string
 	// renderer renders a post's Markdown source into the HTML the
 	// frontend displays.
 	renderer ContentRenderer
@@ -149,6 +171,54 @@ type RelationshipRequest struct {
 	Type string
 }
 
+// ResourceSerializer renders a plugin-owned JSON:API resource.
+//
+// It is upstream's `Extend\ApiResource`, and it is the extension point a
+// plugin needs when it owns a resource TYPE of its own — the polls
+// extension's `polls`, `poll_options` and `poll_votes`.
+//
+// The API package declares its OWN narrow interface rather than importing
+// the plugin package's: the two are siblings, and the dependency would
+// point the wrong way. The module (`pb/flarum/register.go`) adapts the
+// plugin's declaration onto this one, which is the same shape as the
+// existing `plugin.AttributeContributor` → `api.AttributeSource` adapter.
+//
+// Without it the `included` array cannot carry a plugin's resource, and
+// a relationship to it resolves to `undefined` in the frontend: the
+// frontend reads a relation out of the STORE, not out of the
+// identifier, and the store is filled from `payload.included`.
+type ResourceSerializer struct {
+	// Type is the JSON:API resource type, e.g. "polls".
+	Type string
+	// Render renders one resource by id.
+	//
+	// It returns nil when the resource does not exist or the caller may
+	// not see it: a missing resource is simply ABSENT from the
+	// `included` array, which is not a failed request.
+	Render func(ctx context.Context, req ResourceRequest) (*Resource, error)
+}
+
+// ResourceRequest is what a resource serializer receives.
+type ResourceRequest struct {
+	// ActorID is the acting user's id, empty for anonymous.
+	ActorID string
+	// ID is the id of the resource to render.
+	ID string
+	// IsAdmin reports whether the actor is an administrator.
+	IsAdmin bool
+	// Can reports whether the actor may perform an action on a subject.
+	//
+	// It is the forum's permission service, so a plugin's `can*`
+	// attribute answers exactly what its own route answers.
+	Can func(action, subjectType, subjectID string) bool
+	// CanScoped reports whether the actor may perform an action on the
+	// subject ALONE — the subject's own rules answer the question and
+	// the global grant is not consulted.
+	//
+	// It is what a RESTRICTED tag asks.
+	CanScoped func(action, subjectType, subjectID string) bool
+}
+
 // Options configures the API server.
 type Options struct {
 	// App is the PocketBase app.
@@ -197,6 +267,9 @@ func NewServer(opts Options) *Server {
 		attributes:          map[string][]AttributeSource{},
 		relationships:       map[string][]RelationshipSource{},
 		relationshipWriters: map[string][]RelationshipWriterSource{},
+		resourceSerializers: map[string]ResourceSerializer{},
+		defaultIncludes:     map[string][]string{},
+		pluginRelationships: map[string][]string{},
 	}
 }
 
@@ -273,6 +346,58 @@ func (s *Server) AddRelationshipWriter(resourceType, name string, write func(ctx
 	s.relationshipWriters[resourceType] = append(s.relationshipWriters[resourceType], RelationshipWriterSource{
 		Name: name, Write: write,
 	})
+}
+
+// AddResourceSerializer registers a plugin-owned JSON:API resource type.
+//
+// It is called by the plugin manager when a plugin declares a resource
+// serializer, and it is what lets the `included` walk carry a plugin's
+// own resources — the polls extension's `polls`, `poll_options` and
+// `poll_votes`.
+//
+// A serializer for a type that is already registered REPLACES the
+// earlier one: the last registration wins, which is the same rule the
+// container's bindings follow.
+func (s *Server) AddResourceSerializer(serializer ResourceSerializer) {
+	if serializer.Type == "" || serializer.Render == nil {
+		return
+	}
+	s.resourceSerializers[serializer.Type] = serializer
+}
+
+// AddDefaultInclude registers a plugin's default include paths for a
+// resource type.
+//
+// It is upstream's `addDefaultInclude`: the polls extension adds
+// `['polls', 'polls.options', 'polls.myVotes', 'polls.myVotes.option']`
+// to the POST resource, so a post's poll arrives with its options and
+// with the reader's own votes.
+//
+// The paths are DOTTED chains, exactly as upstream spells them, and the
+// walk follows every hop.
+func (s *Server) AddDefaultInclude(resourceType string, paths []string) {
+	for _, path := range paths {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			continue
+		}
+		s.defaultIncludes[resourceType] = append(s.defaultIncludes[resourceType], path)
+	}
+}
+
+// AddPluginRelationship records a plugin's own relation on a resource
+// type, so the `included` walk knows it may follow it.
+//
+// The walk's set of followable relations is otherwise the core's own,
+// and a plugin's relation would be dropped as "a relation this
+// resource type does not carry" — the identifier would travel, but the
+// RESOURCE behind it would not, and the frontend would read the
+// relation as absent.
+func (s *Server) AddPluginRelationship(resourceType, name string) {
+	if resourceType == "" || name == "" {
+		return
+	}
+	s.pluginRelationships[resourceType] = append(s.pluginRelationships[resourceType], name)
 }
 
 // RelationshipWriterSource is a plugin's write side of a relationship.
@@ -456,6 +581,60 @@ func (s *Server) can(e *core.RequestEvent, action, subjectType, subjectID string
 		return false
 	}
 	return allowed
+}
+
+// permissionChecker returns a permission checker for a plugin's
+// resource serializer.
+//
+// It is the forum's own permission service, so a plugin's `can*`
+// attribute answers exactly what its own route answers. The caller is
+// resolved ONCE, so a resource carrying several plugin-contributed
+// `can*` attributes does not read the account and its groups once per
+// attribute.
+func (s *Server) permissionChecker(e *core.RequestEvent) func(action, subjectType, subjectID string) bool {
+	actor := s.domainActor(e)
+	ctx := e.Request.Context()
+
+	return func(action, subjectType, subjectID string) bool {
+		if actor.UserID == "" {
+			return false
+		}
+		allowed, err := s.permissions.Can(ctx, actor, action, subjectType, subjectID)
+		if err != nil {
+			s.logger.Error("forum: permission check failed",
+				slog.String("action", action),
+				slog.String("error", err.Error()),
+			)
+			return false
+		}
+		return allowed
+	}
+}
+
+// permissionCheckerScoped is the scoped form of
+// [Server.permissionChecker]: the subject's own rules answer the
+// question, and the global grant is not consulted.
+//
+// It is what a RESTRICTED tag asks, and it is upstream's exact match —
+// see [domain.PermissionChecker.CanScoped].
+func (s *Server) permissionCheckerScoped(e *core.RequestEvent) func(action, subjectType, subjectID string) bool {
+	actor := s.domainActor(e)
+	ctx := e.Request.Context()
+
+	return func(action, subjectType, subjectID string) bool {
+		if actor.UserID == "" {
+			return false
+		}
+		allowed, err := s.permissions.CanScoped(ctx, actor, action, subjectType, subjectID)
+		if err != nil {
+			s.logger.Error("forum: permission check failed",
+				slog.String("action", action),
+				slog.String("error", err.Error()),
+			)
+			return false
+		}
+		return allowed
+	}
 }
 
 // canDeletePost reports whether the caller may delete a post.

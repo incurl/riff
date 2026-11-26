@@ -46,8 +46,23 @@
   text-align: right;
 }
 
-.Post-poll-total,
-.Post-poll-ended {
+/*
+ * The poll's information lines: the "you may not vote" note, the end
+ * date, the vote cap and the total.
+ *
+ * It is a list, because a poll can show SEVERAL of them at once — an
+ * ended poll shows its end date AND its total — where the port used to
+ * render two one-line paragraphs that could only ever show one.
+ */
+.Post-poll-info {
   font-size: 0.85em;
+  list-style: none;
   margin: 0.5rem 0 0;
+  padding: 0;
+}
+
+.Post-poll-info li {
+  align-items: center;
+  display: flex;
+  gap: 0.35rem;
 }

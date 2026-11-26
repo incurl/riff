@@ -39,6 +39,7 @@ const SOURCES = [
   'flarum-sticky.yml',
   'flarum-suspend.yml',
   'fof-upload.yml',
+  'fof-polls.yml',
 ];
 
 compileLocale({

@@ -438,7 +438,44 @@ func (m *Module) boot(ctx context.Context) error {
 					})
 				})
 		}
+		for _, include := range extenders.DefaultIncludes() {
+			m.api.AddDefaultInclude(include.Resource, include.Paths)
+		}
+		for _, serializer := range extenders.ResourceSerializers() {
+			m.api.AddResourceSerializer(api.ResourceSerializer{
+				Type: serializer.Type,
+				Render: func(ctx context.Context, req api.ResourceRequest) (*api.Resource, error) {
+					rendered, err := serializer.Render(ctx, &plugin.ResourceRequest{
+						App:       m.app,
+						ActorID:   req.ActorID,
+						ID:        req.ID,
+						IsAdmin:   req.IsAdmin,
+						Can:       req.Can,
+						CanScoped: req.CanScoped,
+					})
+					if err != nil {
+						return nil, err
+					}
+					if rendered == nil {
+						return nil, nil
+					}
+
+					relationships := map[string]api.Relationship{}
+					for name, relationship := range rendered.Relationships {
+						relationships[name] = api.Relationship{Data: adaptRelationshipData(relationship.Data)}
+					}
+
+					return &api.Resource{
+						Type:          rendered.Type,
+						ID:            rendered.ID,
+						Attributes:    rendered.Attributes,
+						Relationships: relationships,
+					}, nil
+				},
+			})
+		}
 		for _, relationship := range extenders.Relationships() {
+			m.api.AddPluginRelationship(relationship.Resource, relationship.Name)
 			m.api.AddRelationship(relationship.Resource, relationship.Name, relationship.Type, relationship.Many,
 				func(ctx context.Context, req api.RelationshipRequest) ([]api.Identifier, error) {
 					resolved, err := relationship.Resolve(ctx, &plugin.RelationshipRequest{
@@ -607,6 +644,33 @@ func (m *Module) recordMigration(_ context.Context, pluginID, name string) error
 	record.Set("plugin_id", pluginID)
 	record.Set("version", name)
 	return m.app.Save(record)
+}
+
+// adaptRelationshipData converts a plugin relationship's data onto the
+// API package's own identifier type.
+//
+// **THE WIRE SHAPE DEPENDS ON THIS.** The plugin package declares its
+// own `Identifier`, which the API package does not import — and a Go
+// struct without JSON tags serialises its FIELD NAMES, so the payload
+// read `{"Type":"polls","ID":"abc"}` instead of
+// `{"type":"polls","id":"abc"}`. The frontend resolves a relation
+// with `store.getById(data.type, data.id)`, so a capitalised shape is
+// `undefined` — the relation reads as absent, with a 200 on the wire.
+func adaptRelationshipData(data any) any {
+	switch typed := data.(type) {
+	case plugin.Identifier:
+		return api.Identifier{Type: typed.Type, ID: typed.ID}
+	case []plugin.Identifier:
+		out := make([]api.Identifier, 0, len(typed))
+		for _, identifier := range typed {
+			out = append(out, api.Identifier{Type: identifier.Type, ID: identifier.ID})
+		}
+		return out
+	case nil:
+		return nil
+	default:
+		return data
+	}
 }
 
 // HasFrontendBuild reports whether a front-end build was staged.

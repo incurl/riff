@@ -5,7 +5,10 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/pocketbase/pocketbase/core"
 	"github.com/stretchr/testify/require"
+
+	"github.com/incurl/riff/pb/flarum/domain"
 )
 
 // A RESPONSE'S `included` CARRIES THE RELATED RESOURCES.
@@ -478,4 +481,83 @@ func TestForum_ACombinedDiscussionFilterDoesNotFail(t *testing.T) {
 	// The author's own listing is the other two-clause case.
 	recorder = do(t, handler, http.MethodGet, "/forum/api/discussions?filter[user]="+author.Id, "", nil)
 	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+}
+
+// TestForum_TheUserShowCarriesItsGroups pins that a TO-MANY relation is
+// followed.
+//
+// The walk read a SINGLE identifier out of a relation's `data`. A
+// to-many relation's data is an ARRAY, so the read never matched and
+// the relation was never followed: `GET /api/users/{id}` for an account
+// in a group answered with `included types = []`.
+//
+// The consequence is quiet: the frontend reads the absence as "no
+// groups", so the account renders without the badge that names its
+// group — and the frontend KEEPS that record, so the profile stays
+// badge-less until the page is reloaded.
+//
+// It is a separate defect from the polls work, and it is pinned by its
+// own test so the two are not conflated.
+func TestForum_TheUserShowCarriesItsGroups(t *testing.T) {
+	app, handler := newTestForum(t)
+
+	member := testUser(t, app, "grouped")
+	require.NoError(t, testRepo(t, app).AddUserToGroup(member.Id, domain.GroupAdminID))
+
+	recorder := do(t, handler, http.MethodGet, "/forum/api/users/"+member.Id, "", nil)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	included := includedTypesOf(t, recorder.Body.String())
+	require.Contains(t, included, "groups",
+		"a user's groups must travel with the response: %s", recorder.Body.String())
+
+	groups := includedResourcesOf(t, recorder.Body.String(), "groups")
+	require.Len(t, groups, 1, "the account holds one group")
+	require.Equal(t, domain.GroupAdminID, groups[0]["id"])
+}
+
+// TestForum_TheNestedIncludeIsFollowed pins that a DOTTED include path
+// reaches the end of its chain.
+//
+// Upstream's include paths are dotted: `firstPost.user.groups` names
+// the discussion's first post, that post's author, and that author's
+// groups. The frontend needs every link of the chain in the response,
+// because it resolves a relation through the STORE and the store is
+// filled from `included`.
+//
+// A walk that only follows the FIRST hop answers with the post and no
+// author — and the post renders with a blank author.
+func TestForum_TheNestedIncludeIsFollowed(t *testing.T) {
+	app, handler := newTestForum(t)
+
+	author := testUser(t, app, "nested_author")
+	require.NoError(t, testRepo(t, app).AddUserToGroup(author.Id, domain.GroupAdminID))
+
+	created := do(t, handler, http.MethodPost, "/forum/api/discussions",
+		`{"data":{"type":"discussions","attributes":{"title":"Nested","content":"First message"}}}`,
+		sessionCookies(mustAuthToken(t, author), "csrf-token"))
+	require.Equal(t, http.StatusCreated, created.Code, created.Body.String())
+
+	discussionID := resourceIDOf(t, created)
+
+	recorder := do(t, handler, http.MethodGet, "/forum/api/discussions/"+discussionID+"?include=firstPost.user.groups", "", nil)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	included := includedTypesOf(t, recorder.Body.String())
+	require.Contains(t, included, "posts",
+		"the discussion's first post must travel with the response: %s", recorder.Body.String())
+	require.Contains(t, included, "users",
+		"the post's author must travel with the response: %s", recorder.Body.String())
+	require.Contains(t, included, "groups",
+		"the author's groups must travel with the response: %s", recorder.Body.String())
+}
+
+// mustAuthToken mints an auth token for an account.
+func mustAuthToken(t *testing.T, record *core.Record) string {
+	t.Helper()
+
+	token, err := record.NewAuthToken()
+	require.NoError(t, err)
+
+	return token
 }

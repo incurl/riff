@@ -262,6 +262,105 @@ type RelationshipWriteRequest struct {
 	CanScoped func(action, subjectType, subjectID string) bool
 }
 
+// ResourceSerializer renders a plugin-owned JSON:API resource.
+//
+// This is upstream's `Extend\ApiResource`, and it is the extension point
+// a plugin needs when it owns a resource TYPE of its own — the polls
+// extension's `polls`, `poll_options` and `poll_votes`.
+//
+// Without it the forum's `included` array cannot carry a plugin's
+// resource, and a relationship to it resolves to `undefined` in the
+// frontend. The frontend reads a relation out of the STORE, not out of
+// the identifier:
+//
+//	static hasMany(name) {
+//	  const data = this.data.relationships?.[name]?.data;
+//	  if (data) return data.map((d) => this.store.getById(d.type, d.id));
+//	}
+//
+// and the store is filled from `payload.included`. So the RELATED
+// RESOURCE has to travel with the response, or the relation reads as
+// absent — the poll is in the database, the post carries the
+// relationship, and the UI shows nothing, with no error anywhere.
+type ResourceSerializer struct {
+	// Type is the JSON:API resource type, e.g. "polls".
+	Type string
+	// Render renders one resource by id.
+	//
+	// It returns nil when the resource does not exist or the caller may
+	// not see it: a missing resource is simply ABSENT from the
+	// `included` array, which is not a failed request.
+	Render func(ctx context.Context, req *ResourceRequest) (*Resource, error)
+}
+
+// ResourceRequest is what a resource serializer receives.
+type ResourceRequest struct {
+	// App is the PocketBase app.
+	App core.App
+	// ActorID is the id of the acting user, empty for anonymous.
+	ActorID string
+	// ID is the id of the resource to render.
+	ID string
+	// IsAdmin reports whether the actor is an administrator.
+	IsAdmin bool
+	// Can reports whether the actor may perform an action on a subject.
+	//
+	// It is the forum's permission service, so a plugin's `can*`
+	// attribute answers exactly what its own route answers.
+	Can func(action, subjectType, subjectID string) bool
+	// CanScoped reports whether the actor may perform an action on the
+	// subject ALONE — the subject's own rules answer the question and
+	// the global grant is not consulted.
+	//
+	// It is what a RESTRICTED tag asks. It is nil when the forum does
+	// not provide one, and a plugin must then fall back to
+	// [ResourceRequest.Can].
+	CanScoped func(action, subjectType, subjectID string) bool
+}
+
+// Resource is a plugin-rendered JSON:API resource.
+//
+// It is the plugin package's own narrow view of a resource, so the
+// plugin package does not depend on the API package — the two are
+// siblings, and the dependency would point the wrong way. The module
+// adapts it onto the API server's own type.
+type Resource struct {
+	// Type is the JSON:API resource type, e.g. "polls".
+	Type string
+	// ID is the resource's id.
+	ID string
+	// Attributes are the resource's fields.
+	Attributes map[string]any
+	// Relationships are the resource's related resources.
+	//
+	// A relation's `Data` is either an [Identifier], a list of them, or
+	// nil — the same shapes the API package uses.
+	Relationships map[string]Relationship
+}
+
+// Relationship is a JSON:API relationship object.
+type Relationship struct {
+	// Data holds the related resource identifier(s).
+	Data any
+}
+
+// DefaultIncludeContributor declares a resource type's default include
+// paths.
+//
+// It is upstream's `addDefaultInclude`: the polls extension adds
+// `['polls', 'polls.options', 'polls.myVotes', 'polls.myVotes.option']`
+// to the POST resource, so a post's poll arrives with its options and
+// with the reader's own votes.
+//
+// The paths are DOTTED chains, exactly as upstream spells them, and the
+// forum's `included` walk follows every hop.
+type DefaultIncludeContributor struct {
+	// Resource is the JSON:API resource type, e.g. "posts".
+	Resource string
+	// Paths are the include chains, e.g. "polls.options".
+	Paths []string
+}
+
 // Identifier is a JSON:API resource identifier.
 type Identifier struct {
 	// Type is the JSON:API resource type.
@@ -323,6 +422,10 @@ type Extenders struct {
 	// relationshipWriters collects the plugin's relationship write
 	// contributions.
 	relationshipWriters []RelationshipWriter
+	// resourceSerializers collects the plugin's own resource types.
+	resourceSerializers []ResourceSerializer
+	// defaultIncludes collects the plugin's default include paths.
+	defaultIncludes []DefaultIncludeContributor
 	// permissions collects the plugin's permission handlers.
 	permissions []PermissionHandler
 	// assets collects the plugin's frontend asset declarations.
@@ -359,6 +462,18 @@ type AssetBundle struct {
 	Admin string
 	// CSS is the stylesheet path, relative to the asset root.
 	CSS string
+	// Locale is the extension's OWN catalogue, relative to the asset
+	// root.
+	//
+	// It is the extension's English strings, compiled into the same
+	// `app.translator.addTranslations(…)` script the locale bundles
+	// use. It is loaded BEFORE the active locale's catalogue, because a
+	// translation is an OVERRIDE: the locale's own copy of a key has to
+	// be added last.
+	//
+	// An extension that ships no catalogue leaves it empty, and nothing
+	// is loaded for it.
+	Locale string
 	// Version is the plugin version, used for cache busting.
 	Version string
 }
@@ -431,6 +546,21 @@ func (e *Extenders) AddRelationshipWriter(writer RelationshipWriter) {
 	e.relationshipWriters = append(e.relationshipWriters, writer)
 }
 
+// AddResourceSerializer declares a plugin-owned JSON:API resource type.
+//
+// It is the extension point a plugin needs when it ships resources of
+// its own, so the forum's `included` array can carry them.
+func (e *Extenders) AddResourceSerializer(serializer ResourceSerializer) {
+	e.resourceSerializers = append(e.resourceSerializers, serializer)
+}
+
+// AddDefaultInclude declares a resource type's default include paths.
+//
+// It is upstream's `addDefaultInclude`.
+func (e *Extenders) AddDefaultInclude(contributor DefaultIncludeContributor) {
+	e.defaultIncludes = append(e.defaultIncludes, contributor)
+}
+
 // AddPermission declares a permission handler.
 func (e *Extenders) AddPermission(handler PermissionHandler) {
 	e.permissions = append(e.permissions, handler)
@@ -469,6 +599,12 @@ func (e *Extenders) Relationships() []RelationshipContributor { return e.relatio
 // RelationshipWriters returns the declared relationship write
 // contributions.
 func (e *Extenders) RelationshipWriters() []RelationshipWriter { return e.relationshipWriters }
+
+// ResourceSerializers returns the declared resource serializers.
+func (e *Extenders) ResourceSerializers() []ResourceSerializer { return e.resourceSerializers }
+
+// DefaultIncludes returns the declared default include paths.
+func (e *Extenders) DefaultIncludes() []DefaultIncludeContributor { return e.defaultIncludes }
 
 // Permissions returns the declared permission handlers.
 func (e *Extenders) Permissions() []PermissionHandler { return e.permissions }

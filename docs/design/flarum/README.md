@@ -21,6 +21,10 @@ reused Flarum Mithril frontend.
   differs from upstream Flarum.
 - [Mentions](mentions.md) — the `@username` mention design, and what
   the implementation settled.
+- [Polls alignment handoff](polls-alignment-handoff.md) — the audit of the
+  Polls plugin against upstream `fof/polls` 2.x: the confirmed defects, the
+  upstream contract, and the order they were fixed in. Implemented; see its
+  status header for the one item that is deliberately not ported.
 
 ## The shape of the thing
 

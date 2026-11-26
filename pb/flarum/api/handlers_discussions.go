@@ -540,7 +540,19 @@ func (s *Server) showUserHandler(e *core.RequestEvent) error {
 	if err != nil {
 		return fail(e, notFoundError("That user does not exist."))
 	}
-	return s.writeDocument(e, Document{Data: s.userResourceWithGroups(s.actor(e).ID(), user, user.Groups)})
+
+	primary := s.userResourceWithGroups(s.actor(e).ID(), user, user.Groups)
+
+	// The user's own relations travel with it: upstream's user resource
+	// declares `groups`, and the frontend renders a group badge from the
+	// GROUP resources the response carries — not from the relationship's
+	// identifiers, which name rows the store has never seen.
+	included, err := s.includedResources(e, []Resource{primary})
+	if err != nil {
+		return fail(e, errInternal("The user could not be loaded.", err))
+	}
+
+	return s.writeDocument(e, Document{Data: primary, Included: included})
 }
 
 // wantsSlugLookup reports whether the request asked for a slug lookup.

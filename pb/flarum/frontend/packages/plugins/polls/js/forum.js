@@ -106,7 +106,21 @@ function PostPoll({ poll, post }) {
   const voted = selected.length > 0;
   const ended = poll.hasEnded();
   const canVote = poll.canVote() && !ended;
-  const showCount = poll.voteCount() !== undefined;
+
+  // The COUNT is shown to a reader who may see it: the server OMITS the
+  // attribute when the caller may not, and the frontend reads the
+  // absence as "hidden". A zero would read as "nobody has voted".
+  const canSeeVoteCount = typeof poll.voteCount() === 'number';
+
+  // A GUEST gets a LIVE control: clicking it asks them to log in.
+  //
+  // Upstream's `PollState.canSelect` returns true for a guest on
+  // purpose — the control is offered, and the click opens the login
+  // modal. Refusing to render the control instead leaves the reader
+  // with a poll they cannot interact with and no explanation.
+  const guest = !app.session.user;
+
+  const disabled = !guest && (!canVote || (voted && !poll.canChangeVote()));
 
   return (
     <div className="Post-poll">
@@ -121,7 +135,6 @@ function PostPoll({ poll, post }) {
           if (!option) return null;
 
           const checked = selected.indexOf(option.id()) !== -1;
-          const disabled = !canVote || (voted && !poll.canChangeVote());
 
           return (
             <label className="Post-poll-option" key={option.id()}>
@@ -131,10 +144,19 @@ function PostPoll({ poll, post }) {
                 value={option.id()}
                 checked={checked}
                 disabled={disabled}
-                onchange={() => toggleOption(poll, option.id(), selected)}
+                onchange={(event) => {
+                  if (guest) {
+                    // The tick is undone: the guest has not voted, and
+                    // the control is offered only to ask them to log in.
+                    event.target.checked = false;
+                    app.modal.show(() => import('flarum/forum/components/LogInModal'));
+                    return;
+                  }
+                  toggleOption(poll, option.id(), selected);
+                }}
               />
               <span className="Post-poll-answer">{option.answer()}</span>
-              {showCount && option.voteCount() !== undefined ? (
+              {canSeeVoteCount && option.voteCount() !== undefined ? (
                 <span className="Post-poll-count">{option.voteCount()}</span>
               ) : null}
             </label>
@@ -142,21 +164,52 @@ function PostPoll({ poll, post }) {
         })}
       </fieldset>
 
-      {showCount ? (
-        <p className="Post-poll-total helpText">
-          <Icon name="fas fa-poll" className="fa-fw" />
-          {app.translator.trans('polls.forum.total_votes', { count: poll.voteCount() })}
-        </p>
-      ) : null}
+      <ul className="Post-poll-info helpText">
+        {app.session.user && !canVote && !ended ? (
+          <li>
+            <Icon name="fas fa-times-circle" className="fa-fw" />
+            {app.translator.trans('fof-polls.forum.no_permission')}
+          </li>
+        ) : null}
 
-      {ended ? (
-        <p className="Post-poll-ended helpText">
-          <Icon name="fas fa-clock" className="fa-fw" />
-          {app.translator.trans('polls.forum.poll_ended')}
-        </p>
-      ) : null}
+        {ended ? (
+          <li>
+            <Icon name="fas fa-clock" className="fa-fw" />
+            {app.translator.trans('fof-polls.forum.poll_ended')}
+          </li>
+        ) : null}
+
+        {canVote && !ended && !voted ? (
+          <li>
+            <Icon name="fas fa-poll" className="fa-fw" />
+            {app.translator.trans('fof-polls.forum.max_votes_allowed', { max: maxVotes(poll) })}
+          </li>
+        ) : null}
+
+        {canSeeVoteCount && (ended || voted) ? (
+          <li>
+            <Icon name="fas fa-poll" className="fa-fw" />
+            {app.translator.trans('fof-polls.forum.poll.total_votes', { count: poll.voteCount() })}
+          </li>
+        ) : null}
+      </ul>
     </div>
   );
+}
+
+/**
+ * How many options a poll lets a voter pick.
+ *
+ * A poll that allows one vote allows exactly one. A poll that allows
+ * several caps them, and a cap of ZERO means "as many as there are
+ * options" — upstream's reading of `max_votes = 0`.
+ */
+function maxVotes(poll) {
+  let max = poll.allowMultipleVotes() ? poll.maxVotes() : 1;
+
+  if (max === 0) max = poll.options().length;
+
+  return max;
 }
 
 export const extend = [

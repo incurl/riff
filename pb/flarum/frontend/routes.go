@@ -33,6 +33,14 @@ type Bundle struct {
 	Admin string
 	// CSS is the stylesheet path, relative to the asset root.
 	CSS string
+	// Locale is the plugin's OWN catalogue, relative to the asset root.
+	//
+	// It is the extension's English strings, and it is loaded BEFORE the
+	// active locale's catalogue: a translation is an OVERRIDE, so the
+	// locale's own copy of a key has to be added last. The reverse order
+	// would make the extension's English win over the operator's
+	// language.
+	Locale string
 }
 
 // BootRenderer renders the boot shell.

@@ -178,6 +178,7 @@ func (m *Module) bundles() []frontend.Bundle {
 				Forum:   asset.Forum,
 				Admin:   asset.Admin,
 				CSS:     asset.CSS,
+				Locale:  asset.Locale,
 			})
 		}
 	}
@@ -223,7 +224,7 @@ func (m *Module) warnMissingAssets() {
 	}
 
 	for _, bundle := range m.bundles() {
-		for _, asset := range []string{bundle.Forum, bundle.Admin, bundle.CSS} {
+		for _, asset := range []string{bundle.Forum, bundle.Admin, bundle.CSS, bundle.Locale} {
 			if asset == "" {
 				continue
 			}
@@ -414,6 +415,24 @@ func (m *Module) scriptURLs(admin bool) []string {
 	// ships `en`, and a language pack ships the other codes. Only the
 	// active locale's pair is loaded — a second catalogue would merge its
 	// keys over the first.
+	//
+	// It comes AFTER the plugins' own catalogues, because a translation
+	// is an OVERRIDE: the locale's copy of a key has to be added last,
+	// or the extension's English would win over the operator's
+	// language.
+	for _, bundle := range m.bundles() {
+		if bundle.Locale == "" {
+			continue
+		}
+		// A catalogue the embedded tree does not carry is skipped, for
+		// the same reason a missing bundle is: the tag would 404
+		// silently.
+		if !m.assets.Exists(strings.TrimPrefix(bundle.Locale, "/")) {
+			continue
+		}
+		urls = append(urls, base+strings.TrimPrefix(bundle.Locale, "/")+"?v="+bundle.Version)
+	}
+
 	if name := m.localeAssetName(m.activeLocale(), admin); name != "" && m.assets.Exists(name) {
 		urls = append(urls, base+name)
 	}

@@ -1,6 +1,8 @@
 package polls
 
 import (
+	"strings"
+
 	"github.com/pkg/errors"
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/pocketbase/pocketbase/tools/types"
@@ -230,7 +232,7 @@ func createPollVotesCollection(app core.App, physical, pollsPhysical, optionsPhy
 	collection.UpdateRule = nil
 	collection.DeleteRule = nil
 
-	collection.AddIndex("idx_"+physical+"_poll_user", true, "poll, user", "")
+	collection.AddIndex("idx_"+physical+"_poll_option_user", true, "poll, option, user", "")
 	collection.AddIndex("idx_"+physical+"_option", false, "option", "")
 
 	if err := app.Save(collection); err != nil {
@@ -238,4 +240,85 @@ func createPollVotesCollection(app core.App, physical, pollsPhysical, optionsPhy
 	}
 
 	return nil
+}
+
+// The index names the votes collection carries.
+//
+// The poll/option/user index is the one that matters: it is what makes
+// a vote IDEMPOTENT, and what makes a MULTI-VOTE poll possible.
+const (
+	// pollVoteIndexName is the unique index on (poll, option, user).
+	pollVoteIndexName = "poll_option_user"
+	// pollVoteIndexColumns is the column list of that index.
+	pollVoteIndexColumns = "poll, option, user"
+)
+
+// repairVoteIndex replaces the votes collection's unique index with the
+// one the multi-vote poll needs.
+//
+// **THE WRONG INDEX WAS SHIPPED.** The index was on `(poll, user)`, so
+// a voter held at most ONE vote row per poll — which makes
+// `allow_multiple_votes` impossible, and the vote route's own
+// multi-option path fails with a constraint violation.
+//
+// The collection is created by a PLUGIN migration, and a plugin
+// migration that has already been recorded does NOT run again: the
+// applied versions live in the forum's `plugin_migrations` table. So
+// changing the creation step fixes a FRESH install and leaves every
+// existing instance with the old index — and the repair would never
+// run either, because it would be a new migration step on an instance
+// whose `create_polls` step is already recorded.
+//
+// This repair is therefore IDEMPOTENT and RE-RUNNABLE: it looks at the
+// indexes the collection actually carries and replaces the wrong one,
+// and it is a separate step so an instance that already ran the
+// creation step runs it on the next boot.
+//
+// The old index is DROPPED rather than left in place: a unique index
+// on (poll, user) is not merely useless, it is what makes the
+// multi-vote path fail.
+func repairVoteIndex(app core.App, physical string) error {
+	collection, err := app.FindCollectionByNameOrId(physical)
+	if err != nil {
+		return errors.Wrapf(err, "polls: the %q collection is missing", physical)
+	}
+
+	// The index is written as a CREATE statement, and the name is
+	// embedded in it, so the indexes are read and matched by name.
+	wanted := "idx_" + physical + "_" + pollVoteIndexName
+	legacy := "idx_" + physical + "_poll_user"
+
+	for _, index := range collection.Indexes {
+		if !strings.Contains(index, legacy) {
+			continue
+		}
+		collection.RemoveIndex(legacy)
+	}
+
+	// The repair is idempotent: an index that is already right is left
+	// alone, so the step can run on every boot.
+	if !hasIndex(collection, wanted) {
+		collection.AddIndex(wanted, true, pollVoteIndexColumns, "")
+	}
+
+	if err := app.Save(collection); err != nil {
+		return errors.Wrapf(err, "polls: the %q collection's index could not be repaired", physical)
+	}
+
+	return nil
+}
+
+// hasIndex reports whether a collection carries an index with the name.
+//
+// The index is written as a CREATE statement, so the name is matched
+// inside it. The comparison is case-insensitive, because SQLite's own
+// index names are not case sensitive either.
+func hasIndex(collection *core.Collection, name string) bool {
+	for _, index := range collection.Indexes {
+		if strings.Contains(strings.ToLower(index), strings.ToLower(name)) {
+			return true
+		}
+	}
+
+	return false
 }

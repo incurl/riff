@@ -70,6 +70,22 @@ for plugin in $PLUGINS; do
   cp "$plugin_dir/js/dist/admin.js" "$TARGET/plugins/$plugin/admin.js"
   cp "$plugin_dir/style.css" "$TARGET/plugins/$plugin/style.css"
 
+  # An extension's OWN catalogue is compiled alongside its bundles.
+  #
+  # The polls extension ships one: without it every `trans()` call in the
+  # poll renders the raw key, so the UI shows "fof-polls.forum.poll_ended"
+  # instead of "This poll has ended."
+  #
+  # It is a separate script rather than part of the bundle because the
+  # translations are added at RUNTIME (`app.translator.addTranslations`),
+  # and the shell loads the catalogue before the bundle that renders the
+  # poll.
+  if [ -f "$plugin_dir/build-locale.cjs" ]; then
+    echo "Compiling the $plugin extension's catalogue"
+    node "$plugin_dir/build-locale.cjs"
+    cp "$plugin_dir/dist/"*.js "$TARGET/plugins/$plugin/"
+  fi
+
   # The extension's async chunks go under `js/<namespace>/`, next to
   # core's — the runtime builds a chunk's url as
   # `${jsChunksBaseUrl}/${namespace}/${urlPath}.js`, and

@@ -10,6 +10,7 @@ import (
 
 	"github.com/incurl/riff/pb/flarum/api"
 	"github.com/incurl/riff/pb/flarum/domain"
+	"github.com/incurl/riff/pb/flarum/plugin"
 )
 
 // voteHandler serves PATCH /api/polls/{id}/votes.
@@ -48,9 +49,21 @@ func (p *Plugin) voteHandler(e *core.RequestEvent) error {
 		return api.WriteError(e, http.StatusNotFound, api.CodeNotFound, "That poll does not exist.")
 	}
 
-	// The vote is gated by the plugin's own permission, which upstream
-	// scopes to the discussion the poll hangs off.
-	allowed, err := api.Can(e, domain.PermissionVotePoll, api.TypePoll, pollID)
+	// The vote is gated by the plugin's own permission, scoped to the
+	// DISCUSSION the poll hangs off.
+	//
+	// **UPSTREAM SCOPES IT TO THE DISCUSSION, NOT TO THE POLL.** Its
+	// policy is `$actor->can('polls.vote', $discussion)`, and this
+	// port's key table maps upstream's `discussion.polls.vote` onto
+	// `votePoll`. A poll-scoped check can never match a grant the
+	// operator made for a discussion — and it is the same scope the
+	// `canVote` attribute asks, so the flag and the write path agree.
+	subjectType, subjectID, err := p.voteSubject(e.App, poll)
+	if err != nil {
+		return api.WriteError(e, http.StatusInternalServerError, api.CodeInternal, "The vote could not be recorded.")
+	}
+
+	allowed, err := api.Can(e, domain.PermissionVotePoll, subjectType, subjectID)
 	if err != nil {
 		return api.WriteError(e, http.StatusInternalServerError, api.CodeInternal, "The vote could not be recorded.")
 	}
@@ -155,7 +168,12 @@ func (p *Plugin) checkChangeVote(e *core.RequestEvent, poll *pollRecord, optionI
 		}
 	}
 
-	allowed, err := api.Can(e, domain.PermissionChangePollVote, api.TypePoll, poll.ID)
+	subjectType, subjectID, err := p.voteSubject(e.App, poll)
+	if err != nil {
+		return api.WriteError(e, http.StatusInternalServerError, api.CodeInternal, "The vote could not be recorded.")
+	}
+
+	allowed, err := api.Can(e, domain.PermissionChangePollVote, subjectType, subjectID)
 	if err != nil {
 		return api.WriteError(e, http.StatusInternalServerError, api.CodeInternal, "The vote could not be recorded.")
 	}
@@ -271,6 +289,15 @@ func (p *Plugin) listPolls(app core.App, postID string) ([]*pollRecord, error) {
 }
 
 // writePoll answers with the poll's resource and its included options.
+//
+// **THE INCLUDED SET IS THE POLL'S OPTIONS AND THE CALLER'S OWN VOTES**,
+// which is upstream's `['options', 'myVotes', 'myVotes.option']` on the
+// poll's own show endpoint.
+//
+// The frontend reads the reader's current selection out of
+// `poll.myVotes()` → `vote.option()`, so a response without the vote
+// RESOURCES renders a poll whose ticked box does not match what the
+// reader picked.
 func (p *Plugin) writePoll(e *core.RequestEvent, status int, pollID string) error {
 	poll, err := findPoll(e.App, p.physical[pollsCollection], pollID)
 	if err != nil {
@@ -279,17 +306,15 @@ func (p *Plugin) writePoll(e *core.RequestEvent, status int, pollID string) erro
 
 	resource, err := p.pollResource(e, poll)
 	if err != nil {
+		if errors.Is(err, errPollGone) {
+			return api.WriteError(e, http.StatusNotFound, api.CodeNotFound, "That poll does not exist.")
+		}
 		return api.WriteError(e, http.StatusInternalServerError, api.CodeInternal, "The poll could not be loaded.")
 	}
 
-	options, err := findOptions(e.App, p.physical[optionsCollection], pollID)
+	included, err := p.pollIncluded(e, poll)
 	if err != nil {
 		return api.WriteError(e, http.StatusInternalServerError, api.CodeInternal, "The poll could not be loaded.")
-	}
-
-	included := make([]api.Resource, 0, len(options))
-	for _, option := range options {
-		included = append(included, p.optionResource(e, poll, option))
 	}
 
 	return api.WriteDocument(e, status, api.Document{
@@ -298,189 +323,111 @@ func (p *Plugin) writePoll(e *core.RequestEvent, status int, pollID string) erro
 	})
 }
 
-// pollResource renders a poll as a JSON:API resource.
+// pollIncluded builds the `included` array for a poll: its options, the
+// caller's own votes, and the option each of those votes names.
 //
-// The attribute names match upstream's `PollResource`, which is what the
-// frontend's poll components read.
-func (p *Plugin) pollResource(e *core.RequestEvent, poll *pollRecord) (api.Resource, error) {
-	actorID := actorIDOf(e)
+// It is the same set the forum's `included` walk builds for a poll, so
+// the poll fetched by id and the poll that arrived with a post carry
+// the same resources.
+func (p *Plugin) pollIncluded(e *core.RequestEvent, poll *pollRecord) ([]api.Resource, error) {
+	req := p.resourceRequest(e)
 
-	canVote, err := api.Can(e, domain.PermissionVotePoll, api.TypePoll, poll.ID)
-	if err != nil {
-		return api.Resource{}, err
-	}
-
-	canChangeVote, err := api.Can(e, domain.PermissionChangePollVote, api.TypePoll, poll.ID)
-	if err != nil {
-		return api.Resource{}, err
-	}
-
-	canSeeVoters, err := api.Can(e, domain.PermissionSeePollVoters, api.TypePoll, poll.ID)
-	if err != nil {
-		return api.Resource{}, err
-	}
-
-	// The vote COUNT is hidden until the voter has voted or the poll has
-	// ended, unless the poll is public or the caller may see the count
-	// without voting. Upstream's `seeVoteCount` policy.
-	canSeeCount, err := p.canSeeVoteCount(e, poll, actorID)
-	if err != nil {
-		return api.Resource{}, err
-	}
+	included := make([]api.Resource, 0)
 
 	options, err := findOptions(e.App, p.physical[optionsCollection], poll.ID)
 	if err != nil {
-		return api.Resource{}, err
+		return nil, err
 	}
 
-	optionIDs := make([]api.Identifier, 0, len(options))
 	for _, option := range options {
-		optionIDs = append(optionIDs, api.Identifier{Type: TypePollOption, ID: option.ID})
-	}
-
-	voteIDs, err := p.voteIDs(e.App, poll.ID, "")
-	if err != nil {
-		return api.Resource{}, err
-	}
-
-	voteIdentifiers := make([]api.Identifier, 0, len(voteIDs))
-	for _, vote := range voteIDs {
-		voteIdentifiers = append(voteIdentifiers, api.Identifier{Type: TypePollVote, ID: vote.ID})
-	}
-
-	myVoteIDs, err := p.voteIDs(e.App, poll.ID, actorID)
-	if err != nil {
-		return api.Resource{}, err
-	}
-
-	myVoteIdentifiers := make([]api.Identifier, 0, len(myVoteIDs))
-	for _, vote := range myVoteIDs {
-		myVoteIdentifiers = append(myVoteIdentifiers, api.Identifier{Type: TypePollVote, ID: vote.ID})
-	}
-
-	attributes := map[string]any{
-		"question":           poll.Question,
-		"subtitle":           poll.Subtitle,
-		"hasEnded":           poll.hasEnded(nowString()),
-		"allowMultipleVotes": poll.Settings.AllowMultipleVotes,
-		"maxVotes":           poll.Settings.maxVotes(len(options)),
-		"endDate":            poll.EndDate,
-		"canVote":            canVote && !poll.hasEnded(nowString()),
-		"canEdit":            false,
-		"canDelete":          false,
-		"canSeeVoters":       canSeeVoters && canSeeCount,
-		"canChangeVote":      canChangeVote || poll.Settings.AllowChangeVote,
-		"isGlobal":           poll.PostID == "",
-		"publicPoll":         poll.Settings.PublicPoll,
-		"hideVotes":          poll.Settings.HideVotes,
-		"allowChangeVote":    poll.Settings.AllowChangeVote,
-		"voteCount":          poll.VoteCount,
-	}
-
-	// The count is omitted rather than sent as zero when it may not be
-	// seen: the frontend reads the ABSENCE of the attribute as "hidden",
-	// so a zero would read as "nobody has voted".
-	if !canSeeCount {
-		delete(attributes, "voteCount")
-	}
-
-	relationships := map[string]api.Relationship{
-		"options": {Data: optionIDs},
-		"votes":   {Data: voteIdentifiers},
-		"myVotes": {Data: myVoteIdentifiers},
-	}
-
-	if poll.PostID != "" {
-		relationships["post"] = api.Relationship{Data: api.Identifier{Type: api.TypePost, ID: poll.PostID}}
-	}
-	if poll.UserID != "" {
-		relationships["user"] = api.Relationship{Data: api.Identifier{Type: api.TypeUser, ID: poll.UserID}}
-	}
-
-	return api.Resource{
-		Type:          TypePoll,
-		ID:            poll.ID,
-		Attributes:    attributes,
-		Relationships: relationships,
-	}, nil
-}
-
-// optionResource renders an option as a JSON:API resource.
-func (p *Plugin) optionResource(e *core.RequestEvent, poll *pollRecord, option pollOptionRecord) api.Resource {
-	canSeeCount, err := p.canSeeVoteCount(e, poll, actorIDOf(e))
-	if err != nil {
-		canSeeCount = false
-	}
-
-	attributes := map[string]any{
-		"answer":    option.Answer,
-		"createdAt": "",
-		"updatedAt": "",
-	}
-
-	// The count is omitted when it may not be seen, for the same reason
-	// the poll's own count is.
-	if canSeeCount {
-		attributes["voteCount"] = option.VoteCount
-	}
-
-	return api.Resource{
-		Type:       TypePollOption,
-		ID:         option.ID,
-		Attributes: attributes,
-		Relationships: map[string]api.Relationship{
-			"poll": {Data: api.Identifier{Type: TypePoll, ID: poll.ID}},
-		},
-	}
-}
-
-// canSeeVoteCount reports whether the caller may see the counts.
-//
-// Upstream's `seeVoteCount` policy: the voter may always see the count
-// of a poll they have voted in, and so may the poll's author, and so
-// may anybody who may see the results without voting. A poll that hides
-// its votes keeps hiding them until it ends.
-func (p *Plugin) canSeeVoteCount(e *core.RequestEvent, poll *pollRecord, actorID string) (bool, error) {
-	// A poll that hides its votes keeps hiding them until it ends.
-	if poll.Settings.HideVotes && poll.EndDate != "" && !poll.hasEnded(nowString()) && poll.UserID != actorID {
-		return false, nil
-	}
-
-	if poll.Settings.PublicPoll {
-		return true, nil
-	}
-
-	if poll.UserID == actorID {
-		return true, nil
-	}
-
-	// The voter may see the count of a poll they have voted in.
-	if actorID != "" {
-		votes, err := votesByUser(e.App, p.physical[votesCollection], poll.ID, actorID)
+		rendered, err := p.renderPollOption(e.Request.Context(), &plugin.ResourceRequest{
+			App:       req.App,
+			ActorID:   req.ActorID,
+			ID:        option.ID,
+			IsAdmin:   req.IsAdmin,
+			Can:       req.Can,
+			CanScoped: req.CanScoped,
+		})
 		if err != nil {
-			return false, err
+			return nil, err
 		}
-		if len(votes) > 0 {
-			return true, nil
+		if rendered == nil {
+			continue
 		}
+		included = append(included, pluginResourceToAPI(*rendered))
 	}
 
-	allowed, err := api.Can(e, domain.PermissionSeePollVoteCount, api.TypePoll, poll.ID)
+	// The caller's own votes, and the option each names.
+	myVotes, err := p.myVoteIdentifiers(e.App, poll.ID, req.ActorID)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 
-	return allowed, nil
+	for _, vote := range myVotes {
+		rendered, err := p.renderPollVote(e.Request.Context(), &plugin.ResourceRequest{
+			App:       req.App,
+			ActorID:   req.ActorID,
+			ID:        vote.ID,
+			IsAdmin:   req.IsAdmin,
+			Can:       req.Can,
+			CanScoped: req.CanScoped,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if rendered == nil {
+			continue
+		}
+		included = append(included, pluginResourceToAPI(*rendered))
+	}
+
+	return included, nil
 }
 
-// actorIDOf returns the caller's id, or an empty string.
-func actorIDOf(e *core.RequestEvent) string {
-	actor, err := api.CurrentActor(e)
+// pollResource renders a poll as a JSON:API resource.
+//
+// **IT IS THE SAME BUILDER THE `included` WALK USES.** The plugin's own
+// route and the forum's `included` walk must answer with the SAME
+// shape, or the frontend sees two different polls: the one it fetched
+// by id and the one that arrived with the post.
+//
+// The resource serializer is the single implementation, and this is the
+// plugin-facing form of it.
+func (p *Plugin) pollResource(e *core.RequestEvent, poll *pollRecord) (api.Resource, error) {
+	req := p.resourceRequest(e)
+	req.ID = poll.ID
+
+	rendered, err := p.renderPoll(e.Request.Context(), req)
 	if err != nil {
-		return ""
+		return api.Resource{}, err
+	}
+	if rendered == nil {
+		return api.Resource{}, errPollGone
 	}
 
-	return actor.User.ID
+	return pluginResourceToAPI(*rendered), nil
+}
+
+// errPollGone reports that a poll is no longer there.
+var errPollGone = errors.New("polls: the poll does not exist")
+
+// pluginResourceToAPI converts a plugin resource into the API
+// package's own.
+//
+// The two packages are siblings, and the API package does not import
+// the plugin package — so the conversion happens here.
+func pluginResourceToAPI(rendered plugin.Resource) api.Resource {
+	relationships := map[string]api.Relationship{}
+	for name, relationship := range rendered.Relationships {
+		relationships[name] = api.Relationship{Data: relationship.Data}
+	}
+
+	return api.Resource{
+		Type:          rendered.Type,
+		ID:            rendered.ID,
+		Attributes:    rendered.Attributes,
+		Relationships: relationships,
+	}
 }
 
 // nowString returns the current time in the format the poll's end date

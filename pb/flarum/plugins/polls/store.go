@@ -140,6 +140,10 @@ type pollRecord struct {
 	Published bool
 	// VoteCount is the number of votes cast.
 	VoteCount int
+	// CreatedAt is when the poll was created.
+	CreatedAt string
+	// UpdatedAt is when the poll was last changed.
+	UpdatedAt string
 	// Settings are the poll's settings.
 	Settings pollSettings
 }
@@ -179,6 +183,8 @@ func decodePoll(record *core.Record) *pollRecord {
 		EndDate:   record.GetString("end_date"),
 		Published: record.GetBool("published"),
 		VoteCount: record.GetInt("vote_count"),
+		CreatedAt: record.GetString("created_at"),
+		UpdatedAt: record.GetString("updated_at"),
 		Settings:  decodeSettings(record.Get("settings")),
 	}
 
@@ -195,6 +201,26 @@ type pollOptionRecord struct {
 	Answer string
 	// VoteCount is the number of votes for the option.
 	VoteCount int
+	// CreatedAt is when the option was created.
+	CreatedAt string
+	// UpdatedAt is when the option was last changed.
+	UpdatedAt string
+}
+
+// pollVoteRecord is a vote row, decoded.
+type pollVoteRecord struct {
+	// ID is the vote's id.
+	ID string
+	// PollID is the poll the vote belongs to.
+	PollID string
+	// OptionID is the option the vote is for.
+	OptionID string
+	// UserID is the account that cast the vote.
+	UserID string
+	// CreatedAt is when the vote was cast.
+	CreatedAt string
+	// UpdatedAt is when the vote was last changed.
+	UpdatedAt string
 }
 
 // findOptions returns a poll's options, in creation order.
@@ -219,10 +245,56 @@ func findOptions(app core.App, physical, pollID string) ([]pollOptionRecord, err
 			PollID:    record.GetString("poll"),
 			Answer:    record.GetString("answer"),
 			VoteCount: record.GetInt("vote_count"),
+			CreatedAt: record.GetString("created_at"),
+			UpdatedAt: record.GetString("updated_at"),
 		})
 	}
 
 	return options, nil
+}
+
+// findOption reads a poll option by id.
+func findOption(app core.App, physical, optionID string) (*pollOptionRecord, error) {
+	collection, err := app.FindCollectionByNameOrId(physical)
+	if err != nil {
+		return nil, errors.Wrapf(err, "polls: the %q collection is missing", physical)
+	}
+
+	record, err := app.FindRecordById(collection, optionID)
+	if err != nil {
+		return nil, errors.Wrap(err, "polls: the poll option could not be read")
+	}
+
+	return &pollOptionRecord{
+		ID:        record.Id,
+		PollID:    record.GetString("poll"),
+		Answer:    record.GetString("answer"),
+		VoteCount: record.GetInt("vote_count"),
+		CreatedAt: record.GetString("created_at"),
+		UpdatedAt: record.GetString("updated_at"),
+	}, nil
+}
+
+// findVote reads a poll vote by id.
+func findVote(app core.App, physical, voteID string) (*pollVoteRecord, error) {
+	collection, err := app.FindCollectionByNameOrId(physical)
+	if err != nil {
+		return nil, errors.Wrapf(err, "polls: the %q collection is missing", physical)
+	}
+
+	record, err := app.FindRecordById(collection, voteID)
+	if err != nil {
+		return nil, errors.Wrap(err, "polls: the vote could not be read")
+	}
+
+	return &pollVoteRecord{
+		ID:        record.Id,
+		PollID:    record.GetString("poll"),
+		OptionID:  record.GetString("option"),
+		UserID:    record.GetString("user"),
+		CreatedAt: record.GetString("created_at"),
+		UpdatedAt: record.GetString("updated_at"),
+	}, nil
 }
 
 // votesByUser returns the votes an account holds on a poll.
@@ -430,6 +502,106 @@ func allVotes(app core.App, physical, pollID string) ([]*core.Record, error) {
 	return votes, nil
 }
 
+// allVoteIdentifiers returns every vote a poll holds, as identifiers.
+//
+// It is what the poll's `votes` relationship carries, and it is the
+// poll's own count — which is NOT filtered by voter: a voter who
+// picked three options has cast three votes, and upstream's
+// `refreshVoteCount` counts the vote rows.
+//
+// The caller may not see them: upstream's `votes` relationship is
+// `visible: can('seeVoters', $poll)`.
+func (p *Plugin) allVoteIdentifiers(app core.App, pollID string) ([]plugin.Identifier, error) {
+	collection, err := app.FindCollectionByNameOrId(p.physical[votesCollection])
+	if err != nil {
+		return nil, errors.Wrapf(err, "polls: the %q collection is missing", p.physical[votesCollection])
+	}
+
+	records, err := app.FindAllRecords(collection, nil)
+	if err != nil {
+		return nil, errors.Wrap(err, "polls: the votes could not be read")
+	}
+
+	ids := make([]plugin.Identifier, 0, len(records))
+	for _, record := range records {
+		if record.GetString("poll") != pollID {
+			continue
+		}
+		ids = append(ids, plugin.Identifier{Type: TypePollVote, ID: record.Id})
+	}
+
+	return ids, nil
+}
+
+// myVoteIdentifiers returns the votes ONE ACCOUNT holds on a poll.
+//
+// It is what the poll's `myVotes` relationship carries, and it is the
+// frontend's own selection: the checkbox reflects what the reader
+// picked, and the frontend reads it out of `poll.myVotes()`.
+//
+// **A GUEST HAS NO VOTES.** Upstream's `myVotes` matches nothing for an
+// anonymous caller, and an empty user id here means "this caller has
+// cast no votes" — NOT "every vote in the poll". A reader that treats
+// the empty id as "no filter" hands the guest every voter's vote
+// resource, which names the poll's voters in the response.
+func (p *Plugin) myVoteIdentifiers(app core.App, pollID, userID string) ([]plugin.Identifier, error) {
+	if userID == "" {
+		return []plugin.Identifier{}, nil
+	}
+
+	collection, err := app.FindCollectionByNameOrId(p.physical[votesCollection])
+	if err != nil {
+		return nil, errors.Wrapf(err, "polls: the %q collection is missing", p.physical[votesCollection])
+	}
+
+	records, err := app.FindAllRecords(collection, nil)
+	if err != nil {
+		return nil, errors.Wrap(err, "polls: the votes could not be read")
+	}
+
+	ids := make([]plugin.Identifier, 0, len(records))
+	for _, record := range records {
+		if record.GetString("poll") != pollID || record.GetString("user") != userID {
+			continue
+		}
+		ids = append(ids, plugin.Identifier{Type: TypePollVote, ID: record.Id})
+	}
+
+	return ids, nil
+}
+
+// voteDiscussionID returns the id of the discussion a poll hangs off.
+//
+// The poll is attached to a POST, and the post hangs off a discussion,
+// and upstream's vote permission is scoped to the DISCUSSION:
+//
+//	$can = $discussion ? $actor->can('polls.vote', $discussion) : false;
+//
+// The scope has to be the discussion, because upstream's key is
+// `discussion.polls.vote` and a RESTRICTED TAG's grant is a grant on
+// that discussion. A poll-scoped check makes the tag's grant
+// meaningless — the check never asks about the tag.
+//
+// A poll that hangs off no post has no discussion, and upstream's global
+// branch asks for the permission with no subject at all.
+func (p *Plugin) voteDiscussionID(app core.App, poll *pollRecord) (string, error) {
+	if poll.PostID == "" {
+		return "", nil
+	}
+
+	collection, err := app.FindCollectionByNameOrId(p.postsPhysical)
+	if err != nil {
+		return "", errors.Wrapf(err, "polls: the %q collection is missing", p.postsPhysical)
+	}
+
+	record, err := app.FindRecordById(collection, poll.PostID)
+	if err != nil {
+		return "", errors.Wrap(err, "polls: the poll's post could not be read")
+	}
+
+	return record.GetString("discussion"), nil
+}
+
 // pollIDs returns the ids of the polls attached to a post.
 func (p *Plugin) pollIDs(app core.App, postID string) ([]plugin.Identifier, error) {
 	collection, err := app.FindCollectionByNameOrId(p.physical[pollsCollection])
@@ -463,36 +635,6 @@ func (p *Plugin) optionIDs(app core.App, pollID string) ([]plugin.Identifier, er
 	ids := make([]plugin.Identifier, 0, len(options))
 	for _, option := range options {
 		ids = append(ids, plugin.Identifier{Type: TypePollOption, ID: option.ID})
-	}
-
-	return ids, nil
-}
-
-// voteIDs returns the ids of a poll's votes.
-//
-// An empty userID returns every vote, which is what the `votes`
-// relationship carries; a user's id returns only that user's votes,
-// which is what `myVotes` carries.
-func (p *Plugin) voteIDs(app core.App, pollID, userID string) ([]plugin.Identifier, error) {
-	collection, err := app.FindCollectionByNameOrId(p.physical[votesCollection])
-	if err != nil {
-		return nil, errors.Wrapf(err, "polls: the %q collection is missing", p.physical[votesCollection])
-	}
-
-	records, err := app.FindAllRecords(collection, nil)
-	if err != nil {
-		return nil, errors.Wrap(err, "polls: the votes could not be read")
-	}
-
-	ids := make([]plugin.Identifier, 0)
-	for _, record := range records {
-		if record.GetString("poll") != pollID {
-			continue
-		}
-		if userID != "" && record.GetString("user") != userID {
-			continue
-		}
-		ids = append(ids, plugin.Identifier{Type: TypePollVote, ID: record.Id})
 	}
 
 	return ids, nil

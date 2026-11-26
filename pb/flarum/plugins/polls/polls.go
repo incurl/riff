@@ -99,6 +99,19 @@ func New() *Plugin {
 // Manifest describes the plugin.
 func (p *Plugin) Manifest() plugin.Manifest { return p.manifest }
 
+// RepairVoteIndex replaces the votes collection's unique index with the
+// one the multi-vote poll needs.
+//
+// It is the plugin migration step's body, exported so the forum's tests
+// can drive it directly: the repair is what an instance that already
+// ran the old creation step relies on, and a test that cannot call it
+// cannot pin it.
+//
+// The step itself is idempotent, so calling it twice is harmless.
+func (p *Plugin) RepairVoteIndex(app core.App) error {
+	return repairVoteIndex(app, p.physical[votesCollection])
+}
+
 // Register declares the plugin's extenders.
 func (p *Plugin) Register(_ context.Context, ext *plugin.Extenders) error {
 	p.physical = map[string]string{
@@ -122,6 +135,20 @@ func (p *Plugin) Register(_ context.Context, ext *plugin.Extenders) error {
 		},
 	})
 
+	// The vote index repair is a SEPARATE step, and it is idempotent.
+	//
+	// The `create_polls` step has already been recorded on every
+	// existing instance, so it will not run again — and the wrong index
+	// (unique on (poll, user)) is what it created. A separate step runs
+	// on the next boot and replaces the index with the one the
+	// multi-vote poll needs: unique on (poll, option, user).
+	ext.AddMigration(plugin.Migration{
+		Name: "repair_vote_index",
+		Up: func(_ context.Context, app core.App) error {
+			return repairVoteIndex(app, p.physical[votesCollection])
+		},
+	})
+
 	// --- layer 2: the API -----------------------------------------------
 	// The poll hangs off the post, so the post carries the relationship
 	// the frontend reads.
@@ -133,6 +160,57 @@ func (p *Plugin) Register(_ context.Context, ext *plugin.Extenders) error {
 		Resolve: func(_ context.Context, req *plugin.RelationshipRequest) ([]plugin.Identifier, error) {
 			return p.pollIDs(req.App, req.RecordID)
 		},
+	})
+
+	// The post's poll arrives WITH its options and with the reader's own
+	// votes. Upstream declares it on the post's endpoint:
+	//
+	//	->addDefaultInclude([
+	//	    'polls', 'polls.options', 'polls.myVotes', 'polls.myVotes.option',
+	//	])
+	//
+	// and the same set on the discussion's `firstPost`. The chains are
+	// DOTTED, and the forum's `included` walk follows every hop.
+	ext.AddDefaultInclude(plugin.DefaultIncludeContributor{
+		Resource: api.TypePost,
+		Paths: []string{
+			"polls",
+			"polls.options",
+			"polls.myVotes",
+			"polls.myVotes.option",
+		},
+	})
+
+	// A poll carries its options and the reader's own votes, which is
+	// upstream's `defaultInclude(['options', 'myVotes', 'myVotes.option'])`
+	// on the poll's show endpoint. The plugin's own route builds that set
+	// itself (`writePoll`), and this declaration is what makes a poll
+	// reached as a PRIMARY through the forum's walk carry the same
+	// resources — one contract, two call sites.
+	ext.AddDefaultInclude(plugin.DefaultIncludeContributor{
+		Resource: TypePoll,
+		Paths: []string{
+			"options",
+			"myVotes",
+			"myVotes.option",
+		},
+	})
+
+	// The extension's OWN resource types. Without them the forum's
+	// `included` walk has no way to render a poll, and the frontend —
+	// which resolves a relation out of the STORE, and fills the store
+	// from `payload.included` — reads the poll as absent.
+	ext.AddResourceSerializer(plugin.ResourceSerializer{
+		Type:   TypePoll,
+		Render: p.renderPoll,
+	})
+	ext.AddResourceSerializer(plugin.ResourceSerializer{
+		Type:   TypePollOption,
+		Render: p.renderPollOption,
+	})
+	ext.AddResourceSerializer(plugin.ResourceSerializer{
+		Type:   TypePollVote,
+		Render: p.renderPollVote,
 	})
 
 	// The poll's own relationships.
@@ -151,7 +229,7 @@ func (p *Plugin) Register(_ context.Context, ext *plugin.Extenders) error {
 		Type:     TypePollVote,
 		Many:     true,
 		Resolve: func(_ context.Context, req *plugin.RelationshipRequest) ([]plugin.Identifier, error) {
-			return p.voteIDs(req.App, req.RecordID, "")
+			return p.allVoteIdentifiers(req.App, req.RecordID)
 		},
 	})
 	ext.AddRelationship(plugin.RelationshipContributor{
@@ -160,7 +238,10 @@ func (p *Plugin) Register(_ context.Context, ext *plugin.Extenders) error {
 		Type:     TypePollVote,
 		Many:     true,
 		Resolve: func(_ context.Context, req *plugin.RelationshipRequest) ([]plugin.Identifier, error) {
-			return p.voteIDs(req.App, req.RecordID, req.ActorID)
+			// A GUEST HAS NO VOTES. An empty actor id is "this caller has
+			// cast none", never "no filter" — the latter would name every
+			// voter in the poll to an unauthenticated reader.
+			return p.myVoteIdentifiers(req.App, req.RecordID, req.ActorID)
 		},
 	})
 	ext.AddRelationship(plugin.RelationshipContributor{
@@ -242,6 +323,11 @@ func (p *Plugin) Register(_ context.Context, ext *plugin.Extenders) error {
 		Forum:    "plugins/polls/forum.js",
 		Admin:    "plugins/polls/admin.js",
 		CSS:      "plugins/polls/style.css",
+		// The extension's own catalogue. Without it every `trans()` call
+		// in the poll renders the raw key — the UI shows
+		// "fof-polls.forum.poll_ended" instead of "This poll has
+		// ended."
+		Locale: "plugins/polls/forum-en.js",
 	})
 
 	return nil

@@ -1,0 +1,31 @@
+# The Polls extension's English catalogue.
+#
+# Upstream's namespace is `fof-polls:`, and this port keeps it: the
+# frontend's `trans()` calls name the same keys upstream's do, so a
+# reader comparing the two catalogues sees the same thing.
+#
+# Only the keys THIS PORT renders are carried. Upstream's catalogue also
+# holds the admin settings page, the polls directory, the poll groups
+# and the drafts workflow — surfaces this port does not have, and a key
+# for a surface that does not exist is a key nothing reads.
+fof-polls:
+  forum:
+    days_remaining: Poll ends {time}.
+    no_permission: You don't have permission to vote
+    poll_ended: This poll has ended.
+    public_poll: View voters
+    max_votes_allowed: 'Poll allows voting for {max, plural, one {# option} other {# options}}.'
+    polls_count: '{count, plural, one { {count} vote} other {{count} votes}}'
+    poll_never_ends: Poll never ends
+    answers: Answers
+    poll:
+      cannot_change_vote: You cannot change your vote after voting.
+      submit_button: Vote
+      total_votes: '{count, plural, one {# vote was given} other {# votes were given}}'
+    votes_modal:
+      title: Voters
+    modal:
+      no_voters: No Votes
+    tooltip:
+      badge: Poll
+      votes: '{count, plural, one {# vote} other {# votes}}'
