@@ -213,6 +213,17 @@ func updateTag(app core.App, physical, tagID string, tag *domain.Tag) (*domain.T
 // permission rows go too — upstream deletes them on delete, because a
 // scoped row for a tag that no longer exists is dead weight that
 // reappears if the id is ever reused.
+//
+// Its CHILDREN are UNPLACED first, which is the one thing a database would
+// otherwise do for this port: `parent` is a TEXT column rather than a
+// PocketBase relation (see `createTagsCollection` — a relation cannot name
+// the collection that is being created in the same `Save`), so nothing
+// nulls the children's parent for us the way `RelationField`'s cleanup does
+// on delete. Left alone, a deleted primary tag's children keep a parent id
+// that resolves to nothing, and the admin page draws the tree by filtering
+// the store on `parent()` — so a child of a deleted tag belongs to no
+// parent AND is excluded from the root list, and it vanishes from the page
+// while still being a tag with discussions.
 func deleteTag(app core.App, physical, tagID string) error {
 	collection, err := app.FindCollectionByNameOrId(physical)
 	if err != nil {
@@ -224,12 +235,42 @@ func deleteTag(app core.App, physical, tagID string) error {
 		return errors.Wrap(errNotFound, "tags: the tag does not exist")
 	}
 
+	if err := detachTagChildren(app, collection, tagID); err != nil {
+		return err
+	}
+
 	if err := deleteTagLinks(app, tagID); err != nil {
 		return err
 	}
 
 	if err := app.Delete(record); err != nil {
 		return errors.Wrap(err, "tags: the tag could not be deleted")
+	}
+
+	return nil
+}
+
+// detachTagChildren makes a tag's children UNPLACED.
+//
+// "Unplaced" is the state `setTagOrder`'s reset writes and the admin page
+// reads: no parent, no position, not primary. A child detached this way is
+// listed under "Secondary tags" and can be placed under another primary tag
+// by a drag, which is the same state a tag dragged out of the tree lands in.
+func detachTagChildren(app core.App, collection *core.Collection, tagID string) error {
+	children, err := app.FindRecordsByFilter(collection, "parent = {:parent}", "", 0, 0,
+		map[string]any{"parent": tagID})
+	if err != nil {
+		return errors.Wrap(err, "tags: the child tags could not be read")
+	}
+
+	for _, child := range children {
+		child.Set("parent", "")
+		child.Set("is_primary", false)
+		child.Set("position", nil)
+
+		if err := app.Save(child); err != nil {
+			return errors.Wrap(err, "tags: the child tag could not be unplaced")
+		}
 	}
 
 	return nil

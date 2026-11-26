@@ -280,6 +280,53 @@ func TestTags_TheParentAlsoArrivesAsAnAttribute(t *testing.T) {
 	require.Equal(t, true, attributes["isChild"])
 }
 
+// TestTags_DeletingAPrimaryTagUnplacesItsChildren pins what a delete does to
+// the tree.
+//
+// `forum_tags.parent` is a TEXT column, not a PocketBase relation, so the
+// database does not clear a deleted tag's children the way a `RelationField`
+// does on delete (a relation cannot name the collection that is being created
+// in the same `Save`, which is why the column is text — see
+// `createTagsCollection`). Nothing else did either: the children kept a parent
+// id that resolved to nothing, and since the admin page draws the tree by
+// filtering the store on `parent()`, they belonged to NO parent and were
+// excluded from the root list too — present in the store, invisible on the
+// page, and still tags with discussions attached.
+//
+// The delete now UNPLACES them, which is the state `setTagOrder`'s reset
+// writes: no parent, no position, not primary. That puts them in the page's
+// "Secondary tags" list, where a drag can place them again.
+func TestTags_DeletingAPrimaryTagUnplacesItsChildren(t *testing.T) {
+	app, handler := newTestForum(t)
+
+	admin := testSuperuser(t, app)
+	cookies := sessionCookies(admin[0].Value, admin[1].Value)
+	csrf := admin[1].Value
+
+	recorder := createTagForTest(t, handler, cookies, csrf,
+		`{"data":{"type":"tags","attributes":{"name":"News","slug":"news","isPrimary":true}}}`)
+	require.Equal(t, http.StatusCreated, recorder.Code, recorder.Body.String())
+	primaryID := resourceIDOf(t, recorder)
+
+	recorder = createTagForTest(t, handler, cookies, csrf,
+		`{"data":{"type":"tags","attributes":{"name":"Updates","slug":"updates","parent":"`+primaryID+`"}}}`)
+	require.Equal(t, http.StatusCreated, recorder.Code, recorder.Body.String())
+	childID := resourceIDOf(t, recorder)
+
+	recorder = doWithHeaders(t, handler, http.MethodDelete, "/forum/api/tags/"+primaryID, "", cookies,
+		map[string]string{"X-CSRF-Token": csrf})
+	require.Equal(t, http.StatusNoContent, recorder.Code, recorder.Body.String())
+
+	recorder = doWithHeaders(t, handler, http.MethodGet, "/forum/api/tags/"+childID, "", cookies, nil)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	attributes, relationships := tagDocument(t, recorder)
+	require.Equal(t, "", tagParentID(t, relationships), "a deleted parent must not leave a dangling id behind")
+	require.Equal(t, false, attributes["isChild"])
+	require.Equal(t, false, attributes["isPrimary"])
+	require.Nil(t, attributes["position"], "an unplaced tag has no position, so the page lists it as secondary")
+}
+
 // TestTags_AChildMovesBetweenParents pins the PATCH that re-parents a tag.
 func TestTags_AChildMovesBetweenParents(t *testing.T) {
 	app, handler := newTestForum(t)

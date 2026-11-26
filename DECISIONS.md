@@ -5,6 +5,46 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## `forum_tags.parent` IS TEXT BECAUSE A RELATION CANNOT NAME THE COLLECTION THAT CREATES IT (2026-11-26)
+
+Asked whether the column had to be a text id because PocketBase cannot
+self-reference: it can, but not in the one `Save` this port creates a
+collection with, and that is the whole of the constraint. Measured on the
+pinned PocketBase:
+
+| Attempt | Result |
+| --- | --- |
+| new collection + `RelationField{CollectionId: <its own id>}` in ONE `Save` | `fields: (2: (collectionId: The relation collection doesn't exist..).)` |
+| create the collection, then add the same field and `Save` again | ok |
+| relation naming a record that does not exist | `parent: Failed to find all relation records with the provided ids.` |
+| relation naming the record ITSELF | accepted — a relation cannot express "no cycles" |
+| deleting the target record | child's relation becomes `""` |
+
+So the port's `createTagsCollection` shape (idempotent, one `app.Save`) rules
+the one-shot out, and the invariants that actually matter for a tag tree —
+the parent must be a ROOT, a tag cannot be its own parent, `parent`,
+`position` and `is_primary` must agree — are POLICY, which `resolveTagParent`
+enforces and which no `RelationField` option expresses. A relation would buy
+exactly one thing: the database's existence check and its delete cleanup. The
+existence half is already covered (`findTag` in the same function), so text
+kept one validation path instead of two that can drift.
+
+**The delete cleanup was the half that was NOT covered, and it was a bug.** A
+deleted primary tag left its children holding a parent id that resolved to
+nothing; the admin page draws the tree by filtering the store on `parent()`,
+so those children belonged to no parent AND were excluded from the root list —
+gone from the page while still being tags with discussions attached. The port
+now unplaces them itself (`plugins/tags/store.go::detachTagChildren`: parent
+cleared, position null, not primary), which is the state `setTagOrder`'s reset
+writes and the reason they reappear under "Secondary tags", draggable again.
+`TestTags_DeletingAPrimaryTagUnplacesItsChildren` pins it; removing the call
+turns the test red on the dangling-id assertion.
+
+A future migration that wants the real relation has to (a) create the field in
+a second `Save`, (b) backfill nothing (the values already are ids), and (c)
+decide what a dangling id means — which is the same question `detachTagChildren`
+answers today. Nothing needs it yet.
+
 ## A TAG SELECTION NEEDS A BUTTON, AND AN INCLUDED RESOURCE MUST NOT LIE (2026-11-26)
 
 "Composer tag selection does not stick" was two independent faults that

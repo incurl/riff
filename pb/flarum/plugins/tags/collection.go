@@ -35,6 +35,29 @@ func createTagsCollection(app core.App, physical string) error {
 		Name: "description",
 		Max:  700,
 	})
+	// `parent` is a TEXT id, not a RelationField, and the reason is narrower
+	// than "PocketBase cannot self-reference" — it can, just not here:
+	//
+	//   - a RelationField's `CollectionId` is validated against the
+	//     database when the collection is SAVED, so a collection that is
+	//     being created cannot name ITSELF. Measured: the one-shot create
+	//     fails with `fields: (2: (collectionId: The relation collection
+	//     doesn't exist..).).`, while create-then-add-the-field works;
+	//   - this collection is created by one idempotent `app.Save` (below),
+	//     and turning the column into a relation on an EXISTING instance
+	//     would be a second schema migration over live rows;
+	//   - the invariants that actually matter are POLICY, not existence:
+	//     the parent must be a ROOT tag, a tag cannot be its own parent,
+	//     and `parent`/`position`/`is_primary` must agree. `resolveTagParent`
+	//     enforces all three; a relation would only cover "the id exists"
+	//     (measured: PocketBase accepts a self-parent).
+	//
+	// The cost is that the database does not clean up after a DELETE, which
+	// is what a relation's `RelationField` does for free (measured: deleting
+	// a parent nulls the child's relation). That half is paid in Go —
+	// `detachTagChildren` unplaces a deleted tag's children, because a
+	// dangling parent makes a child belong to no parent AND keep out of the
+	// root list, so the admin page would hide it while it still exists.
 	collection.Fields.Add(&core.TextField{
 		Name: "parent",
 		Max:  15,
