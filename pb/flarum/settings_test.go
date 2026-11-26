@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/incurl/riff/pb/flarum/api"
 )
 
 // The theme settings live on the FORUM DOCUMENT.
@@ -146,6 +148,76 @@ func TestForum_TheAdminPayloadCarriesTheSavedAppearanceSettings(t *testing.T) {
 	settings := adminSettingsOf(t, shell.Body.String())
 	require.Equal(t, "dark", settings["color_scheme"],
 		"the admin payload must carry the saved colour scheme")
+}
+
+// TestForum_TheForumTitleIsASetting pins the ONE thing an administrator
+// notices first: renaming the forum.
+//
+// The title is the `forum_title` setting, written by the admin's Basics
+// page, and it has to reach THREE places or the control is a control that
+// changes nothing:
+//
+//   - the forum document's `title`, which the frontend reads as
+//     `app.forum.attribute('title')` for `document.title` and for every
+//     translation that takes a `{forumName}` parameter;
+//   - the boot shell's `<title>` and header home-link, which the server
+//     renders BEFORE the app boots;
+//   - the admin payload, so the form keeps showing what was saved.
+//
+// The document and the shell used to hardcode "Forum" in two separate
+// places, so the setting was saved, shown back in the form, and never
+// read.
+func TestForum_TheForumTitleIsASetting(t *testing.T) {
+	app, handler := newTestForum(t)
+
+	admin := testSuperuser(t, app)
+	cookies := sessionCookies(admin[0].Value, admin[1].Value)
+
+	recorder := do(t, handler, http.MethodPost, "/forum/api/settings",
+		`{"forum_title":"The Renamed Forum"}`, cookies)
+	require.Equal(t, http.StatusNoContent, recorder.Code, recorder.Body.String())
+
+	// The forum document carries it.
+	document := do(t, handler, http.MethodGet, "/forum/api", "", cookies)
+	require.Equal(t, http.StatusOK, document.Code, document.Body.String())
+
+	attributes := forumAttributesOf(t, document.Body.String())
+	require.Equal(t, "The Renamed Forum", attributes["title"],
+		"the forum document must carry the forum title: %s", document.Body.String())
+
+	// The server-rendered shell carries it, in the tab and in the header.
+	shell := do(t, handler, http.MethodGet, "/forum/", "", cookies)
+	require.Equal(t, http.StatusOK, shell.Code, shell.Body.String())
+	require.Contains(t, shell.Body.String(), "<title>The Renamed Forum</title>",
+		"the boot shell must render the forum title")
+	require.Contains(t, shell.Body.String(), `href="/forum/" id="home-link">The Renamed Forum</a>`,
+		"the header link must carry the forum title AND point at the forum's own root")
+
+	// The admin form shows what was saved.
+	adminShell := do(t, handler, http.MethodGet, "/forum/admin", "", cookies)
+	require.Equal(t, http.StatusOK, adminShell.Code, adminShell.Body.String())
+	require.Equal(t, "The Renamed Forum", adminSettingsOf(t, adminShell.Body.String())["forum_title"])
+}
+
+// TestForum_TheForumTitleHasADefault pins the fallback.
+//
+// A fresh instance has no stored settings, and an empty `<title>` is worse
+// than a generic one: the shell renders server-side, before anything can
+// correct it. The document and the shell must agree on the default, which
+// is what api.DefaultForumTitle is for.
+func TestForum_TheForumTitleHasADefault(t *testing.T) {
+	app, handler := newTestForum(t)
+
+	admin := testSuperuser(t, app)
+	cookies := sessionCookies(admin[0].Value, admin[1].Value)
+
+	document := do(t, handler, http.MethodGet, "/forum/api", "", cookies)
+	require.Equal(t, http.StatusOK, document.Code, document.Body.String())
+	require.Equal(t, api.DefaultForumTitle, forumAttributesOf(t, document.Body.String())["title"])
+
+	shell := do(t, handler, http.MethodGet, "/forum/", "", cookies)
+	require.Equal(t, http.StatusOK, shell.Code, shell.Body.String())
+	require.Contains(t, shell.Body.String(), "<title>"+api.DefaultForumTitle+"</title>")
 }
 
 // adminSettingsOf reads the admin payload's settings map.

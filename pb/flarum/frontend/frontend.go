@@ -429,8 +429,35 @@ var shellTemplate = template.Must(template.New("shell").Parse(`<!doctype html>
 </html>
 `))
 
+// ShellMeta is what the boot shell renders that the payload does not
+// carry: the document title and the module's mount path.
+//
+// Both are read off the forum document the payload embeds, and both are
+// rendered BEFORE the app boots — so a hardcoded value in either place is
+// a shell that disagrees with the app it is starting.
+type ShellMeta struct {
+	// Title is the `<title>` and the header's home-link text.
+	//
+	// It is the `forum_title` SETTING, not a constant: an administrator
+	// renames the forum in the admin's Basics page, and the shell is
+	// what the browser shows first.
+	Title string
+	// BasePath is the module's mount path (`/forum`), used for the
+	// home-link's href.
+	//
+	// It is NOT empty for this deployment style: the forum is always a
+	// riff mount point, so a link to "/" leaves the forum for whatever
+	// the host serves at its root (the static site, in the /memos/
+	// layouts).
+	BasePath string
+}
+
 // Render renders the boot shell.
-func Render(payload BootPayload, scripts, styles []string, revisions map[string]string, admin bool) ([]byte, error) {
+//
+// The meta is rendered VERBATIM; the caller is responsible for passing a
+// non-empty title (the document always carries one, because it falls back
+// to api.DefaultForumTitle) and a BasePath that matches the mount.
+func Render(payload BootPayload, scripts, styles []string, revisions map[string]string, meta ShellMeta, admin bool) ([]byte, error) {
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return nil, errors.Wrap(err, "forum: could not encode the boot payload")
@@ -441,8 +468,8 @@ func Render(payload BootPayload, scripts, styles []string, revisions map[string]
 	}
 
 	data := shellData{
-		Title:     "Forum",
-		BasePath:  "",
+		Title:     meta.Title,
+		BasePath:  strings.TrimSuffix(meta.BasePath, "/"),
 		Payload:   template.JS(encoded),
 		Revisions: template.JS(revisionJSON),
 		Scripts:   scripts,

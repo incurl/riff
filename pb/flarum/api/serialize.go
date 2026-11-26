@@ -42,6 +42,18 @@ const (
 	TypePollVote = "poll_votes"
 )
 
+// DefaultForumTitle is the title the forum shows until an administrator
+// sets one.
+//
+// The admin's Basics page writes the `forum_title` setting; the forum
+// document serves it as `title`, the boot shell renders it as the
+// `<title>` and the header link, and the admin payload shows it in the
+// form. This constant is only the FALLBACK, but it has to be ONE value:
+// the shell is rendered on the server before the app boots, so a shell
+// that fell back to a different default than the document would show one
+// name for a frame and another afterwards.
+const DefaultForumTitle = "Forum"
+
 // timestamp renders a time as the RFC 3339 string JSON:API expects.
 //
 // The frontend's Model.transformDate parses it with new Date(), so the

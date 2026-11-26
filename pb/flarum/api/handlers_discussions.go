@@ -660,13 +660,23 @@ func (s *Server) ForumDocument(e *core.RequestEvent) (Resource, error) {
 	// The settings that could not be read are simply absent: the forum
 	// document then carries upstream's defaults, which is better than a
 	// blank document.
+	//
+	// **THE TITLE IS A SETTING TOO.** The admin's Basics page writes
+	// `forum_title`, and the frontend reads it back here as
+	// `app.forum.attribute('title')` — it is the `document.title`, the
+	// header's home-link text and the `{forumName}` parameter of every
+	// translation that takes one. It used to be the literal "Forum", so
+	// an administrator could save a name, watch the admin form keep it,
+	// and the forum went on showing the old one: a control that changes
+	// nothing, which is the failure this file's settings are most prone
+	// to.
 	settings, err := s.repo.AllSettings()
 	if err != nil {
 		settings = map[string]any{}
 	}
 
 	attributes := map[string]any{
-		"title":                   "Forum",
+		"title":                   settingTextOr(settings, "forum_title", DefaultForumTitle),
 		"description":             "",
 		"baseUrl":                 s.basePath,
 		"basePath":                s.basePath,

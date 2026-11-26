@@ -378,10 +378,53 @@ func (m *Module) RenderBootShell(e *core.RequestEvent, admin bool) ([]byte, erro
 	scripts := m.scriptURLs(admin)
 	styles := m.styleURLs(admin)
 
+	// The shell's `<title>`, its header home-link text and that link's
+	// href. Both values live on the forum document the payload already
+	// carries — the title is the `forum_title` setting and the path is
+	// the base path the document advertises — so what the server renders
+	// cannot drift from what the app shows a frame later.
 	return frontend.Render(payload, scripts, styles, map[string]string{
 		"forum.js": m.assets.Revision(),
 		"admin.js": m.assets.Revision(),
-	}, admin)
+	}, shellMetaOf(payload, m.opts.BasePath), admin)
+}
+
+// shellMetaOf reads the shell's title and mount path out of the boot
+// payload.
+//
+// The payload's forum document is the only place either value exists on
+// this side: the title is a SETTING there (`forum_title`), and the base
+// path is the module's mount. Reading them back rather than recomputing
+// them keeps the shell and the embedded document in step by
+// construction — one lookup, one answer.
+//
+// The fallbacks are for a payload that carries no forum document at all,
+// which cannot happen through RenderBootShell (the document is its first
+// resource): the shell still has to render something, and rendering the
+// caller's mount rather than "/" keeps the header link inside the forum.
+func shellMetaOf(payload frontend.BootPayload, fallbackBasePath string) frontend.ShellMeta {
+	meta := frontend.ShellMeta{
+		Title:    api.DefaultForumTitle,
+		BasePath: fallbackBasePath,
+	}
+
+	for _, resource := range payload.Resources {
+		document, ok := resource.(api.Resource)
+		if !ok || document.Type != api.TypeForum {
+			continue
+		}
+
+		if title, ok := document.Attributes["title"].(string); ok && strings.TrimSpace(title) != "" {
+			meta.Title = title
+		}
+		if basePath, ok := document.Attributes["basePath"].(string); ok && strings.TrimSpace(basePath) != "" {
+			meta.BasePath = basePath
+		}
+
+		break
+	}
+
+	return meta
 }
 
 // scriptURLs returns the script URLs to load, in order.
@@ -676,7 +719,7 @@ func (m *Module) adminSettings() map[string]any {
 		"fontawesome_cdn_url":            "",
 		"fontawesome_kit_url":            "",
 		"forum_description":              "",
-		"forum_title":                    "Forum",
+		"forum_title":                    api.DefaultForumTitle,
 		"mail_driver":                    "mail",
 		"mail_format":                    "multipart",
 		"mail_from":                      "noreply@localhost",
