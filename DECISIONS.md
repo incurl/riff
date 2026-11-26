@@ -5,6 +5,63 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## THE DEFAULT LANGUAGE IS A SETTING, AND THE RESOLVER IS UPSTREAM'S (2026-11-26)
+
+Changing the forum's **Default language** in the admin did nothing. The setting
+saved (`default_locale`), the Basics page kept showing it, and the forum went on
+rendering whatever `RIFF_FORUM_LOCALE` said at boot — because that is the only
+input `Module.activeLocale` read. Two more halves of the same feature were
+hardcoded: the forum document served `showLanguageSelector: false`, so the
+header's language dropdown never rendered even with a second catalogue
+installed, and `show_language_selector` was not in the admin payload at all.
+
+The resolver is now upstream's, in upstream's ORDER
+(`framework/core/src/Http/Middleware/SetLocale.php`):
+
+1. the signed-in caller's `locale` PREFERENCE — the dropdown posts it with
+   `savePreferences({ locale })`, which lands in the account's profile
+   preferences;
+2. a guest's `locale` COOKIE — the dropdown writes `locale=…; path=/` and
+   reloads, and the name is upstream's, so a cookie from either frontend is
+   honoured;
+3. the `default_locale` SETTING;
+4. `RIFF_FORUM_LOCALE`, the deployment-level fallback;
+5. `en`.
+
+Each candidate is validated against the catalogues the instance can actually
+load, so a preference naming a pack that was never staged falls THROUGH to the
+next rung instead of rendering raw translation keys.
+
+**The setting is read through the MODULE's repository, not
+`api.SettingValue`.** That helper resolves the API server from the request
+context, and the shell route is registered by the module rather than through
+`api.Mount`, so no server travels with its request: `api.SettingValue` returned
+the fallback and every locale test failed with `en`. `Module.settingText` reads
+`m.repo` directly, which is the same table the document already reads — the
+first draft of this fix is why the note is here, and why the shell's other
+readers should use the module, not the request.
+
+**`showLanguageSelector` is served from `show_language_selector`**, whose
+upstream default is ON (`ForumResource`: `->get(fn () => $this->settings->get(
+'show_language_selector', true))`). The header's dropdown needs BOTH that flag
+and more than one available locale, so an English-only instance shows nothing
+either way — which is why hardcoding `false` looked harmless and was not.
+
+**The French pack is imported** (`pb/flarum/plugins/french/`), the second locale
+plugin after Chinese: a vendored MIT catalogue from `flarum-lang/french`
+(`master`, commit `b36648e159…`), thirteen `locale/*.yml` files covering the core
+and the extensions this port serves, compiled by the same shared
+`locale-compile.cjs` into `forum-fr.js`/`admin-fr.js` and staged by
+`scripts/build_flarum_spa.sh`. It is registered by default, because a pack
+nobody registers is a language the selector cannot offer. The selector now
+lists English, 简体中文 and Français.
+
+Verified by `TestLocale_`: the setting decides the served catalogue, a caller's
+preference beats the setting, an unavailable preference falls through, a guest's
+cookie decides, the flag follows its setting, the French bundles serve and carry
+French text with their `=>` references resolved, and the advertised locale set
+is exactly the three imported ones.
+
 ## UPLOADS, ALIGNED WITH UPSTREAM (2026-11-26)
 
 `pb/flarum/plugins/uploads/` was a working but NARROW port of `fof/upload`: one
