@@ -944,6 +944,16 @@ func (s *Server) canTagDiscussionAs(ctx context.Context, actor session.Actor, di
 // The name is upstream's.
 const AllowTagChangeSetting = "allow_tag_change"
 
+// SettingPinStickyToTop is the setting that governs whether a pinned
+// discussion floats to the top of the All Discussions page.
+//
+// The name is upstream's (`flarum-sticky.pin_sticky_on_all_discussions`),
+// and its default is ON. It is defined HERE because the LIST handler reads
+// it (`stickyPinned`), and the sticky plugin declares it with the same
+// constant — the same arrangement as `AllowTagChangeSetting`, whose reader
+// also lives in this package.
+const SettingPinStickyToTop = "flarum-sticky.pin_sticky_on_all_discussions"
+
 // SettingString reads a setting's value as a string.
 //
 // The settings column is a PocketBase JSONField, so the value comes

@@ -607,6 +607,14 @@ type DiscussionFilter struct {
 	// asked for. A tag page must keep it off, or the tag's own page goes blank
 	// as soon as an operator hides the tag.
 	ExcludeHiddenTags bool
+	// PinSticky puts pinned discussions at the top of the listing.
+	//
+	// It is upstream's `PinStickiedDiscussionsToTop`, and the DECISION to pin
+	// is the caller's: only the default sort, a tag page or the (setting-gated)
+	// all-discussions page pins, and that read belongs in the handler where the
+	// settings and the query parameters live. The repository only knows how to
+	// prepend the order.
+	PinSticky bool
 	// Sort is the ordering the caller asked for.
 	//
 	// It is upstream's sort name, with a leading "-" for a descending
@@ -645,7 +653,14 @@ func discussionOrderBy(sort string) string {
 	case "commentCount":
 		return "comment_count " + direction
 	case "createdAt":
-		return "created " + direction
+		// `created_at`, not `created`: the forum-owned collections stamp
+		// the former (PocketBase's own `created`/`updated` names belong to
+		// its system collections, like the shared `users` one). Ordering by
+		// a column that does not exist answers 500, and `createdAt` is the
+		// "Newest"/"Oldest" sort the index page sends
+		// (`map.newest = '-createdAt'`), so this was a broken sort rather
+		// than a bad request.
+		return "created_at " + direction
 	case "title":
 		return "title " + direction
 	default:
@@ -736,7 +751,25 @@ func (r *Repository) ListDiscussions(filter DiscussionFilter, limit, offset int)
 	for _, expression := range extra {
 		query = query.AndWhere(expression)
 	}
-	query = query.OrderBy(discussionOrderBy(filter.Sort)).Limit(int64(limit)).Offset(int64(offset))
+	// A pinned discussion comes FIRST, whatever the rest of the order says —
+	// upstream prepends `is_sticky desc` to the query (its
+	// `PinStickiedDiscussionsToTop::pinStickiedToTop`).
+	//
+	// The two orders go into ONE `OrderBy` call: dbx's `OrderBy` REPLACES the
+	// clause (`AndOrderBy` is the one that appends), so a second call would
+	// silently drop the pin — which is exactly what it did, and why pinning
+	// looked implemented and did nothing.
+	//
+	// The column is the sticky plugin's, so it is ordered on only when the
+	// collection carries it: the CORE must not 500 on a database whose sticky
+	// migration never ran.
+	orders := make([]string, 0, 2)
+	if filter.PinSticky && collection.Fields.GetByName("is_sticky") != nil {
+		orders = append(orders, "is_sticky DESC")
+	}
+	orders = append(orders, discussionOrderBy(filter.Sort))
+
+	query = query.OrderBy(orders...).Limit(int64(limit)).Offset(int64(offset))
 	var records []*core.Record
 	if err := query.All(&records); err != nil {
 		return nil, 0, err

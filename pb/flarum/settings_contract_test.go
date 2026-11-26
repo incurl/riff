@@ -113,6 +113,10 @@ func TestForum_ThePluginSettingsAreTheOnesTheServerReads(t *testing.T) {
 		// (`plugins/uploads/handlers.go`), which caps the effective size
 		// at the collection's own field maximum.
 		uploads.SettingMaxFileSize: true,
+		// The sticky plugin's switch is read by `stickyPinned`
+		// (`api/handlers_discussions.go`), which decides whether a listing
+		// puts pinned discussions first.
+		api.SettingPinStickyToTop: true,
 	}
 
 	for _, schema := range module.PluginSettingSchemas() {

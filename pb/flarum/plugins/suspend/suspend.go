@@ -135,6 +135,22 @@ func (*Plugin) Register(_ context.Context, ext *plugin.Extenders) error {
 		},
 	})
 
+	// The FORUM document carries whether the caller may suspend ANYBODY.
+	//
+	// Upstream serves it on `ForumResource` (`canSuspendUsers`, from
+	// `$actor->hasPermission('user.suspend')`), and it is a different question
+	// from the per-user `canSuspend` above: that one is "may this caller
+	// suspend THIS account" (it also excludes self-suspension and a
+	// higher-ranked actor), while this one is "may this caller suspend at
+	// all", which is what a user-list control branches on.
+	ext.AddAttribute(plugin.AttributeContributor{
+		Resource: api.TypeForum,
+		Name:     "canSuspendUsers",
+		Value: func(_ context.Context, req *plugin.AttributeRequest) (any, error) {
+			return req.Can(domain.PermissionSuspendUser, api.TypeForum, "1"), nil
+		},
+	})
+
 	ext.AddRoute(plugin.RouteDef{
 		Method:  "POST",
 		Path:    "/api/users/{id}/suspend",

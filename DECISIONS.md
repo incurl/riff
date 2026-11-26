@@ -5,6 +5,75 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## STICKY, LOCK AND SUSPEND, ALIGNED WITH UPSTREAM (2026-11-26)
+
+The three moderation plugins had their ATTRIBUTES and their ROUTES and were
+missing what makes a moderation tool noticeable.
+
+**Pinning a discussion did nothing to the list.** `is_sticky` was a badge:
+the discussion kept its place in date order, so a reader looking for the pinned
+announcement found it wherever it fell. Upstream's
+`PinStickiedDiscussionsToTop` prepends `is_sticky desc` to the query, and the
+port now does the same from `ListDiscussions` — but only where upstream pins:
+on the DEFAULT sort (a "top" or "newest" listing asks a different question),
+ALWAYS on a tag page (a place rather than a ranking), and on the All Discussions
+page only while `flarum-sticky.pin_sticky_on_all_discussions` is on. That
+setting's key is `api.SettingPinStickyToTop` rather than a plugin constant,
+because the LIST handler is what reads it (`api.stickyPinned`) — the same
+arrangement as `allow_tag_change`.
+
+The first attempt looked implemented and did nothing, for a reason worth
+keeping: **dbx's `OrderBy` REPLACES the ORDER BY clause** and only `AndOrderBy`
+appends, so `query.OrderBy("is_sticky DESC").OrderBy(orderBy)` kept only the
+second call. Both orders go into ONE `OrderBy` call now, and the comment at the
+join says why. The test caught it because it asserts the pinned discussion is
+FIRST, not that a flag is set.
+
+**Two of the three sticky settings are NOT declared.** `enable_display_excerpt`
+needs the `firstPostExcerpt` attribute (the excerpt rendered under a pinned row,
+not ported) and `only_sticky_unread_discussions` needs a per-user
+`last_read_post_number` — this port keeps no read-state table, so a pinned
+discussion is pinned whether or not the reader has opened it. Neither switch is
+declared, because a control nothing honours is worse than an absent one; the
+one that IS declared is read.
+
+**`canSuspendUsers` is on the forum document.** Upstream serves it from
+`$actor->hasPermission('user.suspend')`, and it is a different question from the
+per-user `canSuspend`: that one is "may this caller suspend THIS account" (it
+also excludes self-suspension), this one is "may this caller suspend at all",
+which is what a user-list control branches on.
+
+LOCK needed no change: a locked discussion still accepts a reply from whoever may
+lock it (upstream's `DiscussionPolicy::reply()`), and the reply path and the
+`canReply` attribute already asked the same question.
+
+**AND EVERY PLUGIN `can*` FLAG READ FALSE FOR THE INSTANCE OPERATOR.** Following
+`canSuspendUsers` to its source turned up the reason it answered false for a
+superuser while `canStartDiscussion` answered true: `Module.pluginActor`
+resolved the actor through the `users` COLLECTION, and a PocketBase superuser is
+not a record there. So every plugin-contributed flag — `canLock`, `canSticky`,
+`canSuspend`, `canTag`, `canLike`, `fof-upload.canUpload` — answered false for
+the instance's own operator while the endpoints accepted all of those writes.
+The UI draws its controls from the flags, so an administrator was shown a forum
+with the moderation controls missing and no error anywhere. The lookup now falls
+back to the `_superusers` collection, which is what `session.userFromRecord`
+already did, so the flag and the endpoint ask the same actor the same question.
+The test asserts the flag, the route AND the resulting state together: a flag
+that says "no" is not a failed write, it is a control that never appears.
+
+**Not ported**, and each for a reason rather than for time: the event posts the
+two extensions write into the stream (`discussionLocked`, `discussionStickied`,
+whose upstream components do not exist in this port's bundles — writing a post
+the UI renders as raw content is worse than not writing it), the
+`discussionLocked`/`userSuspended`/`userUnsuspended` notifications (the port's
+notification framework has no blueprint for them and no email template), and the
+`filter[locked]`/`filter[sticky]`/`filter[suspended]` search filters.
+
+Verified live and by test: three discussions with the OLDEST pinned list as
+`[Announcement, …]`; the setting off restores date order; a tag page still pins
+with the setting off; `canSuspendUsers` is false for a member and true for a
+moderator.
+
 ## THE TAG HIERARCHY IS TWO NULLABLE COLUMNS, AND ALL THREE HALVES WERE WRONG (2026-11-26)
 
 Secondary tags could not be created into a tree, and dragging one under another

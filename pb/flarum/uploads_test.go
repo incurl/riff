@@ -371,7 +371,8 @@ func TestUploads_TheMediaTypeComesFromTheName(t *testing.T) {
 	recorder := uploadFile(t, handler, cookies, "payload.html", "<script>alert(1)</script>", "")
 	require.Equal(t, http.StatusCreated, recorder.Code, recorder.Body.String())
 
-	attributes := uploadedResource(t, recorder)["attributes"].(map[string]any)
+	attributes, ok := uploadedResource(t, recorder)["attributes"].(map[string]any)
+	require.True(t, ok, "the file resource should carry attributes")
 
 	require.Equal(t, "text/html", attributes["type"])
 }
@@ -392,7 +393,8 @@ func TestUploads_TheFileNameIsSanitised(t *testing.T) {
 	recorder := uploadFile(t, handler, cookies, `../../etc/"passwd".txt`, "x", "")
 	require.Equal(t, http.StatusCreated, recorder.Code, recorder.Body.String())
 
-	attributes := uploadedResource(t, recorder)["attributes"].(map[string]any)
+	attributes, ok := uploadedResource(t, recorder)["attributes"].(map[string]any)
+	require.True(t, ok, "the file resource should carry attributes")
 
 	baseName, ok := attributes["baseName"].(string)
 	require.True(t, ok)

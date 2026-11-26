@@ -149,7 +149,7 @@ func ensureSharedField(app core.App, physical string) error {
 	if err != nil {
 		// No collection means the create step has not run; nothing to
 		// repair, and creating it here would race the create step.
-		return nil
+		return nil //nolint:nilerr // an absent collection is the "nothing to repair" answer
 	}
 
 	if collection.Fields.GetByName("shared") != nil {

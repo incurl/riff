@@ -100,6 +100,30 @@ func (p *Plugin) Register(_ context.Context, ext *plugin.Extenders) error {
 		Handler: p.unstickyHandler,
 	})
 
+	// The settings the plugin READS. Only what it reads is declared: a
+	// setting the admin form shows and nothing honours is a control that
+	// changes nothing.
+	//
+	// `pin_sticky_on_all_discussions` is upstream's key and its default is ON.
+	// The LIST handler reads it (`api.stickyPinned`), which is why the key is
+	// a constant in the api package.
+	//
+	// The two settings upstream shares with the admin page but this port
+	// does not implement are NOT declared: `enable_display_excerpt` (the
+	// `firstPostExcerpt` attribute the list renders under a pinned discussion)
+	// and `only_sticky_unread_discussions` (which needs a per-user read-state
+	// table this port does not keep).
+	ext.AddSettings(plugin.SettingsSchema{
+		Fields: []plugin.SettingField{
+			{
+				Key:     api.SettingPinStickyToTop,
+				Label:   "Pin pinned discussions to the top of the All Discussions page",
+				Type:    "bool",
+				Default: "1",
+			},
+		},
+	})
+
 	// Upstream's admin page registers this as `discussion.sticky`
 	// (flarum-sticky/js/src/admin/extend.tsx).
 	ext.AddPermission(plugin.PermissionHandler{

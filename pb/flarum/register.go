@@ -350,17 +350,39 @@ func (m *Module) pluginCanScoped(ctx context.Context, actorID string) func(actio
 }
 
 // pluginActor resolves the domain actor for an account id.
+//
+// A PocketBase SUPERUSER is not a `users` record, and this is where that
+// matters most: every plugin's `can*` attribute (`canLock`, `canSticky`,
+// `canSuspend`, `canTag`, `canLike`, `fof-upload.canUpload`, ...) is computed
+// through here, and a lookup that only knows the `users` collection answers
+// FALSE for the instance's own operator while the endpoints allow them — the
+// flag and the write disagree, and the UI hides controls the server would
+// accept. The session's own projection already treats a superuser as an
+// administrator (`session.userFromRecord`, which is the union of the
+// administrator group and the superuser collection), so this fallback asks
+// the same question the same way.
 func (m *Module) pluginActor(actorID string) domain.Actor {
 	if actorID == "" {
 		return domain.Actor{}
 	}
 
-	user, err := m.repo.UserByID(actorID)
-	if err != nil || user == nil {
+	if user, err := m.repo.UserByID(actorID); err == nil && user != nil {
+		return domain.ActorFor(user.ID, user.IsAdmin, user.Groups)
+	}
+
+	superusers, err := m.app.FindCollectionByNameOrId(core.CollectionNameSuperusers)
+	if err != nil {
 		return domain.Actor{}
 	}
 
-	return domain.ActorFor(user.ID, user.IsAdmin, user.Groups)
+	// A record id is unique per collection, so a `users` id simply does not
+	// resolve here — and the other way round, which is why this fallback is
+	// safe to try unconditionally.
+	if record, err := m.app.FindRecordById(superusers, actorID); err == nil {
+		return domain.ActorFor(record.Id, true, nil)
+	}
+
+	return domain.Actor{}
 }
 
 // boot runs the plugin lifecycle.

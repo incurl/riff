@@ -87,23 +87,6 @@ func filesForPost(app core.App, physical, postID string) ([]*core.Record, error)
 	return records, nil
 }
 
-// filesForActor returns the files an account uploaded, newest first.
-//
-// It is the listing upstream's `FileResource` scope produces for the
-// caller's own files.
-func filesForActor(app core.App, physical, actorID string) ([]*core.Record, error) {
-	collection, err := app.FindCollectionByNameOrId(physical)
-	if err != nil {
-		return nil, err
-	}
-	records, err := app.FindRecordsByFilter(collection, "actor = {:actor}", "", 0, 0,
-		map[string]any{"actor": actorID})
-	if err != nil {
-		return nil, err
-	}
-	return records, nil
-}
-
 // mimeFromFilename guesses a file's media type from its name.
 //
 // It is the same shape as the memo side's `connect.GuessMimeType`: the

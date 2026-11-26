@@ -50,6 +50,10 @@ func (s *Server) listDiscussionsHandler(e *core.RequestEvent) error {
 	// at goes blank the moment they hide the tag.
 	filter.ExcludeHiddenTags = filter.UserID == "" && len(filter.TagFilters) == 0 && filter.State == "" && filter.Search == ""
 
+	// Pinned discussions float to the top, which is upstream's
+	// `PinStickiedDiscussionsToTop`.
+	filter.PinSticky = s.stickyPinned(e, filter)
+
 	discussions, total, err := s.repo.ListDiscussions(filter, limit, offset)
 	if err != nil {
 		return fail(e, errInternal("The discussions could not be loaded.", err))
@@ -66,6 +70,46 @@ func (s *Server) listDiscussionsHandler(e *core.RequestEvent) error {
 
 	meta, links := pagination(e, total, limit, offset)
 	return s.writeDocumentWithIncluded(e, resources, meta, links)
+}
+
+// stickyPinned reports whether a listing puts pinned discussions first.
+//
+// It is upstream's `PinStickiedDiscussionsToTop`, whose conditions are
+// narrower than "always":
+//
+//   - only on the DEFAULT sort. A "top" or "newest" listing asks a different
+//     question, and upstream does not pin there;
+//   - on a TAG page ALWAYS — upstream pins there even when the tag names its
+//     own default sort, because a tag page is a place rather than a ranking;
+//   - on the All Discussions page only while the setting is on
+//     (`flarum-sticky.pin_sticky_on_all_discussions`, default ON), and NOT at
+//     all once another filter — a user, a state, a search term — is in play.
+//
+// NOT the unread-only nuance: upstream's
+// `flarum-sticky.only_sticky_unread_discussions` floats only stickies the
+// reader has not read, and it reads a per-user `last_read_post_number` from
+// the `discussion_user` table. This port keeps no read-state table, so a
+// pinned discussion is pinned whether or not the reader has opened it.
+func (s *Server) stickyPinned(_ *core.RequestEvent, filter repository.DiscussionFilter) bool {
+	sortName := strings.TrimSpace(filter.Sort)
+	if sortName != "" && sortName != "-lastPostedAt" {
+		return false
+	}
+
+	if filter.UserID != "" || filter.State != "" || filter.Search != "" {
+		return false
+	}
+
+	if len(filter.TagFilters) > 0 {
+		return true
+	}
+
+	value, err := s.repo.SettingValue(SettingPinStickyToTop, nil)
+	if err != nil {
+		return true
+	}
+
+	return SettingTruthy(value, true)
 }
 
 // resolveTagFilters turns `filter[tag]` (and its negated spelling

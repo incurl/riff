@@ -131,7 +131,7 @@ func uploadHandler(e *core.RequestEvent) error {
 // error and returns `(nil, api.WriteError(...))` hands its caller
 // `(nil, nil)` — which reads as success, and the caller then dereferences a
 // nil record. The sentinel makes "already answered" distinguishable from
-// "no error"
+// "no error".
 var errResponseWritten = errors.New("uploads: the response has already been written")
 
 // saveUploadedFile stores one multipart part and returns its record.
@@ -577,15 +577,15 @@ func filePageWindow(e *core.RequestEvent) (limit, offset int) {
 // key.
 func fileSort(e *core.RequestEvent) string {
 	switch strings.TrimSpace(e.Request.URL.Query().Get("sort")) {
-	case "createdAt", "created_at":
-		return "created_at"
-	case "-createdAt", "-created_at":
-		return "-created_at"
 	case "id":
 		return "id"
 	case "-id":
 		return "-id"
+	case "createdAt", "created_at":
+		return "created_at"
 	default:
+		// `-createdAt` and `-created_at` land here too: the default is
+		// upstream's newest-first order.
 		return "-created_at"
 	}
 }
