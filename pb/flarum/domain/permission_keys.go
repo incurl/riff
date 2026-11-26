@@ -109,6 +109,16 @@ var upstreamPermissionKeys = map[string]string{
 	"polls.viewResultsWithoutVoting":            PermissionSeePollVoteCount,
 	"discussion.polls.vote":                     PermissionVotePoll,
 	"discussion.polls.viewResultsWithoutVoting": PermissionSeePollVoteCount,
+
+	// The upload powers. `fof/upload` registers all six under its own
+	// `fof-upload.` prefix, which is why the admin grid's labels are
+	// keyed by the same names the extension's page sends.
+	"fof-upload.upload":              PermissionUploadFiles,
+	"fof-upload.viewUserUploads":     PermissionViewUserUploads,
+	"fof-upload.access-shared-files": PermissionAccessSharedFiles,
+	"fof-upload.upload-shared-files": PermissionUploadSharedFiles,
+	"fof-upload.deleteOwnUploads":    PermissionDeleteOwnUploads,
+	"fof-upload.deleteUserUploads":   PermissionDeleteUserUploads,
 }
 
 // forumPermissionKeys is the reverse of upstreamPermissionKeys: the

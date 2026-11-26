@@ -33,6 +33,13 @@ type fileRecord struct {
 	ImageHeight int
 	// Hidden reports whether the file is hidden from its owner.
 	Hidden bool
+	// Shared reports whether the file belongs to the forum's shared
+	// library rather than to its uploader.
+	//
+	// It is upstream's `shared` column: a shared file is written and
+	// deleted with `upload-shared-files` instead of ownership, and the
+	// listing that shows it is a separate endpoint.
+	Shared bool
 	// Blob is the stored file's name, empty when nothing was stored.
 	Blob string
 }
@@ -58,6 +65,7 @@ func fileFromRecord(record *core.Record) fileRecord {
 		ImageWidth:  record.GetInt("image_width"),
 		ImageHeight: record.GetInt("image_height"),
 		Hidden:      record.GetBool("hidden"),
+		Shared:      record.GetBool("shared"),
 		Blob:        record.GetString("blob"),
 	}
 }

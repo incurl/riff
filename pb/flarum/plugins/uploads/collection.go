@@ -111,6 +111,9 @@ func createFilesCollection(app core.App, physical string) error {
 	collection.Fields.Add(&core.BoolField{
 		Name: "hidden",
 	})
+	collection.Fields.Add(&core.BoolField{
+		Name: "shared",
+	})
 	collection.Fields.Add(&core.AutodateField{
 		Name:     "created_at",
 		OnCreate: true,
@@ -127,6 +130,37 @@ func createFilesCollection(app core.App, physical string) error {
 
 	if err := app.Save(collection); err != nil {
 		return errors.Wrapf(err, "uploads: could not create the %q collection", physical)
+	}
+	return nil
+}
+
+// ensureSharedField adds the `shared` column to an existing collection.
+//
+// It is a SEPARATE, idempotent migration step rather than a change to
+// `createFilesCollection`, because a plugin migration that has already
+// been recorded does NOT run again: an instance created before the shared
+// library existed would never gain the column, and every read of it would
+// silently report `false` — the shared listing would be empty forever.
+//
+// Upstream stores the same flag in the same shape (`fof_upload_files
+// .shared`, added by `2023_12_04_000000_modify_fof_upload_files_add_shared_column.php`).
+func ensureSharedField(app core.App, physical string) error {
+	collection, err := app.FindCollectionByNameOrId(physical)
+	if err != nil {
+		// No collection means the create step has not run; nothing to
+		// repair, and creating it here would race the create step.
+		return nil
+	}
+
+	if collection.Fields.GetByName("shared") != nil {
+		return nil
+	}
+
+	collection.Fields.Add(&core.BoolField{Name: "shared"})
+	collection.AddIndex("idx_"+physical+"_shared", false, "shared", "")
+
+	if err := app.Save(collection); err != nil {
+		return errors.Wrapf(err, "uploads: could not add the shared column to %q", physical)
 	}
 	return nil
 }

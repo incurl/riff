@@ -375,6 +375,44 @@ const (
 	// vote OR see the results, and which one is granted is the
 	// operator's choice.
 	PermissionSeePollVoteCount = "seePollVoteCount"
+	// PermissionUploadFiles allows uploading a file.
+	//
+	// It is upstream's `fof-upload.upload`, the base permission the
+	// extension's `Upload` command asserts before it stores anything.
+	// Every other upload power is layered on top of it.
+	PermissionUploadFiles = "upload"
+	// PermissionViewUserUploads allows listing ANOTHER account's uploads.
+	//
+	// It is upstream's `fof-upload.viewUserUploads`. Without it the
+	// listing only ever describes the caller's own files, which is
+	// what its `FileResource::scope()` narrows to.
+	PermissionViewUserUploads = "viewUserUploads"
+	// PermissionAccessSharedFiles allows listing the shared file
+	// library.
+	//
+	// It is upstream's `fof-upload.access-shared-files`.
+	PermissionAccessSharedFiles = "accessSharedFiles"
+	// PermissionUploadSharedFiles allows uploading, hiding and deleting
+	// a SHARED file.
+	//
+	// It is upstream's `fof-upload.upload-shared-files`. A shared file
+	// belongs to the forum rather than to its uploader, so every write
+	// to one asks for this permission instead of ownership.
+	PermissionUploadSharedFiles = "uploadSharedFiles"
+	// PermissionDeleteOwnUploads allows deleting a file one uploaded.
+	//
+	// It is upstream's `fof-upload.deleteOwnUploads`, and it is
+	// SEPARATE from the ownership rule on purpose: upstream's
+	// `FilePolicy::delete()` asks `owns() AND this permission`, so an
+	// operator can let a member upload without letting them delete —
+	// the media manager then shows no delete button.
+	PermissionDeleteOwnUploads = "deleteOwnUploads"
+	// PermissionDeleteUserUploads allows hiding and deleting another
+	// account's uploads.
+	//
+	// It is upstream's `fof-upload.deleteUserUploads` — the moderator
+	// tier of the media manager.
+	PermissionDeleteUserUploads = "deleteUserUploads"
 	// PermissionAdministrate allows administering the forum.
 	PermissionAdministrate = "administrate"
 )

@@ -25,6 +25,11 @@ reused Flarum Mithril frontend.
   Polls plugin against upstream `fof/polls` 2.x: the confirmed defects, the
   upstream contract, and the order they were fixed in. Implemented; see its
   status header for the one item that is deliberately not ported.
+- [Uploads alignment handoff](uploads-alignment-handoff.md) — the same audit
+  for the Uploads plugin against upstream `fof/upload` 2.x: the route table,
+  the resource's full attribute list, the six permissions and the policy they
+  encode, the settings, and what is deliberately not ported (thumbnails,
+  watermarking, MIME allow-listing, the media-manager page).
 
 ## The shape of the thing
 

@@ -13,6 +13,7 @@ import (
 	"github.com/incurl/riff/pb/flarum/plugins/gamification"
 	"github.com/incurl/riff/pb/flarum/plugins/likes"
 	"github.com/incurl/riff/pb/flarum/plugins/tags"
+	"github.com/incurl/riff/pb/flarum/plugins/uploads"
 )
 
 // TestForum_TheAdminPayloadCarriesThePluginSettings pins that every
@@ -108,6 +109,10 @@ func TestForum_ThePluginSettingsAreTheOnesTheServerReads(t *testing.T) {
 		gamification.SettingAllowSelfVotes: true,
 		gamification.SettingDefaultMetric:  true,
 		gamification.SettingDefaultPeriod:  true,
+		// The uploads plugin's limit is read by `maxFileSizeBytes`
+		// (`plugins/uploads/handlers.go`), which caps the effective size
+		// at the collection's own field maximum.
+		uploads.SettingMaxFileSize: true,
 	}
 
 	for _, schema := range module.PluginSettingSchemas() {

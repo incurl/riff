@@ -117,10 +117,19 @@ var defaultPermissions = map[string][]string{
 		// voting on a post: upstream grants `polls.vote` to everybody
 		// who may take part in a discussion.
 		domain.PermissionVotePoll,
-		// Changing a vote that was already cast is a separate power
-		// upstream keeps apart (`polls.changeVote`), and a poll's own
-		// `allow_change_vote` setting can grant it to everybody.
+		// The poll powers a member holds: voting in one, and changing a
+		// vote they already cast (which the poll's own setting can also
+		// grant to everybody).
 		domain.PermissionChangePollVote,
+		// Attaching a file is a participation power, exactly like
+		// replying: upstream's README tells the operator to grant
+		// `fof-upload.upload` on the permissions page, and this port
+		// seeds it for the member group instead so attachments work on
+		// a fresh forum — the operator can revoke it in the grid. A
+		// member may also delete the file they uploaded; hiding or
+		// deleting SOMEBODY ELSE's is a moderator power.
+		domain.PermissionUploadFiles,
+		domain.PermissionDeleteOwnUploads,
 	},
 	domain.GroupModeratorID: {
 		domain.PermissionViewForum,
@@ -174,6 +183,16 @@ var defaultPermissions = map[string][]string{
 		// votes, and which of the two the reader gets is the
 		// operator's choice.
 		domain.PermissionSeePollVoteCount,
+		// The upload moderation powers: hiding and deleting ANOTHER
+		// account's files, and the shared library (a shared file
+		// belongs to the forum rather than to its uploader, so every
+		// write to one asks for `upload-shared-files` instead of
+		// ownership).
+		domain.PermissionUploadFiles,
+		domain.PermissionDeleteOwnUploads,
+		domain.PermissionDeleteUserUploads,
+		domain.PermissionAccessSharedFiles,
+		domain.PermissionUploadSharedFiles,
 	},
 }
 

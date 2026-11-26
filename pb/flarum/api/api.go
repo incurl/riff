@@ -1072,6 +1072,17 @@ func (*Server) writeDocumentStatus(e *core.RequestEvent, status int, doc Documen
 	return e.JSON(status, doc)
 }
 
+// WriteEmpty answers with a bodyless status.
+//
+// It is the exported form of [Server.writeEmpty]: a plugin's DELETE
+// answers `204` with no body, the way upstream's `DeleteFileController`
+// does. A 204 carrying a body is not what upstream sends, and
+// `WriteDocument` would serialise the zero Document as `{"data":null}`.
+func WriteEmpty(e *core.RequestEvent, status int) error {
+	e.Response.WriteHeader(status)
+	return nil
+}
+
 // writeEmpty answers with a bodyless status.
 //
 // It is for the admin surface's command endpoints, which upstream

@@ -468,33 +468,47 @@ de-facto standard for Flarum 2.x and the successor to
 `flagrow/upload`.
 
 The forum implements them as the first-party **Uploads plugin**
-(`pb/flarum/plugins/uploads/`), mirroring that extension's contract:
-the resource type is `files`, a file carries `url`, `size`,
-`humanSize`, `imageWidth`, `imageHeight`, `hidden`, `baseName` and
-`type`, and a file hangs off a post through the post's `files`
-relationship.
+(`pb/flarum/plugins/uploads/`), mirroring that extension's contract: the
+resource type is `files`, the six `fof-upload.*` permissions are declared and
+seeded, and upstream's own routes are served beside the port's (`/api/fof/upload`
+for the upload, `/api/fof/uploads` and `/api/fof/upload/shared-files` for the
+listing, `/api/fof/download/{uuid}` for the bytes,
+`/api/fof/upload/delete/{uuid}`, `/api/fof/upload/hide`). The full audit is
+`uploads-alignment-handoff.md`.
 
-Three differences from the extension, all deliberate:
+The differences from the extension, all deliberate:
 
 - **THE BYTES ARE SERVED BY THE FORUM'S OWN ROUTE** at
-  `{basePath}/files/{id}`. Upstream's `fof/upload` serves the bytes
-  from its own storage at a URL the extension owns; this port keeps
-  the bytes in PocketBase's filesystem (so the existing storage
-  bridge and its S3 support apply) and streams them through the forum,
-  because PocketBase's native file URL lives at the root of the
-  listener the forum does not own.
-- **THERE IS NO THUMBNAIL.** Upstream's extension generates a WebP
-  thumbnail at upload time and stores `thumbnail_url`; the port stores
-  the image's dimensions instead, which is what the frontend needs to
-  lay the image out before it loads. The memo attachment surface
-  already generates thumbnails on demand (`?thumbnail=true`), and the
-  forum's file route could adopt the same mechanism — but it does not
-  yet.
-- **THERE IS NO WATERMARKING, RESIZING OR ADAPTER LAYER.** Upstream's
-  extension has a storage-adapter abstraction (local, S3, Qiniu, …)
-  and an image pipeline. This port relies on PocketBase's own
-  filesystem and its storage bridge, and stores the file as it was
-  uploaded.
+  `{basePath}/files/{id}`, with `/api/fof/download/{uuid}` as an alias of the
+  same handler. Upstream's `fof/upload` serves the bytes from its own storage at
+  a URL the extension owns; this port keeps the bytes in PocketBase's filesystem
+  (so the existing storage bridge and its S3 support apply) and streams them
+  through the forum, because PocketBase's native file URL lives at the root of
+  the listener the forum does not own.
+- **THERE IS NO THUMBNAIL.** Upstream's extension generates a WebP thumbnail at
+  upload time and stores `thumbnail_url`; the port stores the image's dimensions
+  instead, which is what the frontend needs to lay the image out before it
+  loads. The three thumbnail attributes are `null` — which is what the frontend
+  reads as "use the original" — and the four thumbnail settings are NOT declared,
+  because a setting nobody reads is a control that changes nothing. The memo
+  attachment surface already generates thumbnails on demand
+  (`?thumbnail=true`), and the forum's file route could adopt the same
+  mechanism — but it does not yet.
+- **THERE IS NO WATERMARKING, RESIZING, MIME ALLOW-LIST OR ADAPTER LAYER.**
+  Upstream's extension has a storage-adapter abstraction (local, S3, Qiniu, …), an
+  image pipeline, and a MIME allow-list enforced against the file's detected
+  type. This port relies on PocketBase's own filesystem and its storage bridge,
+  stores the file as it was uploaded, and derives the type from the file NAME —
+  serving anything non-inline as a download, which removes the same class of risk
+  from the serving side. A MIME allow-list is a candidate follow-up.
+- **NO MEDIA MANAGER.** The routes its page calls exist (listing, hide, delete),
+  but the admin-side page itself is not ported; the composer offers the file
+  picker, and `fof-upload.canUpload` is the flag it branches on.
+- **`bbcode` IS MARKDOWN.** Upstream renders its template's HTML
+  (`<a href><img></a>` for an image); this port's posts are Markdown and the
+  composer inserts the string verbatim, so `bbcode` is `![](url)` for an image
+  and `[name](url)` otherwise. An HTML embed pasted into a Markdown post would be
+  escaped, because the forum renders raw HTML inert on purpose.
 
 ## 15. Notifications are limited
 

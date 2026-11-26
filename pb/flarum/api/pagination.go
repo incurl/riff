@@ -30,6 +30,17 @@ import (
 // The links are the URLs of the neighbouring pages, and they are
 // absolute: upstream's are too (`$pagination->links()`).
 
+// Paginate builds the metadata and the links of a collection response.
+//
+// It is the exported form of [pagination], for a plugin's own listing: the
+// uploads library paginates exactly like the core's lists, and the
+// frontend reads the same four fields from both (`meta.page.total`,
+// `meta.page.offset`, `meta.perPage`, and `links.next`/`links.prev` —
+// the last of which IS the "load more" button).
+func Paginate(e *core.RequestEvent, total, limit, offset int) (*Meta, *Links) {
+	return pagination(e, total, limit, offset)
+}
+
 // pagination builds the metadata and the links of a collection
 // response.
 //

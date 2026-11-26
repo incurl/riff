@@ -51,6 +51,50 @@ func uploadFile(t *testing.T, handler http.Handler, cookies []*http.Cookie, file
 	return recorder
 }
 
+// uploadedResource decodes the FIRST resource of an upload response.
+//
+// The response is a JSON:API COLLECTION — upstream's `UploadHandler` answers
+// an array, because one request may carry several files — so a single-file
+// upload is an array holding one resource.
+func uploadedResource(t *testing.T, recorder *httptest.ResponseRecorder) map[string]any {
+	t.Helper()
+
+	document := decodeDocument(t, recorder)
+	resources, ok := document.Data.([]any)
+	require.True(t, ok, "an upload answers a collection, not a single resource: %s", recorder.Body.String())
+	require.Len(t, resources, 1, recorder.Body.String())
+
+	resource, ok := resources[0].(map[string]any)
+	require.True(t, ok)
+	return resource
+}
+
+// singleResource decodes a document that carries ONE resource.
+//
+// The show, attach and post endpoints answer `data` as an object; only an
+// upload answers a collection (see uploadedResource).
+func singleResource(t *testing.T, recorder *httptest.ResponseRecorder) map[string]any {
+	t.Helper()
+
+	document := decodeDocument(t, recorder)
+	resource, ok := document.Data.(map[string]any)
+	require.True(t, ok, "the data should be a resource object: %s", recorder.Body.String())
+	return resource
+}
+
+// uploadedID returns the id of the first file an upload answered with.
+//
+// `resourceIDOf` reads a SINGLE-resource document, which is what every
+// other endpoint answers; an upload answers a collection.
+func uploadedID(t *testing.T, recorder *httptest.ResponseRecorder) string {
+	t.Helper()
+
+	id, ok := uploadedResource(t, recorder)["id"].(string)
+	require.True(t, ok)
+	require.NotEmpty(t, id)
+	return id
+}
+
 // TestUploads_MigrationCreatesTheCollection pins layer 1 of the
 // three-layer flow: the plugin's own migration created its collection.
 func TestUploads_MigrationCreatesTheCollection(t *testing.T) {
@@ -82,9 +126,7 @@ func TestUploads_AFileIsUploaded(t *testing.T) {
 	recorder := uploadFile(t, handler, sessionCookies(token, "csrf-token"), "notes.txt", "hello", "")
 	require.Equal(t, http.StatusCreated, recorder.Code, recorder.Body.String())
 
-	document := decodeDocument(t, recorder)
-	resource, ok := document.Data.(map[string]any)
-	require.True(t, ok, "the data should be a resource object")
+	resource := uploadedResource(t, recorder)
 
 	require.Equal(t, "files", resource["type"], "the resource type is upstream's")
 	require.NotEmpty(t, resource["id"])
@@ -141,7 +183,7 @@ func TestUploads_TheFileIsAttachedToAPost(t *testing.T) {
 	// Upload a file and attach it to the post.
 	recorder = uploadFile(t, handler, cookies, "notes.txt", "hello", "")
 	require.Equal(t, http.StatusCreated, recorder.Code, recorder.Body.String())
-	fileID := resourceIDOf(t, recorder)
+	fileID := uploadedID(t, recorder)
 
 	recorder = do(t, handler, http.MethodPost, "/forum/api/posts/"+postID+"/files",
 		`{"fileId":"`+fileID+`"}`, cookies)
@@ -151,9 +193,7 @@ func TestUploads_TheFileIsAttachedToAPost(t *testing.T) {
 	recorder = do(t, handler, http.MethodGet, "/forum/api/posts/"+postID, "", cookies)
 	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
 
-	document := decodeDocument(t, recorder)
-	resource, ok := document.Data.(map[string]any)
-	require.True(t, ok)
+	resource := singleResource(t, recorder)
 
 	relationships, ok := resource["relationships"].(map[string]any)
 	require.True(t, ok)
@@ -186,7 +226,7 @@ func TestUploads_TheBytesAreServed(t *testing.T) {
 
 	recorder := uploadFile(t, handler, cookies, "notes.txt", "hello world", "")
 	require.Equal(t, http.StatusCreated, recorder.Code, recorder.Body.String())
-	fileID := resourceIDOf(t, recorder)
+	fileID := uploadedID(t, recorder)
 
 	recorder = do(t, handler, http.MethodGet, "/forum/files/"+fileID, "", cookies)
 	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
@@ -215,7 +255,7 @@ func TestUploads_AnUnattachedFileIsPrivate(t *testing.T) {
 
 	recorder := uploadFile(t, handler, sessionCookies(ownerToken, "csrf-token"), "secret.txt", "mine", "")
 	require.Equal(t, http.StatusCreated, recorder.Code, recorder.Body.String())
-	fileID := resourceIDOf(t, recorder)
+	fileID := uploadedID(t, recorder)
 
 	// The owner may read it.
 	recorder = do(t, handler, http.MethodGet, "/forum/files/"+fileID, "", sessionCookies(ownerToken, "csrf-token"))
@@ -242,7 +282,7 @@ func TestUploads_AMemberMayNotDeleteSomebodyElsesFile(t *testing.T) {
 
 	recorder := uploadFile(t, handler, sessionCookies(ownerToken, "csrf-token"), "mine.txt", "mine", "")
 	require.Equal(t, http.StatusCreated, recorder.Code, recorder.Body.String())
-	fileID := resourceIDOf(t, recorder)
+	fileID := uploadedID(t, recorder)
 
 	recorder = do(t, handler, http.MethodDelete, "/forum/api/files/"+fileID, "",
 		sessionCookies(intruderToken, "csrf-token"))
@@ -270,7 +310,7 @@ func TestUploads_TheDeleteHonoursTheMethodOverride(t *testing.T) {
 
 	recorder := uploadFile(t, handler, cookies, "gone.txt", "bye", "")
 	require.Equal(t, http.StatusCreated, recorder.Code, recorder.Body.String())
-	fileID := resourceIDOf(t, recorder)
+	fileID := uploadedID(t, recorder)
 
 	recorder = doWithHeaders(t, handler, http.MethodPost, "/forum/api/files/"+fileID, "",
 		cookies, map[string]string{"X-HTTP-Method-Override": "DELETE"})
@@ -306,7 +346,7 @@ func TestUploads_AMemberMayNotAttachSomebodyElsesFile(t *testing.T) {
 	// The intruder uploads a file.
 	recorder = uploadFile(t, handler, intruderCookies, "intruder.txt", "mine", "")
 	require.Equal(t, http.StatusCreated, recorder.Code, recorder.Body.String())
-	fileID := resourceIDOf(t, recorder)
+	fileID := uploadedID(t, recorder)
 
 	// Attaching it to somebody else's post is refused.
 	recorder = do(t, handler, http.MethodPost, "/forum/api/posts/"+postID+"/files",
@@ -331,11 +371,7 @@ func TestUploads_TheMediaTypeComesFromTheName(t *testing.T) {
 	recorder := uploadFile(t, handler, cookies, "payload.html", "<script>alert(1)</script>", "")
 	require.Equal(t, http.StatusCreated, recorder.Code, recorder.Body.String())
 
-	document := decodeDocument(t, recorder)
-	resource, ok := document.Data.(map[string]any)
-	require.True(t, ok)
-	attributes, ok := resource["attributes"].(map[string]any)
-	require.True(t, ok)
+	attributes := uploadedResource(t, recorder)["attributes"].(map[string]any)
 
 	require.Equal(t, "text/html", attributes["type"])
 }
@@ -356,11 +392,7 @@ func TestUploads_TheFileNameIsSanitised(t *testing.T) {
 	recorder := uploadFile(t, handler, cookies, `../../etc/"passwd".txt`, "x", "")
 	require.Equal(t, http.StatusCreated, recorder.Code, recorder.Body.String())
 
-	document := decodeDocument(t, recorder)
-	resource, ok := document.Data.(map[string]any)
-	require.True(t, ok)
-	attributes, ok := resource["attributes"].(map[string]any)
-	require.True(t, ok)
+	attributes := uploadedResource(t, recorder)["attributes"].(map[string]any)
 
 	baseName, ok := attributes["baseName"].(string)
 	require.True(t, ok)
@@ -414,7 +446,7 @@ func TestUploads_TheFileIsDeletedWithItsPost(t *testing.T) {
 
 	recorder = uploadFile(t, handler, cookies, "doomed.txt", "bye", postID)
 	require.Equal(t, http.StatusCreated, recorder.Code, recorder.Body.String())
-	fileID := resourceIDOf(t, recorder)
+	fileID := uploadedID(t, recorder)
 
 	// Deleting the post deletes the file.
 	recorder = do(t, handler, http.MethodDelete, "/forum/api/discussions/"+discussionID, "", cookies)
@@ -459,7 +491,7 @@ func TestUploads_TheDeleteFlagAgreesWithTheEndpoint(t *testing.T) {
 	// A file attached to that post.
 	recorder = uploadFile(t, handler, ownerCookies, "mine.txt", "mine", postID)
 	require.Equal(t, http.StatusCreated, recorder.Code, recorder.Body.String())
-	fileID := resourceIDOf(t, recorder)
+	fileID := uploadedID(t, recorder)
 
 	// The uploader may delete it.
 	recorder = do(t, handler, http.MethodGet, "/forum/api/files/"+fileID, "", ownerCookies)
@@ -480,9 +512,7 @@ func TestUploads_TheDeleteFlagAgreesWithTheEndpoint(t *testing.T) {
 func fileAttributesOf(t *testing.T, recorder *httptest.ResponseRecorder) map[string]any {
 	t.Helper()
 
-	document := decodeDocument(t, recorder)
-	resource, ok := document.Data.(map[string]any)
-	require.True(t, ok, "the data should be a resource object")
+	resource := singleResource(t, recorder)
 
 	attributes, ok := resource["attributes"].(map[string]any)
 	require.True(t, ok, "the resource should carry attributes")

@@ -50,3 +50,28 @@
   color: var(--muted-color, #777);
   font-size: 0.9em;
 }
+
+/* The composer's attach button.
+
+   The control is a `<label>` wrapping a real `<input type="file">`: the
+   input is the browser's own picker and must stay in the DOM (a click on a
+   detached input is ignored by some browsers), but it is not what the
+   reader sees — the label's icon is. */
+.UploadsButton {
+  position: relative;
+  cursor: pointer;
+}
+
+.UploadsButton-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.UploadsButton.disabled {
+  cursor: default;
+  opacity: 0.6;
+}

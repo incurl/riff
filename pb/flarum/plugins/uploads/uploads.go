@@ -26,10 +26,12 @@ package uploads
 
 import (
 	"context"
+	"strconv"
 
 	"github.com/pocketbase/pocketbase/core"
 
 	"github.com/incurl/riff/pb/flarum/api"
+	"github.com/incurl/riff/pb/flarum/domain"
 	"github.com/incurl/riff/pb/flarum/plugin"
 )
 
@@ -37,7 +39,23 @@ import (
 const PluginID = "riff/uploads"
 
 // Version is the plugin's version.
-const Version = "1.0.0"
+const Version = "1.1.0"
+
+// SettingMaxFileSize is the upload limit, in KIBIBYTES.
+//
+// It is upstream's key (`fof-upload.maxFileSize`), in upstream's unit:
+// the extension's validation compares the file's size against it in KiB,
+// and its admin page labels the field that way.
+const SettingMaxFileSize = "fof-upload.maxFileSize"
+
+// MaxFileSizeKiB is the limit when the setting is unset: 32 MiB.
+//
+// Upstream's default is 2048 (2 MiB). This port takes what the memo
+// attachment surface takes (`pb/migrations/1850000000_create_attachments.go`),
+// so one upload limit holds across the whole instance; an operator can
+// lower it here, and the collection's own field maximum (MaxFileSize) is
+// the ceiling either way.
+const MaxFileSizeKiB = MaxFileSize / 1024
 
 // Plugin is the Uploads plugin.
 type Plugin struct {
@@ -81,7 +99,58 @@ func (*Plugin) Register(_ context.Context, ext *plugin.Extenders) error {
 		},
 	})
 
+	// The shared library's column is a SEPARATE step: a plugin
+	// migration that has already been recorded never runs again, so an
+	// instance created before the flag existed has to be upgraded by its
+	// own idempotent step.
+	ext.AddMigration(plugin.Migration{
+		Name: "add_shared_column",
+		Up: func(_ context.Context, app core.App) error {
+			return ensureSharedField(app, physical)
+		},
+	})
+
+	// The settings the plugin READS. Only what it reads is declared: a
+	// setting the admin form shows and nothing honours is a control that
+	// changes nothing.
+	//
+	// `maxFileSize` is upstream's key, in KIBIBYTES, because that is
+	// how upstream's `maxFileSize` is documented and how its own
+	// validation reads it. The DEFAULT differs from upstream's 2048 KiB
+	// on purpose: this port accepts what the memo attachment surface
+	// accepts (32 MiB — see `pb/migrations/1850000000_create_attachments.go`),
+	// so a file the Memos side takes is taken here too.
+	ext.AddSettings(plugin.SettingsSchema{
+		Fields: []plugin.SettingField{
+			{
+				Key:     SettingMaxFileSize,
+				Label:   "Maximum file size (KiB)",
+				Type:    "number",
+				Default: strconv.Itoa(MaxFileSizeKiB),
+			},
+		},
+	})
+
 	// --- layer 2: the API ----------------------------------------------
+	// The forum document carries `fof-upload.canUpload`, which is the flag
+	// the composer's attach button reads.
+	//
+	// It is the SAME permission the upload endpoint checks, asked through
+	// the permission service (`AttributeRequest.Can`), so the button is
+	// offered exactly when the request would be accepted. Upstream
+	// publishes the same attribute from its `UploadServiceProvider`
+	// (`$actor->can('fof-upload.upload')`), and its button branches on it
+	// too: a hardcoded `true` is a button the server refuses, and a
+	// hardcoded `false` is a permission an operator can grant that changes
+	// nothing.
+	ext.AddAttribute(plugin.AttributeContributor{
+		Resource: api.TypeForum,
+		Name:     "fof-upload.canUpload",
+		Value: func(_ context.Context, req *plugin.AttributeRequest) (any, error) {
+			return req.Can(domain.PermissionUploadFiles, api.TypeForum, "1"), nil
+		},
+	})
+
 	// The files ride on the post resource, which is where the frontend
 	// reads them from.
 	ext.AddRelationship(plugin.RelationshipContributor{
@@ -103,9 +172,22 @@ func (*Plugin) Register(_ context.Context, ext *plugin.Extenders) error {
 	})
 
 	// The upload, the attach, the delete and the listing.
+	//
+	// The SECOND path on each row is upstream's `fof/upload` spelling
+	// (`extend.php`: `->post('/fof/upload', …)`, `->get('/fof/uploads', …)`,
+	// `->delete('/fof/upload/delete/{uuid}', …)`,
+	// `->get('/fof/download/{uuid}', …)`, `->patch('/fof/upload/hide', …)`).
+	// Both are served because the port's own composer used the first and
+	// a client written against the extension uses the second; the paths
+	// differ only in spelling, and the handlers are the same.
 	ext.AddRoute(plugin.RouteDef{
 		Method:  "POST",
 		Path:    "/api/uploads",
+		Handler: uploadHandler,
+	})
+	ext.AddRoute(plugin.RouteDef{
+		Method:  "POST",
+		Path:    "/api/fof/upload",
 		Handler: uploadHandler,
 	})
 	ext.AddRoute(plugin.RouteDef{
@@ -128,9 +210,40 @@ func (*Plugin) Register(_ context.Context, ext *plugin.Extenders) error {
 		Handler: deleteFileHandler,
 	})
 	ext.AddRoute(plugin.RouteDef{
+		Method:  "DELETE",
+		Path:    "/api/fof/upload/delete/{uuid}",
+		Handler: deleteFileHandler,
+	})
+	ext.AddRoute(plugin.RouteDef{
+		Method:  "POST",
+		Path:    "/api/fof/upload/delete/{uuid}",
+		Handler: deleteFileHandler,
+	})
+	ext.AddRoute(plugin.RouteDef{
 		Method:  "GET",
 		Path:    "/api/files",
 		Handler: listFilesHandler,
+	})
+	ext.AddRoute(plugin.RouteDef{
+		Method:  "GET",
+		Path:    "/api/fof/uploads",
+		Handler: listFilesHandler,
+	})
+	ext.AddRoute(plugin.RouteDef{
+		Method:  "GET",
+		Path:    "/api/fof/upload/shared-files",
+		Handler: listFilesHandler,
+	})
+	// The media manager's hide switch.
+	ext.AddRoute(plugin.RouteDef{
+		Method:  "PATCH",
+		Path:    "/api/fof/upload/hide",
+		Handler: hideFileHandler,
+	})
+	ext.AddRoute(plugin.RouteDef{
+		Method:  "POST",
+		Path:    "/api/fof/upload/hide",
+		Handler: hideFileHandler,
 	})
 	// The single-file route is the JSON:API view of a file: the
 	// frontend needs its attributes (the name, the size, the URL) to
@@ -140,6 +253,21 @@ func (*Plugin) Register(_ context.Context, ext *plugin.Extenders) error {
 		Method:  "GET",
 		Path:    "/api/files/{id}",
 		Handler: showFileHandler,
+	})
+	// Upstream's download routes, so a client that builds the URL from
+	// `File::url` (`/api/fof/download/{uuid}`) can fetch the bytes. The
+	// three-segment form carries the post and a CSRF token upstream
+	// strips; here the segments are ignored, because the file's own
+	// visibility rule is what authorizes the read.
+	ext.AddRoute(plugin.RouteDef{
+		Method:  "GET",
+		Path:    "/api/fof/download/{uuid}",
+		Handler: ServeFileHandler,
+	})
+	ext.AddRoute(plugin.RouteDef{
+		Method:  "GET",
+		Path:    "/api/fof/download/{uuid}/{post}/{csrf}",
+		Handler: ServeFileHandler,
 	})
 
 	// The bytes are served by the forum's own route. It is registered
