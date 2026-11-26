@@ -5,6 +5,53 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## A RENAME THE SHELL NEVER RENDERS IS A RENAME THAT DOES NOTHING (2026-11-26)
+
+Renaming the forum in the admin's **Basics** page changed nothing the reader could
+see. The setting was fine: `forum_title` saved, the form re-read it, and
+`GET /forum/api/settings` handed it back. The two places that actually DISPLAY it
+were literals:
+
+* `api.ForumDocument` served `"title": "Forum"`, and that is what the frontend
+  reads as `app.forum.attribute('title')` — `document.title`, and the
+  `{forumName}` parameter of every translation that takes one;
+* the boot shell's `<title>` **and** the header's home-link text were
+  `Title: "Forum"` in `frontend.Render`.
+
+The shell is the worse half, and it is the reason this looked like a
+frontend bug. The shell is rendered by the SERVER, before any bundle runs, and
+nothing after boot rewrites the header: the app sets `document.title` on
+navigation, but the `<div class="Header-title">` markup is the shell's. So the
+forum's own name stayed "Forum" in the header forever, on a page whose tab title
+was right after the first navigation.
+
+It now comes from one place. `api.DefaultForumTitle` is the single fallback (the
+document's, the admin form's and the shell's), the document resolves
+`forum_title` against the settings table, and the shell takes its title from the
+document the boot payload already embeds — `frontend.ShellMeta`, filled by
+`shellMetaOf`, one lookup and one answer, so the server-rendered HTML cannot
+disagree with the app it starts.
+
+**The same template had a second hole.** `shellData.BasePath` was never passed
+either — it had been `""` since the module landed — so the header link rendered
+`href="/"`. On both `/memos/` layouts that leaves the forum for the static site
+at the host root. The mount path comes from the same document
+(`attributes.basePath`), for the same reason: it is already the value the SPA's
+router and asset helpers use.
+
+The tests pin the CHAIN rather than the two values, because the failure mode is
+one link of it going literal: `TestForum_TheForumTitleIsASetting` saves the
+setting through the admin route, then asserts the document, the shell's
+`<title>`, the header link's text AND its `href`, and the admin payload;
+`TestForum_TheForumTitleHasADefault` pins the fallback, because an empty
+`<title>` is what a fresh instance would otherwise serve. All three assertions
+were mutation-checked — reverting the document's read, the shell's title, or the
+mount path each turns the test red.
+
+The general rule, and the same one the wiki row carries for `branding.siteName`:
+**a setting is not applied until the SERVER-rendered HTML carries it.** Reading it
+back in the app is the second half, not the first.
+
 ## POCKETBASE'S OWN ENDPOINTS ANSWER AT THE HOST ROOT (2026-11-26)
 
 riff already served both surfaces on its own listener — `GET /_/` → 200 with the
