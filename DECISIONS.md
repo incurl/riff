@@ -19,11 +19,23 @@ drag supplies it, and the one thing the operator wanted — to say which primary
 tag the new secondary tag belongs to — is not expressible in the form.
 
 This port now offers it (`EditTagModal`'s `Parent tag` select, fed by the pure
-`tagParent.js::parentOptions`), and the select is shown for exactly the tags
-that may carry a parent: a new secondary tag, an existing child, an unplaced
-tag. Not a primary root (it becomes a child by being dragged onto another
-primary tag's list, which is the page's own statement about where it goes),
-and never the tag being edited.
+`tagParent.js`), and **the field is shown for EVERY existing tag and for a new
+secondary tag** — hidden only for "Create primary tag", where a parent would
+contradict the button that opened the modal. An earlier cut hid it on a primary
+root as well, on the theory that a root changes kind by being dragged; the
+report that followed ("I do not see the parent tag select") is what a control
+that is present-but-hidden looks like from the operator's chair. Choosing a
+parent on a root DEMOTES it to that tag's child — the write path below does
+exactly that — so the field is the modal's only way to move a tag into the
+tree, and hiding it there was hiding a capability.
+
+The page also carries a `+` on every primary tag (`TagListItem-addChild`) that
+opens the same modal with `{primary: false, parentId}`, so "add a secondary tag
+to THIS primary tag" is one click with the parent already chosen; the + is
+what "the UI does not accommodate secondary tag creation" was really asking
+for, because the page's own button makes an UNPLACED tag and leaves the
+placement to a drag. The options are the ROOT tags only and never the tag being
+edited.
 
 **The write path had to be fixed first, and one half of it was a silent bug.**
 `parent`, `position` and `is_primary` describe ONE tree, and they can disagree:

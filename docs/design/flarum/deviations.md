@@ -347,9 +347,13 @@ UNPLACED tag, and the administrator then DRAGS it under a primary tag on the
 Tags page. So the one thing they want when they create a secondary tag — to
 say which primary tag it belongs to — is left to a drag, and the created tag's
 `parent` is null until they make it. This port's modal offers a "Parent tag"
-select for exactly the tags that may carry one (a new secondary tag, a child,
-an unplaced tag), listing the ROOT tags only; the tag being edited is never an
-option. The select reads `tagParent.js`'s pure `parentOptions`, so the rule
+select on EVERY existing tag and on a new secondary tag — hidden only for
+"Create primary tag", where a parent would contradict the button that opened
+the modal. Choosing a parent on a PRIMARY root demotes it to that tag's child
+(the write path below), so the field is the modal's only way to move a tag into
+the tree. The options are the ROOT tags only, and the tag being edited is never
+one of them. The Tags page also carries a `+` on every primary tag that opens
+the modal with the parent preselected. The select reads `tagParent.js`'s pure `parentOptions`, so the rule
 "a child cannot be a parent, an unplaced tag is not in the tree yet" is one
 function with a unit test rather than an `if` inside a component.
 
