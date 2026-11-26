@@ -336,11 +336,34 @@ count settings are on the page's second tab rather than in the plain
 registry. A plugin that registers a custom page must NOT also register
 plain settings: the two would fight over the same page.
 
-TWO FIELDS OF THE MODAL ARE ABSENT, because the server has no
-counterpart: the icon IMAGE (upstream's `IconImageInput`, which uploads
-a picture) and the tag's PARENT (upstream picks one in the modal). The
-port's tag resource carries no icon-image attributes, so the input
-would upload to an endpoint that does not exist.
+ONE FIELD OF THE MODAL IS ABSENT, because the server has no
+counterpart: the icon IMAGE (upstream's `IconImageInput`, which uploads a
+picture). The port's tag resource carries no icon-image attributes, so
+the input would upload to an endpoint that does not exist.
+
+**THE PARENT FIELD IS THE ONE PLACE THIS PORT GOES FURTHER THAN UPSTREAM.**
+Upstream's `EditTagModal` has no parent field: "Create secondary tag" makes an
+UNPLACED tag, and the administrator then DRAGS it under a primary tag on the
+Tags page. So the one thing they want when they create a secondary tag — to
+say which primary tag it belongs to — is left to a drag, and the created tag's
+`parent` is null until they make it. This port's modal offers a "Parent tag"
+select for exactly the tags that may carry one (a new secondary tag, a child,
+an unplaced tag), listing the ROOT tags only; the tag being edited is never an
+option. The select reads `tagParent.js`'s pure `parentOptions`, so the rule
+"a child cannot be a parent, an unplaced tag is not in the tree yet" is one
+function with a unit test rather than an `if` inside a component.
+
+The write path had to be fixed for that to work at all. `parent` is the
+two-level tree's edge, and the three columns that describe it (`parent`,
+`position`, `is_primary`) have to agree — see `resolveTagParent`: a named
+parent makes the tag a CHILD (not primary, no position of its own), asking for
+`isPrimary: true` makes it a ROOT (so it loses its parent), and a body that
+asks for both is refused with a 422 rather than guessed at. The parent itself
+must exist, must be a ROOT (a grandchild would be listed nowhere: the page
+renders one level), and cannot be the tag itself. And a body that names
+`parent` as empty now CLEARS it — it used to be indistinguishable from a body
+that said nothing about the parent, so a tag the administrator had just pulled
+out of one primary tag's list stayed nested under it.
 
 **The gamification and polls SETTINGS PAGES are not ported.** Upstream's
 `fof/gamification` uses a custom page with a rank editor and an image

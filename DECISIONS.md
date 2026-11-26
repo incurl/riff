@@ -5,6 +5,62 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## A TAG'S PARENT IS THE TREE'S EDGE, AND THE MODAL CAN SET IT (2026-11-26)
+
+An operator reported that a secondary tag's `parent` did not reference the
+primary tag, and that the admin page could not create a secondary tag in its
+place. Both are true, and they are the same gap seen from two sides.
+
+**Upstream has no parent field either.** `flarum/tags`'s `EditTagModal` offers
+name, slug, description, colour, icon, hidden and default sort; "Create
+secondary tag" creates an UNPLACED tag, and the administrator then DRAGS it
+under a primary tag on the Tags page. So the tag's `parent` is null until a
+drag supplies it, and the one thing the operator wanted — to say which primary
+tag the new secondary tag belongs to — is not expressible in the form.
+
+This port now offers it (`EditTagModal`'s `Parent tag` select, fed by the pure
+`tagParent.js::parentOptions`), and the select is shown for exactly the tags
+that may carry a parent: a new secondary tag, an existing child, an unplaced
+tag. Not a primary root (it becomes a child by being dragged onto another
+primary tag's list, which is the page's own statement about where it goes),
+and never the tag being edited.
+
+**The write path had to be fixed first, and one half of it was a silent bug.**
+`parent`, `position` and `is_primary` describe ONE tree, and they can disagree:
+
+- a body that names `parent` as empty did NOT clear it. The reader answered ""
+  for both "no relation named" and "the relation is null", so a PATCH that
+  cleared a parent looked like a PATCH that said nothing about it, and the tag
+  stayed nested under a primary tag the operator had just pulled it out of.
+- nothing stopped a CHILD from having children, or a tag from being its own
+  parent, or `isPrimary: true` from being combined with a parent. Each of those
+  is a tag that renders NOWHERE — the primary list excludes anything with a
+  parent, and the tree draws one level — so the tag is in the store, absent
+  from the page, with no error anywhere.
+
+`resolveTagParent` now decides the tag's kind from what the body SAID (not from
+what the merged tag holds, which is how a PATCH that only renames a child would
+be read as "make this a root"): a named parent makes the tag a child of it —
+not primary, no position of its own — and `isPrimary: true` makes it a root, so
+it loses its parent and takes a place after the last primary (the position it
+carried as a child is 0, and keeping it would collide with the tag already
+there). Asking for both at once is a 422: either answer puts the tag somewhere
+the operator did not ask for, and guessing is how a tag disappears.
+
+The parent is validated too: it must exist, it must be a ROOT tag (a grandchild
+is a third level this port's page and count rules were not written for), and it
+cannot be the tag itself.
+
+**The presence of the relation is its own fact.** The SPA sends `parent` as an
+ATTRIBUTE (`Model.save` drops a null relationship, so a relationship can say
+"the parent is X" but not "the parent is nobody"), while an upstream-shaped
+client sends `data.relationships.parent.data`. `parentFromBody` reads all three
+shapes and reports whether the body NAMED the relation at all — which is what
+makes a clear distinguishable from silence.
+
+Pinned by `go test -count=1 -run 'TestTags_' ./pb/flarum/` and the Jest
+`tagParent` suite.
+
 ## THE WIKI'S BRANDING IS REAL, AND A REFUSED SAVE IS NOT A SILENT ONE (2026-11-26)
 
 The wiki answered every branding write with `501 Not Implemented`. That was
