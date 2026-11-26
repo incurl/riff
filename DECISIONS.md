@@ -5,6 +5,89 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## UPLOADS, ALIGNED WITH UPSTREAM (2026-11-26)
+
+`pb/flarum/plugins/uploads/` was a working but NARROW port of `fof/upload`: one
+upload route taking one `file` part and answering ONE resource, a listing that
+only ever described the caller's own files, a resource carrying a subset of
+upstream's attributes, and a frontend that could RENDER an attachment but never
+create one. The audit against `fof/upload` 2.x (its `FileResource`,
+`UploadHandler`, `FilePolicy` and `extend.php` route table) is
+`docs/design/flarum/uploads-alignment-handoff.md`; this entry records the
+choices, and in particular the ones that are NOT upstream's.
+
+**A client written against the extension is the compatibility target, so its
+spellings are served BESIDE the port's.** `POST /api/fof/upload` (a repeated
+`files` field, `options[hidden]`/`options[shared]`, a COLLECTION response),
+`GET /api/fof/uploads` and `/api/fof/upload/shared-files`,
+`GET /api/fof/download/{uuid}` (plus upstream's `{uuid}/{post}/{csrf}` form),
+`DELETE /api/fof/upload/delete/{uuid}` and `PATCH /api/fof/upload/hide`, each
+with the POST twin the port's frontend needs for the method override. The
+port's own `/api/uploads` stays, because the port's composer used it and the
+URL is in no upstream document — but its RESPONSE changed shape: it now answers
+a collection, because one request may carry several files and upstream's
+frontend iterates `data`.
+
+**THE SIX `fof-upload.*` PERMISSIONS ARE THE POLICY AND OWNERSHIP IS LAYERED ON
+TOP.** The port answered "the uploader, or an administrator" for delete and
+"always" for upload, which is a rule with no room for an operator: it cannot let
+a member upload without letting them delete, and it cannot turn uploads off at
+all. The permissions are now upstream's (`upload`, `viewUserUploads`,
+`accessSharedFiles`, `uploadSharedFiles`, `deleteOwnUploads`,
+`deleteUserUploads`), `canDelete`/`canHide` ask the SAME functions the endpoints
+ask, and the admin's grid can grant or revoke each of them.
+
+The seed grants `upload` and `deleteOwnUploads` to the MEMBER group, which is a
+deliberate deviation: upstream's README tells the operator to grant the upload
+permission on the permissions page, and a forum where nobody may attach a file
+out of the box is worse for this port's size than one where the operator has to
+revoke it. The moderator group additionally holds `deleteUserUploads`,
+`accessSharedFiles` and `uploadSharedFiles` — the media-manager tier.
+
+**THE FLAG THE BUTTON READS IS COMPUTED FROM THE PERMISSION THE ENDPOINT
+CHECKS.** `fof-upload.canUpload` is published on the forum document through an
+`AddAttribute` contributor, and the composer's attach button branches on it
+(upstream's `addUploadButton.ts` does the same). Hardcoding it either way is the
+recurring failure this codebase keeps finding: `true` is a button the server
+refuses, `false` is a permission an operator can grant that changes nothing.
+
+**`bbcode` IS MARKDOWN, NOT UPSTREAM'S RENDERED TEMPLATE.** Upstream's
+`Util::getBbcodeForFile()` renders a Blade template (`<a href><img></a>` for an
+image). This port's posts are Markdown and the composer inserts the string
+verbatim, so the attribute carries `![](url)` for an image and `[name](url)`
+otherwise. Pasting HTML into a Markdown post would be escaped — the forum
+renders raw HTML inert on purpose — so the upstream syntax would arrive as
+literal text.
+
+**THE LISTING'S DEFAULT SORT IS `-created_at`, NOT `-id`.** Upstream's `-id` is
+newest-first because its ids are sequential; PocketBase's are random, so `-id`
+here is an arbitrary order. `created_at` is the same order upstream's `-id`
+produces.
+
+**THE TWO READERS SPEAK DIFFERENT DIALECTS, AND JOINING THEM WRONG ANSWERS
+500.** `FindRecordsByFilter` parses PocketBase's FILTER grammar, where the
+conjunction is `&&`; `CountRecords` takes a dbx expression whose text the driver
+receives as written, where it is SQL's `AND`. A listing joined with `&&` worked
+for ONE clause and answered 500 for two — which is why the shared-library
+listing needed a second read of the same clause list. Both halves are built from
+one slice of clauses, joined twice, and the comment at the join says why.
+
+**THE `shared` COLUMN NEEDS ITS OWN MIGRATION STEP.** Adding a field to
+`create_files` would never reach an instance that already ran it: a plugin
+migration that has been recorded does not run again. `add_shared_column` is
+idempotent and separate, the same shape the polls' `repair_vote_index` took.
+
+Two smaller corrections came out of the same audit and are worth recording
+because both are invisible without parsing the value: `createdAt` carried
+PocketBase's internal date layout (`2006-01-02 15:04:05.000Z`) rather than RFC
+3339, which the frontend's `new Date(...)` reads differently per engine; and the
+dimensions were `0` for a non-image where upstream's are `null`.
+
+Not ported, each with its reason in the handoff doc's §5: thumbnails (and their
+four settings — a declared setting nobody reads is a control that changes
+nothing), watermarking, resizing, the storage-adapter layer, the MIME
+allow-list, the media-manager page, and `include=actor`.
+
 ## A RENAME THE SHELL NEVER RENDERS IS A RENAME THAT DOES NOTHING (2026-11-26)
 
 Renaming the forum in the admin's **Basics** page changed nothing the reader could
