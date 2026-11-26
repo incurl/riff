@@ -272,7 +272,7 @@ split is deliberate, and the audit that produced it is worth stating:
 | `likes` | `like_own_post` | `like_own_post` |
 | `mentions` | `allow_username_format` | `allow_username_format` |
 | `tags` | `min/max_primary_tags`, `min/max_secondary_tags` | all four |
-| `gamification` | about twenty | `allowSelfVotes`, `defaultMetric`, `defaultPeriod` |
+| `gamification` | about twenty | `allowSelfVotes`, `defaultMetric`, `defaultPeriod`, `rankAmt` |
 | `polls` | eight | none |
 | `sticky` | three | none |
 | `lock`, `suspend`, `markdown`, `statistics`, `uploads` | none (permissions and custom pages only) | none |
@@ -296,15 +296,23 @@ save a file would be the dead-affordance problem again.
 `polls` plugin's `maxOptions` and `enableDiscussionPolls` were declared
 as constants but never read — this port has no poll CREATION path, so
 there is nothing for them to gate — and the gamification's
-`firstPostOnly`, `autoUpvotePosts`, `upVotesOnly` and
-`viewRankingPage` were declared and never read either. Exposing them
-would have put four switches and two number fields on an admin page
-that changed nothing, which is worse than their absence: the operator
-turns a switch and the forum does not move.
+`firstPostOnly`, `autoUpvotePosts`, `upVotesOnly` and `viewRankingPage`
+were declared and never read either. Exposing them would have put four
+switches and two number fields on an admin page that changed nothing,
+which is worse than their absence: the operator turns a switch and the
+forum does not move.
 
 The dead constants were REMOVED rather than exposed. The audit is
 pinned by `TestForum_ThePluginSettingsAreTheOnesTheServerReads` and
 `TestForum_TheAdminBundlesCarryNoDeadSettings`.
+
+`fof-gamification.rankAmt` is the one gamification setting that came
+BACK, because it gained a reader in the same pass: the rank stack next
+to a member's name trims itself to it
+(`plugins/gamification/js/models.js::ranksToShow`), and the forum
+document publishes the value the frontend reads. A setting is a control
+that changes nothing until something reads it, and then it is the
+operator's knob.
 
 **The tag COUNT RULES are a RANGE, not an exact count.** Upstream
 writes the rule as `$min === $max ? "size:$min" : "between:$min,$max"`:
@@ -339,12 +347,20 @@ would upload to an endpoint that does not exist.
 uploader, and `fof/polls` groups its settings into four fieldsets.
 Those two plugins register their settings with the plain registry, so
 the form is the standard settings list rather than upstream's bespoke
-page. The upstream `sticky` settings are not exposed at all:
-`pin_sticky_on_all_discussions` and `only_sticky_unread_discussions`
-gate a query this port does not run (the discussion list does not pin
-sticky discussions to the top), and `enable_display_excerpt` needs a
-`firstPostExcerpt` attribute and an `excerptDisplayEnabled` forum
-attribute, neither of which exists here.
+page.
+
+**The RANKS have an API but no editor.** Upstream's rank editor lives on
+that custom page: a row per rank with a name, a colour and a points
+threshold, saved as the page changes. This port serves the whole
+surface underneath it — `GET /api/ranks` (public: a rank is drawn next
+to a member's name on every post), `POST /api/ranks`,
+`PATCH`/`DELETE /api/ranks/{id}` (administrator only, with the POST
+twins the admin application's method override needs), and a
+`plugin.ResourceSerializer` so `user.ranks` resolves to RESOURCES rather
+than identifiers. The page is the one piece missing, because the admin
+application renders a custom page INSTEAD of the plain settings list
+(see the tags page above) and a rank editor that took the page would
+remove the four settings unless it re-implemented them as a tab.
 
 **The admin payload carries the SORT MAPS.** The tags page lists a
 tag's DEFAULT SORT from `app.data.sortMaps`, so that a sort an
@@ -742,6 +758,59 @@ collection. The global grant is what governs voting. A seam — a
 for an anonymous caller on purpose: the control is offered and the click opens
 the login modal. Refusing to render it leaves the reader with a poll they cannot
 interact with and no explanation.
+
+### 16d. What `gamification` implements, and what it does not
+
+Upstream's `fof/gamification` is a large extension — votes, ranks, a computed
+leaderboard, a rankings page with movement and highlights, a trending sort,
+auto-assigned groups, tag-gated voting, podium images and vote notifications.
+This port implements the CORE of it and the visible surface around it: the
+votes and their two powers, the ranks as resources and as an API, the
+leaderboard in upstream's query shape, the `/rankings` page, the rank stack
+next to a name, and the discussion list's tally.
+
+**What the alignment pass changed**, each a disagreement that produced no error:
+
+- the leaderboard's request shape (`filter[metric]`, `filter[period]`,
+  `page[offset]`, `page[limit]`, `links.next`, `included` users, id
+  `metric:period:position`) and its URL (`/api/leaderboard-entries`, with
+  `/api/leaderboard` kept as an alias);
+- the two PERMISSIONS upstream keeps apart (`canSeeVotes` for the tally,
+  `canSeeVoters` for the names — this port had one key for both), and the
+  admin grid's own spellings (`discussion.votePosts` and friends), without
+  which every gamification checkbox in the permission grid granted nothing;
+- the DISCUSSION's five vote attributes, which the list renders;
+- the `points` attribute on a user, and `ranks` as a RELATIONSHIP whose
+  resources travel in `included`.
+
+**Not ported**, and each is a surface of its own:
+
+- **`meta.standing`** ("Find me") and **`meta.highlights`** (biggest climber,
+  most consistent, new face): both compare against a PREVIOUS window, and this
+  port keeps no historical ranking to compare with;
+- **`movement`** on an entry — always `null`, which is what upstream itself
+  sends for all-time;
+- **the podium images** (`fof-gamification.topimage{1,2,3}` and their upload
+  routes);
+- **`filter[rankable]`, the excluded users/groups and hidden suspended
+  accounts**: upstream's rankings page lists `users` filtered by eligibility;
+  this port's page reads the leaderboard resource instead, so eligibility has
+  no consumer;
+- **tag-gated voting** (upstream's `EnabledTags`/`TagGate`): voting on only
+  the tags an operator chose. The same seam as the polls' tag-scoped vote
+  (§16c) is what it needs;
+- **auto-assigned groups** by points, **the trending/hotness sort**, **the
+  likes→votes conversion command**, and the three resync commands;
+- **vote notifications**: upstream notifies the post's author, gated on the
+  author's own per-direction GROUP permissions (`discussion.upvote_notifications`,
+  `discussion.downvote_notifications`) as well as their personal preference, and
+  it stores the vote's direction in the notification's `data` column, which this
+  port's inbox does not have. Half of that — a checkbox that only some votes
+  honour — is worse than its absence;
+- **the voters modal**: `seeVoters` is served and the `upvotes`/`downvotes`
+  relationships exist, but the SPA has no "View voters" control, so the flag has
+  no reader yet;
+- **the rank editor page** (§10a).
 
 ## 16a. The endpoints the admin and forum call that are not routed
 

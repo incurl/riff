@@ -5,6 +5,95 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## GAMIFICATION ALIGNED WITH `fof/gamification` 2.x (2026-11-26)
+
+The port had votes, a score and a leaderboard endpoint, and almost none of the
+extension's visible surface — and every one of the gaps was SILENT.
+
+**The ranks were the first hole.** The plugin declared `user.ranks` as a
+relationship and had no `ResourceSerializer` for `ranks`, so the response
+carried the IDENTIFIER and no RESOURCE. The frontend resolves a relation out of
+the STORE (`Model.hasMany` → `store.getById`) and fills the store from
+`included`, so the rank was in the database, the relation was on the wire, and
+the badge drew nothing with no error anywhere — the exact failure the polls
+port documented. `ranks` is renderable now, and the SERVER got upstream's three
+endpoints too (`GET /api/ranks` public, `POST`, `PATCH`/`DELETE /api/ranks/{id}`
+administrator-only, with the POST twins the admin app's method override needs).
+Without them the ranks table could only ever be seeded by hand: upstream's rank
+editor is on a custom admin page this port does not have, and no API meant no
+rank at all.
+
+**Two permission plumbing bugs sat on the same surface.** (1) One forum
+permission (`seeVoters`) answered BOTH upstream's `canSeeVotes` (the tally) and
+`canSeeVoters` (the names), so the admin grid could not grant one without the
+other, and everybody who could read a number could read who voted; the split is
+two keys now. (2) The admin grid's checkboxes post `discussion.votePosts`,
+`discussion.canSeeVotes`, `discussion.canSeeVoters` and
+`fof.gamification.viewRankingPage`, and the key table only knew the bare
+spellings — and an unknown key is stored under its own name, so EVERY
+gamification checkbox wrote a row no handler ever asked for, and granting
+voting (or the ranking page) changed nothing. The `discussion.`-prefixed names
+are canonical now, because they are what the grid round-trips.
+
+**Three shared framework holes, all of the "declared but never applied" kind:**
+
+- `AttributeContributor.Visible` was honoured on discussions, users and the
+  forum document and IGNORED on posts, which had a private copy of the loop
+  that called `Value` alone — so `votes` was sent to readers who were meant not
+  to see the tally. The private loop is gone; everything goes through
+  `applyPluginAttributes`.
+- Plugin RELATIONSHIPS were applied to posts only, so `user.ranks` (and any
+  future relation on a user, a discussion or the forum document) reached no
+  response at all. `applyPluginRelationships` is the one helper now, used by all
+  four.
+- The plugin adapters handed `Visible` predicates NO permission checker, so a
+  `visible()` that asked a permission — upstream's
+  `->visible(fn ($post, $ctx) => $ctx->getActor()->can('canSeeVotes', $post))`
+  — answered "no" for everybody and the field was never sent even when its value
+  computed correctly.
+
+**And a guest was treated as nobody.** `pluginCan`, `pluginCanScoped`,
+`permissionChecker` and `permissionCheckerScoped` all short-circuited an empty
+actor id to `false`, while the permission service itself resolves an anonymous
+caller onto the GUEST group. That made every guest-facing `can*` attribute a
+lie: the leaderboard endpoint let a guest in (it asks `api.Can`, which does not
+short-circuit) while the forum document's `canViewRankingPage` said false, so
+the page would have hidden itself from the visitor it was meant for. The
+short-circuits are gone; the guest group's rows decide, which is what
+`allowGuest` in the admin grid grants.
+
+**The leaderboard speaks upstream's dialect.** Metric and period live under
+`filter` (where JSON:API reserves a resource's own parameters), the page is
+`page[offset]`/`page[limit]`, the default page size is 10 and the maximum 50
+(upstream's `paginate(10, 50)`), the entry id composes the ranking with COLONS
+(`metric:period:position`), the page names the users it ranks in `included`,
+and `links.next` — the "load more" control — exists when there is more. The
+resource's own URL `/api/leaderboard-entries` is served beside the older
+`/api/leaderboard` alias. An unknown metric is still a `422`: upstream falls
+back, but a fallback answers a question the caller did not ask.
+
+**The rankings page reads the forum document.** `canViewRankingPage`, the two
+metric/period lists, the two defaults and `rankAmt` are published there,
+because upstream's `RankingsPage` builds its selectors from `app.forum` BEFORE
+it loads anything — an empty list is a selector with no options, and a missing
+default makes the operator's choice a control that changes nothing.
+
+**The seeds are the port's, not upstream's, and that is deliberate.** Upstream
+seeds `vote` for members and `viewRankingPage` for GUESTS, and leaves
+`canSeeVotes`/`canSeeVoters` unseeded — so a fresh upstream install shows no
+tally to anybody. This port seeds the tally for members (a vote whose count
+nobody sees is a button with no feedback), the names for moderators, and the
+ranking page for guests AND members (upstream's guest-only row hides a public
+page from every signed-in member, which is a bug rather than a policy).
+
+Not ported, and recorded in `docs/design/flarum/deviations.md` §16d:
+`meta.standing`/`meta.highlights` and `movement` (all three compare against a
+previous window this port does not keep), the podium images,
+`filter[rankable]` with excluded users and groups, tag-gated voting,
+auto-assigned groups, the trending sort, the likes→votes conversion, vote
+notifications (they need per-direction group permissions AND a `data` column
+the inbox does not have) and the voters modal.
+
 ## ONE MCP CATALOG, THREE MODULES THAT ARE NOT PROTO (2026-11-26)
 
 The MCP service derives its tools from `proto/gen/openapi.yaml`, which describes
