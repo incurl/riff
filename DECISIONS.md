@@ -5,6 +5,63 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## THE TAG HIERARCHY IS TWO NULLABLE COLUMNS, AND ALL THREE HALVES WERE WRONG (2026-11-26)
+
+Secondary tags could not be created into a tree, and dragging one under another
+did nothing. Three separate faults, each of which made the feature look broken in
+a different way:
+
+**The order endpoint refused the payload the page sends.** `TagsPage.onSortUpdate`
+posts upstream's shape — `{"order": [{"id": …, "children": [id, …]}, …]}`, one
+entry per primary tag and the ids dropped into its child list. `tagOrder` only
+accepted `[]string`, so every drag answered **422 "The order could not be
+read."** and nothing was written. The fixture in the test was a hand-written flat
+list, which the page has never sent: the same class of mistake as a hand-written
+`{"seconds": N}` timestamp — a green test asserting a shape the client cannot
+produce.
+
+**The write ignored children entirely.** `setTagPositions` wrote a position per
+id and touched nothing else. It is now upstream's `OrderTagsController`, and the
+part worth keeping is the RESET: every tag is cleared first, then the ones the
+payload names are placed, so a tag left out becomes unplaced. That single rule is
+what makes three drags work — into a child list (parent set, position = its index
+among the siblings, `is_primary` true), back out to the root (parent cleared,
+its own position), and out to the "Secondary tags" list (omitted, so cleared).
+
+**`position` was served as the stored `0` for every tag.** Upstream's is a
+NULLABLE column and the null is load-bearing: the admin page's two lists are
+`position() !== null && !isChild()` and `position() === null`. Serving `0` put
+every tag in the primary list and left the secondary one permanently empty, which
+is exactly "secondary tags do not work". The column here is a non-nullable
+`NumberField` (PocketBase has no nullable number), so `is_primary` is the stored
+flag that says which of the two a tag is, and the RESOURCE is what must present
+upstream's shape: `position` is `null` when `is_primary` is false. `seedTag` in
+the tests writes `position: 0` without `is_primary`, i.e. an unplaced tag, which
+is what the count tests want it to be — the fixture now says so.
+
+**On the frontend, children were rendered from a relationship that does not
+exist.** `tagItem` read `tag.children()` (`Model.hasMany('children')`), and the
+API serves each tag's own `parent` and nothing that points back — so the accessor
+returned `false`, the nested list rendered empty, and because the root list
+filters `!tag.parent()`, a child vanished from the page COMPLETELY. The tree now
+filters the STORE on `parent()` (upstream's approach), and the `children()`
+accessor is gone so the trap is not left for the next reader.
+
+**And the drag's own redraw showed the old tree.** The server answers 204, and
+the page re-renders from the store, so without mirroring the new arrangement into
+the store first the tag snapped back to where it came from even when the write
+succeeded — the visual half of "unable to drag into a hierarchy". `onSortUpdate`
+now applies the same arrangement it posts (`pushData` per tag), which is what
+upstream does.
+
+Verified live: three tags created (`A`, `B` primary, `C` secondary) serve as
+`position 0` / `1` / `null`; posting the page's payload with `C` under `A`
+answers 204 and leaves `C` with `parent: A`, `position: 0`, `isPrimary: true`,
+`isChild: true`; omitting `C` from the next payload returns it to `position:
+null`. Pinned by `TestTags_TheOrderPayloadNestsATag`,
+`TestTags_TheOrderDemotesWhatItDoesNotMention`,
+`TestTags_AnUnplacedTagIsASecondaryTag` and `TestTags_APrimaryTagCarriesItsPosition`.
+
 ## THE MCP ENDPOINT ANSWERS AT `/mcp/` TOO, AND AT THE HOST ROOT (2026-11-26)
 
 Two separate halves of one request, and neither alone is enough to connect a
