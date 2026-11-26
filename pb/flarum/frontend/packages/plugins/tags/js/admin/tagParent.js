@@ -52,6 +52,22 @@ export function parentOptions(tags, tagID = null) {
 }
 
 /**
+ * Whether the modal shows the parent field at all.
+ *
+ * A NEW tag only shows it when it is not being created as a PRIMARY tag: the
+ * "Create primary tag" button promises a root, and a parent would contradict
+ * it. An EXISTING tag always shows it — including a primary root, where
+ * choosing a parent DEMOTES the tag to that tag's child (the server's
+ * `resolveTagParent` does exactly that with a named parent) and leaving it
+ * empty keeps the tag where it is.
+ */
+export function showParentField(tagExists, isPrimary) {
+  if (!tagExists) return !isPrimary;
+
+  return true;
+}
+
+/**
  * The parent value to send with a tag save.
  *
  * It is an ATTRIBUTE rather than a relationship, because `Model.save` drops a

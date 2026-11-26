@@ -30,7 +30,7 @@ import ItemList from 'flarum/common/utils/ItemList';
 import Stream from 'flarum/common/utils/Stream';
 import Form from 'flarum/common/components/Form';
 
-import { parentOptions, parentValue } from './tagParent';
+import { parentOptions, parentValue, showParentField } from './tagParent';
 
 /**
  * The `EditTagModal` shows a modal which creates or edits a tag.
@@ -73,7 +73,7 @@ export default class EditTagModal extends FormModal {
     // The parent is the PRIMARY TAG the tag sits under, empty for none. A new
     // tag starts with none: choosing one is how a secondary tag is created
     // already in its place.
-    this.parentId = Stream(parentValue(this.tag));
+    this.parentId = Stream(this.attrs.parentId || parentValue(this.tag));
     this.defaultSort = Stream(this.tag.defaultSort() || '');
 
     this.suggestSlug = !this.tag.exists;
@@ -140,7 +140,8 @@ export default class EditTagModal extends FormModal {
         <div className="Form-group">
           <label>Parent tag</label>
           <div className="helpText">
-            The primary tag this one sits under. Leave it empty to create the tag unplaced, under "Secondary tags".
+            The primary tag this one sits under. Leave it empty to keep the tag at the root — unplaced, in the
+            &quot;Secondary tags&quot; list — until you drag it onto a primary tag.
           </div>
           <Select value={this.parentId()} options={parentOptions(app.store.all('tags'), this.tag.id())} onchange={this.parentId} />
         </div>,
@@ -263,11 +264,9 @@ export default class EditTagModal extends FormModal {
    * unplaced tag — may.
    */
   canHaveParent() {
-    if (!this.tag.exists) return !this.isPrimary();
-
-    // A placed root IS the primary tag; a child or an unplaced tag may be
-    // given a parent.
-    return !(this.tag.position() !== null && !this.tag.isChild());
+    // The rule is `tagParent.js`'s, so it has a unit test: hidden only when
+    // the modal is CREATING a primary tag, shown for every existing tag.
+    return showParentField(this.tag.exists, this.isPrimary());
   }
 
   submitData() {

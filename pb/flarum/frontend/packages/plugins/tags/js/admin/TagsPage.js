@@ -32,11 +32,31 @@ import { sortTags, tagIcon } from '../helpers';
  * entirely (it is filtered out of the root list by `!tag.parent()` above).
  */
 function tagItem(tag) {
+  const isPrimary = !tag.isChild() && tag.position() !== null;
+
   return (
     <li data-id={tag.id()} style={{ color: tag.color() }}>
       <div className="TagListItem-info">
         {tagIcon(tag)}
         <span className="TagListItem-name">{tag.name()}</span>
+        {/*
+          A SECONDARY TAG IS CREATED FROM ITS PRIMARY TAG.
+
+          The page's own "Create secondary tag" button makes an UNPLACED tag,
+          which is upstream's flow and leaves it to a drag to say which
+          primary tag it belongs to. This button is the one an administrator
+          looks for: it opens the same modal with the parent preselected, so
+          "add a secondary tag to this primary tag" is one click.
+        */}
+        {isPrimary && (
+          <Button
+            className="Button Button--link TagListItem-addChild"
+            icon="fas fa-plus"
+            aria-label={'Create a secondary tag under ' + tag.name()}
+            title="Create a secondary tag under this tag"
+            onclick={() => app.modal.show(EditTagModal, { primary: false, parentId: tag.id() })}
+          />
+        )}
         <Button
           className="Button Button--link"
           icon="fas fa-pencil-alt"
@@ -44,7 +64,7 @@ function tagItem(tag) {
           onclick={() => app.modal.show(EditTagModal, { model: tag })}
         />
       </div>
-      {!tag.isChild() && tag.position() !== null && (
+      {isPrimary && (
         <ol className="TagListItem-children TagList">
           {sortTags(app.store.all('tags')).filter((child) => child.parent() === tag).map(tagItem)}
         </ol>

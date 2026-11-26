@@ -11,7 +11,7 @@
  */
 import { describe, expect, it } from '@jest/globals';
 
-import { isParentable, parentOptions, parentValue } from './tagParent';
+import { isParentable, parentOptions, parentValue, showParentField } from './tagParent';
 
 /** A tag, as the store holds it. */
 function tag(id: string, name: string, position: number | null, isChild = false) {
@@ -67,5 +67,17 @@ describe('parentValue', () => {
     expect(parentValue({ parent: () => ({ id: () => 'a' }) })).toBe('a');
     expect(parentValue({ parent: () => null })).toBe('');
     expect(parentValue(null)).toBe('');
+  });
+});
+
+describe('showParentField', () => {
+  it('hides the field only when CREATING a primary tag', () => {
+    expect(showParentField(false, true)).toBe(false);
+    expect(showParentField(false, false)).toBe(true);
+  });
+
+  it('shows it for every existing tag, so a root can be moved into the tree', () => {
+    expect(showParentField(true, true)).toBe(true);
+    expect(showParentField(true, false)).toBe(true);
   });
 });

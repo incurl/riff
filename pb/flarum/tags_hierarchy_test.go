@@ -429,3 +429,39 @@ func TestTags_AParentMustBeARootTag(t *testing.T) {
 		`{"data":{"attributes":{"parent":"`+childID+`"}}}`, cookies, map[string]string{"X-CSRF-Token": csrf})
 	require.Equal(t, http.StatusUnprocessableEntity, recorder.Code, recorder.Body.String())
 }
+
+// TestTags_APrimaryRootCanBeMovedUnderAnotherPrimary pins the demotion the
+// admin modal now offers.
+//
+// Naming a parent on a tag that sits at the root makes it a CHILD of that
+// tag: `position` and `is_primary` go with it, because a tag with a parent is
+// drawn under it and never in the primary list. That is the one way to move a
+// tag into the tree from the modal, and the alternative — refusing — would
+// leave the select that offers it failing on save.
+func TestTags_APrimaryRootCanBeMovedUnderAnotherPrimary(t *testing.T) {
+	app, handler := newTestForum(t)
+
+	admin := testSuperuser(t, app)
+	cookies := sessionCookies(admin[0].Value, admin[1].Value)
+	csrf := admin[1].Value
+
+	recorder := createTagForTest(t, handler, cookies, csrf,
+		`{"data":{"type":"tags","attributes":{"name":"News","slug":"news","isPrimary":true}}}`)
+	require.Equal(t, http.StatusCreated, recorder.Code, recorder.Body.String())
+	firstID := resourceIDOf(t, recorder)
+
+	recorder = createTagForTest(t, handler, cookies, csrf,
+		`{"data":{"type":"tags","attributes":{"name":"Guides","slug":"guides","isPrimary":true}}}`)
+	require.Equal(t, http.StatusCreated, recorder.Code, recorder.Body.String())
+	secondID := resourceIDOf(t, recorder)
+
+	recorder = doWithHeaders(t, handler, http.MethodPatch, "/forum/api/tags/"+secondID,
+		`{"data":{"attributes":{"parent":"`+firstID+`"}}}`, cookies, map[string]string{"X-CSRF-Token": csrf})
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	attributes, relationships := tagDocument(t, recorder)
+	require.Equal(t, firstID, tagParentID(t, relationships))
+	require.Equal(t, true, attributes["isChild"])
+	require.Equal(t, false, attributes["isPrimary"], "a tag with a parent is not a primary tag")
+	require.Nil(t, attributes["position"], "a child has no place in the primary list")
+}
