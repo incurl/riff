@@ -5,6 +5,56 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## THE WIKI ANSWERS THE ENDPOINTS ITS OWN SPA CALLS (2026-11-26)
+
+The wiki's console showed two `TypeError`s on **every page load**:
+
+	Failed to load user settings: TypeError: Cannot read properties of null (reading 'dateFormat')
+	Failed to load favorites:    TypeError: Cannot read properties of null (reading 'pages')
+
+Neither was a crash in the settings or favourites code. **THE UNROUTED PATH IS
+NOT A 404 — IT IS THE SPA SHELL WITH A 200.** `pb/leafwiki`'s catch-all is a
+`GET {prefix}/{path...}` and the least specific route in the mux, so
+`/wiki/api/user-settings` and `/wiki/api/favorites` were answered with
+`index.html`. The SPA's request helper then does `await response.json()`, fails
+on the markup, **swallows the failure and returns `null`** — and the caller
+reads a field off it. A 200 carrying markup is worse than an error: the helper
+throws only on a non-2xx.
+
+Both endpoints are now served. The two pieces of state belong to an ACCOUNT and
+not to a page, so they live in `userdata.json` beside the tree rather than in a
+database the rest of the wiki does not need; the file is written atomically
+(temp file + rename), because a truncated file loses every account's favourites
+rather than one save. The read is served to an ANONYMOUS caller too — the SPA
+loads both on every mount, signed in or not, and a 401 would make it log the
+reader out before they did anything.
+
+**A PARTIAL SAVE KEEPS THE FIELDS IT OMITS.** `SaveSettings` normalises against
+the stored value, so a request that carries only `autoSave` does not silently
+reset the reader's language to English — the SPA sends the whole object today,
+but an older build or a hand-written request need not.
+
+**`GET /api/branding` IS SERVED AND THE WRITES ANSWER 501.** Upstream's
+`loadBranding` uses a RAW `fetch`, checks `ok`, and then parses the body — so
+the unrouted path did not throw a `TypeError`, it made the JSON parse fail and
+left the branding store on its defaults, silently disagreeing with the site
+name the shell substitutes. The read now reports `siteName: "Wiki"`, which is
+the same literal `api_spa.go` substitutes for `{{__SITE_NAME__}}`, so the two
+cannot drift; and its `brandingConstraints` block is NESTED, because the SPA
+reads `brandingConstraints.logoExts`. The upload and rename endpoints refuse
+with a 501 rather than a 200 to something they did not keep — a save that
+appears to succeed and is forgotten is the worse failure.
+
+**THE 404s ON A BARE ID ARE THE AVATARS, AND THEY ARE DELIBERATE.** A user
+picture is streamed at `{prefix}/avatars/{id}`, and the route answers 404 for
+no picture, an unknown account, and every superuser (there is no avatar field
+on `_superusers`) — because that is what makes the SPA draw initials. A
+console line per avatar-less author is the intended shape, not a fault.
+
+Pinned by `go test -count=1 -run 'TestUserdata_|TestBranding_' ./pb/leafwiki/`,
+including `TestUserdata_AnUnroutedPathWouldHaveAnsweredHtml`, which asserts the
+catch-all's 200-with-markup so the trap stays visible to the next reader.
+
 ## THE POLLS EXTENSION, ALIGNED WITH UPSTREAM (2026-11-26)
 
 The polls plugin was ported, wired, and **quietly broken in four ways at once**:
