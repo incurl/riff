@@ -11,8 +11,9 @@ disk are the source of truth**.
 | `search.db`, `tags.db`, `properties.db` | in-memory page index on `app.Store()` |
 | `links.db` | in-memory backlink index on `app.Store()` |
 | `users.db`, `sessions.db`, `apikeys.db` | PocketBase `users` / `_superusers` + auth tokens |
-| settings / branding / SMTP / git backup | not ported (reported as disabled in `/api/config`) |
-| revisions, favorites, share links, snapshots | not ported (yet) |
+| per-user settings, favourites (`users.db`) | `userdata.json` beside the tree (see below) |
+| branding / SMTP / git backup | not ported: `GET /api/branding` reports the port's identity, the writes answer 501, and `/api/config` reports the rest disabled |
+| revisions, share links, snapshots | not ported (yet) |
 | `<storage>/root/*.md`, `.order.json`, `assets/<pageId>/` | unchanged |
 
 ## Storage layout
@@ -24,6 +25,7 @@ unchanged:
 ```
 pb_data/leafwiki/
   schema.json               {"version": 5}
+  userdata.json             per-account settings + favourites
   root/
     getting-started.md      frontmatter + Markdown body
     guides/
@@ -39,6 +41,24 @@ Managed frontmatter keys (identical to upstream): `leafwiki_id`,
 `leafwiki_creator_id`, `leafwiki_last_author_id`, `leafwiki_pinned`. Every other
 key (`tags`, `owner`, nested maps) is preserved verbatim and surfaces as a page
 property.
+
+`userdata.json` holds the two pieces of state that belong to an ACCOUNT
+rather than to a page: the reader's preferences (`autoSave`, `language`,
+`dateFormat`, `timeFormat`) and their favourite page ids. LeafWiki keeps them
+in `users.db`; this port has no database of its own, so they live in one small
+JSON file, rewritten atomically on every change. It is **additive** to
+upstream's layout — an upstream LeafWiki binary ignores it, this port recreates
+it empty when it is absent, and a data directory therefore round-trips minus
+that per-user state (the same class of deviation as the in-memory index).
+
+**Both are served because the SPA calls them on every mount.** A path this
+module does not route is not a 404: the SPA catch-all answers it with the shell
+and a 200, the SPA's request helper parses that markup as JSON, fails, and
+returns `null` — and the caller reads a field off it. The console therefore
+showed a `TypeError` per page load (`reading 'dateFormat' of null`,
+`reading 'pages' of null`), which is a broken page, not a degraded feature.
+`TestUserdata_AnUnroutedPathWouldHaveAnsweredHtml` pins the catch-all's shape so
+the trap stays visible.
 
 A file dropped into `root/` by an editor is adopted on the next reload: the title
 comes from `leafwiki_title`, then the first `# heading`, then the filename, and a
@@ -113,8 +133,17 @@ PUT    /wiki/api/pages/{id}/move                   move under another parent
 PUT    /wiki/api/pages/{id}/pin                    pin/unpin
 PUT    /wiki/api/pages/{id}/sort                   reorder children
 PUT    /wiki/api/pages/{id}/assets/rename          rename an attachment
+PUT    /wiki/api/pages/{id}/favorite               mark as a favourite
 DELETE /wiki/api/pages/{id}                        delete page/subtree
+DELETE /wiki/api/pages/{id}/favorite               unmark
 DELETE /wiki/api/pages/{id}/assets/{filename}      delete an attachment
+GET    /wiki/api/user-settings                     the caller's preferences
+PUT    /wiki/api/user-settings                     save them
+GET    /wiki/api/favorites                         the caller's favourite pages
+GET    /wiki/api/branding                          site name + upload limits
+PUT    /wiki/api/branding                          refused (501)
+POST   /wiki/api/branding/logo|favicon             refused (501)
+DELETE /wiki/api/branding/logo|favicon             refused (501)
 GET    /wiki/assets/{pageId}/{filename}            attachment bytes
 GET    /wiki/api/search?q=…&tags=…                 full-text + tag search
 GET    /wiki/api/search/status                     index status

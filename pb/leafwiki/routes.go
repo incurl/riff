@@ -36,6 +36,27 @@ func (s *Server) mount(r *router.Router[*core.RequestEvent]) {
 	// --- tree ---------------------------------------------------------
 	r.GET(api+"/tree", s.treeHandler)
 
+	// --- per-user metadata --------------------------------------------
+	// The SPA loads these on EVERY mount, signed in or not. An unrouted
+	// path is answered with the SPA shell and a 200, the SPA's request
+	// helper parses that markup as JSON, fails, and returns `null` — and
+	// the caller reads a field off it. That is a console error on every
+	// page load, not a degraded feature. See api_userdata.go.
+	r.GET(api+"/user-settings", s.userSettingsHandler)
+	r.PUT(api+"/user-settings", s.userSettingsHandler)
+	r.GET(api+"/favorites", s.favoritesHandler)
+
+	// --- branding -----------------------------------------------------
+	// The read is served (the SPA applies the favicon and the site name
+	// from it); the writes are refused with a 501 rather than a 200 that
+	// changes nothing. See api_branding.go.
+	r.GET(api+"/branding", s.brandingHandler)
+	r.PUT(api+"/branding", s.brandingWriteHandler)
+	r.POST(api+"/branding/logo", s.brandingWriteHandler)
+	r.DELETE(api+"/branding/logo", s.brandingWriteHandler)
+	r.POST(api+"/branding/favicon", s.brandingWriteHandler)
+	r.DELETE(api+"/branding/favicon", s.brandingWriteHandler)
+
 	// --- pages --------------------------------------------------------
 	// The page tree is dispatched by hand rather than registered as one
 	// pattern per verb. LeafWiki's paths mix a literal verb BEFORE the id

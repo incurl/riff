@@ -40,6 +40,10 @@ var pageRoutes = []pageRoute{
 	{method: "POST", shape: "{id}/assets", handler: (*Server).uploadAssetHandler},
 
 	// --- PUT ----------------------------------------------------------
+	// A favourite is per-account state about a page, so it lives on the
+	// page's path. The SPA toggles it with an optimistic update and
+	// reverts on a non-2xx.
+	{method: "PUT", shape: "{id}/favorite", handler: (*Server).addFavoriteHandler},
 	{method: "PUT", shape: "{id}/move", handler: (*Server).movePageHandler},
 	{method: "PUT", shape: "{id}/pin", handler: (*Server).pinPageHandler},
 	{method: "PUT", shape: "{id}/sort", handler: (*Server).sortPagesHandler},
@@ -47,6 +51,7 @@ var pageRoutes = []pageRoute{
 	{method: "PUT", shape: "{id}", handler: (*Server).updatePageHandler},
 
 	// --- DELETE -------------------------------------------------------
+	{method: "DELETE", shape: "{id}/favorite", handler: (*Server).deleteFavoriteHandler},
 	{method: "DELETE", shape: "{id}/assets/{filename}", handler: (*Server).deleteAssetHandler},
 	{method: "DELETE", shape: "{id}", handler: (*Server).deletePageHandler},
 }

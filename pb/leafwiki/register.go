@@ -47,6 +47,10 @@ type Server struct {
 	index  *index
 	assets *Assets
 	ui     *spaAssets
+	// userdata is the per-user metadata: the reader's settings and
+	// favourites, which belong to an ACCOUNT and have no page to live
+	// in.
+	userdata *userdata
 }
 
 // Register mounts the wiki on the given app.
@@ -99,12 +103,13 @@ func newServer(app core.App, opts Options) (*Server, error) {
 	}
 
 	server := &Server{
-		app:    app,
-		opts:   opts,
-		tree:   tree,
-		index:  index,
-		assets: newAssets(tree.store, opts.MaxUploadBytes),
-		ui:     ui,
+		app:      app,
+		opts:     opts,
+		tree:     tree,
+		index:    index,
+		assets:   newAssets(tree.store, opts.MaxUploadBytes),
+		ui:       ui,
+		userdata: newUserdata(tree.store.storageDir),
 	}
 	return server, nil
 }
