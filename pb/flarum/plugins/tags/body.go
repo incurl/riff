@@ -1,6 +1,8 @@
 package tags
 
 import (
+	"strings"
+
 	"github.com/pkg/errors"
 	"github.com/pocketbase/pocketbase/core"
 
@@ -72,51 +74,70 @@ func tagAttributes(e *core.RequestEvent) (*domain.Tag, map[string]bool, error) {
 		tag.Position = int(value)
 	}
 
-	// The parent is a RELATIONSHIP, so it arrives as an identifier
-	// object — and the flat form carries the id directly.
-	tag.ParentID = relationshipID(body, attributes, "parent")
-	if tag.ParentID != "" {
+	// The parent arrives as a RELATIONSHIP (JSON:API) or as a plain
+	// attribute, and its PRESENCE matters on its own: a body that says
+	// `parent: null` is asking to CLEAR the relation, and a reader that
+	// only reports a non-empty id cannot tell that from silence.
+	parentID, parentNamed := parentFromBody(body, attributes)
+	tag.ParentID = parentID
+	if parentNamed {
 		present["parent"] = true
 	}
 
 	return tag, present, nil
 }
 
-// relationshipID reads a relationship's id from the request body.
+// parentFromBody reads the parent a body names, and whether it names one.
 //
-// It looks in the JSON:API shape first (`data.relationships.parent.data.id`)
-// and then the flat shape (`data.parent` or a bare `parent`).
-func relationshipID(body, attributes map[string]any, name string) string {
+// Three shapes reach this port, and all three mean the same thing:
+//
+//	{"data":{"relationships":{"parent":{"data":{"id":"…"}}}}}   JSON:API
+//	{"data":{"relationships":{"parent":{"data":null}}}}         JSON:API, clear
+//	{"data":{"attributes":{"parent":"…"}}} / {"parent":"…"}     the flat form
+//
+// The second is the one that used to be LOST: the old reader answered "" both
+// for "no relation named" and for "the relation is null", so a PATCH that
+// cleared a parent looked like a PATCH that said nothing about it, and the old
+// parent survived — a tag the admin had just pulled out of a primary tag's
+// list stayed nested under it.
+func parentFromBody(body, attributes map[string]any) (string, bool) {
+	// JSON:API names the relationship on `data`.
 	if data, ok := body["data"].(map[string]any); ok {
 		if relationships, ok := data["relationships"].(map[string]any); ok {
-			if relationship, ok := relationships[name].(map[string]any); ok {
-				if identifier, ok := relationship["data"].(map[string]any); ok {
-					if id, ok := identifier["id"].(string); ok {
-						return id
-					}
-				}
+			if relationship, ok := relationships["parent"].(map[string]any); ok {
+				return identifierID(relationship["data"]), true
 			}
 		}
-		if identifier, ok := data[name].(map[string]any); ok {
-			if id, ok := identifier["id"].(string); ok {
-				return id
-			}
-		}
-		if id, ok := data[name].(string); ok {
-			return id
+		if raw, ok := data["parent"]; ok {
+			return identifierID(raw), true
 		}
 	}
 
-	if identifier, ok := attributes[name].(map[string]any); ok {
-		if id, ok := identifier["id"].(string); ok {
-			return id
-		}
-	}
-	if id, ok := attributes[name].(string); ok {
-		return id
+	// The flat form. `attributes` is the nested attributes map for a
+	// JSON:API body and the body itself for a flat one, so this check
+	// covers both.
+	if raw, ok := attributes["parent"]; ok {
+		return identifierID(raw), true
 	}
 
-	return ""
+	return "", false
+}
+
+// identifierID reads a relationship's id out of one of its shapes: a bare id,
+// an identifier object, or `null` (which means "no relation").
+func identifierID(raw any) string {
+	switch typed := raw.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	case map[string]any:
+		id, ok := typed["id"].(string)
+		if !ok {
+			return ""
+		}
+		return strings.TrimSpace(id)
+	default:
+		return ""
+	}
 }
 
 // mergeTag merges the attributes a body carries onto a tag.

@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/pkg/errors"
+
 	"github.com/pocketbase/pocketbase/core"
 
 	"github.com/incurl/riff/pb/flarum/api"
@@ -30,7 +32,7 @@ func (p *Plugin) createTagHandler(e *core.RequestEvent) error {
 		return api.WriteError(e, http.StatusForbidden, api.CodePermissionDenied, "You are not allowed to create a tag.")
 	}
 
-	attributes, _, err := tagAttributes(e)
+	attributes, present, err := tagAttributes(e)
 	if err != nil {
 		return api.WriteError(e, http.StatusUnprocessableEntity, api.CodeValidationFailed, "The tag could not be read.")
 	}
@@ -47,15 +49,15 @@ func (p *Plugin) createTagHandler(e *core.RequestEvent) error {
 		return api.WriteError(e, http.StatusUnprocessableEntity, api.CodeValidationFailed, "The slug may not contain a slash or a space.")
 	}
 
-	// The parent must exist, when there is one.
-	if attributes.ParentID != "" {
-		if _, err := findTag(e.App, physicalName(e), attributes.ParentID); err != nil {
-			return api.WriteError(e, http.StatusUnprocessableEntity, api.CodeValidationFailed, "The parent tag does not exist.")
-		}
+	// The parent must exist, when there is one, and it decides what kind of
+	// tag this is: a tag with a parent is a CHILD of it, and a child is not
+	// primary — see [Plugin.resolveTagParent].
+	if err := p.resolveTagParent(e, attributes, "", present["parent"], present["isPrimary"]); err != nil {
+		return api.WriteError(e, http.StatusUnprocessableEntity, api.CodeValidationFailed, err.Error())
 	}
 
-	// A primary tag is placed after the last primary tag of its
-	// parent, which is upstream's rule.
+	// A primary tag is placed after the last primary tag, which is
+	// upstream's rule.
 	if attributes.IsPrimary {
 		position, err := nextPrimaryPosition(e.App, physicalName(e), attributes.ParentID)
 		if err != nil {
@@ -128,10 +130,26 @@ func (p *Plugin) updateTagHandler(e *core.RequestEvent) error {
 		}
 	}
 
-	if merged.ParentID != "" && merged.ParentID != existing.ParentID {
-		if _, err := findTag(e.App, physicalName(e), merged.ParentID); err != nil {
-			return api.WriteError(e, http.StatusUnprocessableEntity, api.CodeValidationFailed, "The parent tag does not exist.")
+	// The tree is resolved AFTER the merge: a partial body may name only
+	// the parent, and the self-check needs the tag's own id. A PATCH that
+	// only renames a child carries `isPrimary: false` through the merge
+	// without having NAMED it, which is why the handler passes what the
+	// body said rather than what the merged tag holds.
+	wasPrimary := existing.IsPrimary
+	if err := p.resolveTagParent(e, merged, existing.ID, present["parent"], present["isPrimary"]); err != nil {
+		return api.WriteError(e, http.StatusUnprocessableEntity, api.CodeValidationFailed, err.Error())
+	}
+
+	// A tag that BECOMES primary takes a place after the last primary
+	// tag: its old position is a child's (0 for a tag that was never
+	// dragged), so keeping it would put the promoted tag first and
+	// collide with the tag that is already there.
+	if merged.IsPrimary && !wasPrimary && !present["position"] {
+		position, err := nextPrimaryPosition(e.App, physicalName(e), "")
+		if err != nil {
+			return api.WriteError(e, http.StatusInternalServerError, api.CodeInternal, "The tag could not be saved.")
 		}
+		merged.Position = position
 	}
 
 	tag, unrestricted, err := updateTag(e.App, physicalName(e), existing.ID, merged)
@@ -150,7 +168,79 @@ func (p *Plugin) updateTagHandler(e *core.RequestEvent) error {
 	return api.WriteDocument(e, http.StatusOK, api.Document{Data: p.tagResourceFor(e, tag)})
 }
 
-// deleteTagHandler serves DELETE /api/tags/{id}.
+// resolveTagParent validates a tag's place in the tree and applies the
+// invariant.
+//
+// The tree is TWO LEVELS — a root tag (a "primary" one when it is placed) and
+// its children — and the three columns that describe it (`parent`, `position`,
+// `is_primary`) must agree. Upstream's model is the same: `Tag::isChild()` is
+// the parent relation, and `OrderTagsController` writes all three together.
+//
+// The rules, and why each is refused rather than papered over:
+//
+//   - the parent must exist (a dangling relation is a tag that renders
+//     nowhere);
+//   - the parent must be a ROOT tag: a child of a child is a third level the
+//     admin tree does not render and the count rules were not written for;
+//   - a tag cannot be its own parent (a cycle renders nowhere and never
+//     stops being one);
+//   - a body that asks for `isPrimary: true` AND names a parent asks for two
+//     contradictory things, and guessing which it meant is how a tag
+//     disappears from the page.
+//
+// What is NORMALISED instead of refused is the consequence of a single
+// unambiguous statement: naming a parent makes the tag a child (so it is not
+// primary), and asking for primary makes it a root (so it loses its parent).
+//
+// `tagID` is the tag being written, empty on create. `parentNamed` and
+// `primaryNamed` say which of the two the BODY named, because a merged tag
+// carries values the body never mentioned — and a PATCH that only renames a
+// child must not be read as "make this a root".
+func (*Plugin) resolveTagParent(e *core.RequestEvent, tag *domain.Tag, tagID string, parentNamed, primaryNamed bool) error {
+	if parentNamed && tag.ParentID != "" && primaryNamed && tag.IsPrimary {
+		return errPrimaryWithParent
+	}
+
+	if tag.ParentID != "" {
+		if tagID != "" && tag.ParentID == tagID {
+			return errSelfParent
+		}
+
+		parent, err := findTag(e.App, physicalName(e), tag.ParentID)
+		if err != nil {
+			return errParentMissing
+		}
+		if parent.ParentID != "" {
+			return errNestedParent
+		}
+	}
+
+	// Asking for primary makes the tag a ROOT: a primary tag has no parent.
+	if primaryNamed && tag.IsPrimary {
+		tag.ParentID = ""
+		return nil
+	}
+
+	// A tag with a parent is a CHILD, and a child is not primary.
+	if tag.ParentID != "" {
+		tag.IsPrimary = false
+	}
+
+	return nil
+}
+
+// The refusals [Plugin.resolveTagParent] answers with.
+var (
+	// errPrimaryWithParent reports a body that asks for both.
+	errPrimaryWithParent = errors.New("a tag with a parent cannot be a primary tag")
+	// errSelfParent reports a tag that names itself as its parent.
+	errSelfParent = errors.New("a tag cannot be its own parent")
+	// errParentMissing reports a parent that does not exist.
+	errParentMissing = errors.New("the parent tag does not exist")
+	// errNestedParent reports a parent that is itself a child.
+	errNestedParent = errors.New("a secondary tag cannot be the parent of another tag")
+)
+
 func (*Plugin) deleteTagHandler(e *core.RequestEvent) error {
 	if e.Request.Method == http.MethodPost {
 		if err := api.RequireMethod(e, http.MethodDelete); err != nil {

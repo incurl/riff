@@ -4,14 +4,22 @@
 // `js/src/admin/components/EditTagModal.tsx`: the same fields, in the
 // same order, with the same validation rules.
 //
-// TWO FIELDS ARE NOT HERE, AND BOTH ARE ABSENT ON THE SERVER TOO:
-// the icon IMAGE (upstream's `IconImageInput`, which uploads a
-// picture) and the tag's PARENT (upstream picks a parent in the
-// modal). The port's tag resource carries no icon-image attributes, so
-// the input would upload to an endpoint that does not exist.
+// ONE FIELD IS NOT HERE, because it is absent on the server too: the icon
+// IMAGE (upstream's `IconImageInput`, which uploads a picture). The port's tag
+// resource carries no icon-image attributes, so the input would upload to an
+// endpoint that does not exist.
 //
-// The rest — name, slug, description, colour, icon, hidden, default
-// sort — is upstream's own, and the server accepts all of them.
+// **THE PARENT FIELD IS HERE, AND UPSTREAM'S IS NOT.** Upstream's modal has no
+// parent field at all: a secondary tag is created UNPLACED and then dragged
+// under a primary tag on the Tags page. That leaves the one thing an
+// administrator wants when they create a secondary tag — to say WHICH primary
+// tag it belongs to — to a drag, and the created tag's `parent` is null until
+// they make it. This port's tree is the same two levels, so the field offers
+// exactly what the server accepts: a ROOT tag (`parentOptions` in
+// `tagParent.js`), or none at all.
+//
+// The rest — name, slug, description, colour, icon, hidden, default sort — is
+// upstream's own, and the server accepts all of them.
 import app from 'flarum/admin/app';
 import FormModal from 'flarum/common/components/FormModal';
 import Button from 'flarum/common/components/Button';
@@ -21,6 +29,8 @@ import Select from 'flarum/common/components/Select';
 import ItemList from 'flarum/common/utils/ItemList';
 import Stream from 'flarum/common/utils/Stream';
 import Form from 'flarum/common/components/Form';
+
+import { parentOptions, parentValue } from './tagParent';
 
 /**
  * The `EditTagModal` shows a modal which creates or edits a tag.
@@ -38,6 +48,7 @@ export default class EditTagModal extends FormModal {
   icon;
   isHidden;
   isPrimary;
+  parentId;
   defaultSort;
 
   /**
@@ -59,6 +70,10 @@ export default class EditTagModal extends FormModal {
     this.icon = Stream(this.tag.attribute('icon') || '');
     this.isHidden = Stream(this.tag.isHidden() || false);
     this.isPrimary = Stream(this.attrs.primary || false);
+    // The parent is the PRIMARY TAG the tag sits under, empty for none. A new
+    // tag starts with none: choosing one is how a secondary tag is created
+    // already in its place.
+    this.parentId = Stream(parentValue(this.tag));
     this.defaultSort = Stream(this.tag.defaultSort() || '');
 
     this.suggestSlug = !this.tag.exists;
@@ -118,6 +133,20 @@ export default class EditTagModal extends FormModal {
       </div>,
       40
     );
+
+    if (this.canHaveParent()) {
+      items.add(
+        'parent',
+        <div className="Form-group">
+          <label>Parent tag</label>
+          <div className="helpText">
+            The primary tag this one sits under. Leave it empty to create the tag unplaced, under "Secondary tags".
+          </div>
+          <Select value={this.parentId()} options={parentOptions(app.store.all('tags'), this.tag.id())} onchange={this.parentId} />
+        </div>,
+        35
+      );
+    }
 
     items.add(
       'description',
@@ -224,6 +253,23 @@ export default class EditTagModal extends FormModal {
     );
   }
 
+  /**
+   * Whether this tag may carry a parent.
+   *
+   * A NEW primary tag may not (a primary tag is a root), and neither may an
+   * existing primary root: it changes kind by being dragged onto another
+   * primary tag's list, which is the page's own statement about where it goes.
+   * Everything else — a new secondary tag, an existing child, an existing
+   * unplaced tag — may.
+   */
+  canHaveParent() {
+    if (!this.tag.exists) return !this.isPrimary();
+
+    // A placed root IS the primary tag; a child or an unplaced tag may be
+    // given a parent.
+    return !(this.tag.position() !== null && !this.tag.isChild());
+  }
+
   submitData() {
     return {
       name: this.name(),
@@ -236,6 +282,11 @@ export default class EditTagModal extends FormModal {
       // one changes kind by being dragged between the lists on the
       // Tags page.
       ...(this.tag.exists ? {} : { isPrimary: this.isPrimary() }),
+      // The parent travels as an ATTRIBUTE: `Model.save` drops a null
+      // relationship, and "no parent" is a value this form can produce.
+      // Naming a parent also makes the tag a child — the server keeps
+      // `isPrimary`, `position` and `parent` in agreement.
+      ...(this.canHaveParent() ? { parent: this.parentId() } : {}),
       // An empty selection means "no preference".
       defaultSort: this.defaultSort() || null,
     };
