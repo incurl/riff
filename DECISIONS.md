@@ -5,6 +5,44 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## THE MCP ENDPOINT ANSWERS AT `/mcp/` TOO, AND AT THE HOST ROOT (2026-11-26)
+
+Two separate halves of one request, and neither alone is enough to connect a
+client.
+
+**The proxy.** `/mcp` was not in the root block that carries `/_` and `/api`, so
+`Caddyfile.fly.community` matched it with `@spa` and answered **308 →
+`/memos/mcp`**, while `scripts/Caddyfile` let the static site 404 it. Both now
+proxy `/mcp` and `/mcp/*` VERBATIM (`handle`, never `handle_path` — the path IS
+the endpoint), and the fly profile also excludes them from `@spa`. The 308 is
+not harmless for this surface: an MCP client POSTs its JSON-RPC handshake to
+exactly the URL it was configured with, and a redirect into a sub-path is a URL
+it never asked for.
+
+**The trailing slash.** `POST /mcp/` answered **200 with `index.html`** — the
+SPA catch-all is the least specific pattern in the mux, so a path riff does not
+route is served the shell, and the client parses a page of markup as a JSON-RPC
+reply. Several MCP clients normalise the configured URL to end in a slash, so
+this was the more likely spelling to break. `server/mcp/register.go` now
+registers the exact `/mcp` pattern AND the `/mcp/` subtree (a pattern ending in
+`/` is a subtree in `http.ServeMux`), and the handler serves only those two
+spellings: a deeper path answers a JSON 404 instead of being treated as the
+endpoint or falling through to the SPA.
+
+**The deploy smoke test drives a real handshake.** `scripts/fly_deploy.sh` gained
+a fifth stage that POSTs an `initialize` request to `https://<host>/mcp` and
+requires a 200 whose content type is `application/json` (or `text/event-stream`).
+A status-only check would pass on the shell — 200 with `text/html` is exactly
+what the broken state returned — so the check inspects the content type, and its
+failure message names both the missing handle blocks and the missing `@spa`
+exclusion.
+
+Verified against a real caddy with the real Caddyfile: before, `POST /mcp` and
+`POST /mcp/` both answered 308 into `/memos/`; after, both answer
+`application/json` from the MCP service (`{"jsonrpc":"2.0",…,"serverInfo":
+{"name":"memos"}}`), while `/`, `/api/health` and `/memos/api/health` are
+unchanged. `TestMCP_RegisterMountsEndpoint` pins all three spellings at the mux.
+
 ## THE DEFAULT LANGUAGE IS A SETTING, AND THE RESOLVER IS UPSTREAM'S (2026-11-26)
 
 Changing the forum's **Default language** in the admin did nothing. The setting
