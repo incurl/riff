@@ -209,6 +209,22 @@ func (p *Plugin) removeTagHandler(e *core.RequestEvent) error {
 // The `can*` attributes carry the CALLER's capabilities, so they are
 // computed here rather than read off the tag.
 func tagResource(tag *domain.Tag) api.Resource {
+	// `position` is NULLABLE upstream, and the null is LOAD-BEARING: it is
+	// how the frontend tells a placed tag from an unplaced one. The admin's
+	// tag page splits its two lists on exactly that — `position() !== null &&
+	// !isChild()` for the primary list and `position() === null` for the
+	// "Secondary tags" list — so serving the column's stored 0 for an
+	// unplaced tag put EVERY tag in the primary list and left the secondary
+	// one permanently empty.
+	//
+	// `isPrimary` is the stored flag that says which of the two a tag is
+	// (`applyTag` keeps it and the column in step), so it is what decides
+	// the shape here.
+	position := any(nil)
+	if tag.IsPrimary {
+		position = tag.Position
+	}
+
 	return api.Resource{
 		Type: api.TypeTag,
 		ID:   tag.ID,
@@ -218,7 +234,7 @@ func tagResource(tag *domain.Tag) api.Resource {
 			"description":     tag.Description,
 			"color":           tag.Color,
 			"icon":            tag.Icon,
-			"position":        tag.Position,
+			"position":        position,
 			"isHidden":        tag.IsHidden,
 			"isPrimary":       tag.IsPrimary,
 			"isRestricted":    tag.IsRestricted,

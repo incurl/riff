@@ -171,11 +171,32 @@ func mergeTag(existing, updates *domain.Tag, present map[string]bool) *domain.Ta
 	return &merged
 }
 
-// tagOrder reads the tag order from the request body.
+// tagOrderEntry is one entry of the order payload: a tag and its children.
 //
-// The body carries the ids in their new order, in the JSON:API shape
-// and in the flat form.
-func tagOrder(e *core.RequestEvent) ([]string, error) {
+// It is upstream's `{id, children}` pair. The child ids are the tags the
+// admin dragged INTO this tag's child list, and the order they appear in is
+// their position among the siblings.
+type tagOrderEntry struct {
+	// ID is the tag's id.
+	ID string
+	// Children are the ids of the tags nested under it, in order.
+	Children []string
+}
+
+// tagOrder reads the tag tree from the request body.
+//
+// The body is upstream's `{"order": [{"id": …, "children": [id, …]}, …]}`
+// (`OrderTagsController`), and it also accepts that list under `data` and a
+// bare id in place of an entry — a flat `{"order": ["id", …]}` is the same
+// statement as a list of childless entries, and the port's own tests wrote
+// it that way before the admin page's shape was known.
+//
+// THE NESTED SHAPE IS THE ONE THE ADMIN PAGE SENDS (`TagsPage.onSortUpdate`
+// reads `.TagList--primary > li` and, for each, its
+// `.TagListItem-children > li` ids). A parser that only accepts strings
+// refuses the drag with a 422, which is what "dragging does nothing" looked
+// like.
+func tagOrder(e *core.RequestEvent) ([]tagOrderEntry, error) {
 	body := map[string]any{}
 
 	if err := api.DecodeBody(e, &body); err != nil {
@@ -197,16 +218,47 @@ func tagOrder(e *core.RequestEvent) ([]string, error) {
 		return nil, errBadOrder
 	}
 
-	order := make([]string, 0, len(list))
+	order := make([]tagOrderEntry, 0, len(list))
+
 	for _, item := range list {
-		id, ok := item.(string)
-		if !ok {
+		switch typed := item.(type) {
+		case string:
+			if typed == "" {
+				return nil, errBadOrder
+			}
+			order = append(order, tagOrderEntry{ID: typed})
+		case map[string]any:
+			entry := tagOrderEntry{ID: stringField(typed["id"])}
+			if entry.ID == "" {
+				return nil, errBadOrder
+			}
+
+			if children, ok := typed["children"].([]any); ok {
+				for _, child := range children {
+					id, ok := child.(string)
+					if !ok || id == "" {
+						return nil, errBadOrder
+					}
+					entry.Children = append(entry.Children, id)
+				}
+			}
+
+			order = append(order, entry)
+		default:
 			return nil, errBadOrder
 		}
-		order = append(order, id)
 	}
 
 	return order, nil
+}
+
+// stringField reads a string out of a decoded JSON value.
+func stringField(value any) string {
+	text, ok := value.(string)
+	if !ok {
+		return ""
+	}
+	return text
 }
 
 // deleteTagScopedPermissions removes a tag's scoped permission rows.

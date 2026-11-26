@@ -221,7 +221,7 @@ func (*Plugin) orderTagsHandler(e *core.RequestEvent) error {
 		return api.WriteError(e, http.StatusUnprocessableEntity, api.CodeValidationFailed, "The order could not be read.")
 	}
 
-	if err := setTagPositions(e.App, physicalName(e), order); err != nil {
+	if err := setTagOrder(e.App, physicalName(e), order); err != nil {
 		return api.WriteError(e, http.StatusInternalServerError, api.CodeInternal, "The tags could not be reordered.")
 	}
 

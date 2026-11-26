@@ -28,6 +28,14 @@ func seedTag(t *testing.T, app core.App, name, slug string) *core.Record {
 	record := core.NewRecord(collection)
 	record.Set("name", name)
 	record.Set("slug", slug)
+	// An UNPLACED tag, which is what upstream calls a secondary tag: it has
+	// no place in the tree until an administrator drags it into one. The
+	// resource serves `position: null` for it (`is_primary` is false), and
+	// the count rules count it as a secondary tag — which is what the tests
+	// that use this fixture for the tag-count rules expect.
+	//
+	// A PRIMARY tag is seeded by setting `is_primary` too, as the tests that
+	// need one do.
 	record.Set("position", 0)
 	require.NoError(t, app.Save(record))
 

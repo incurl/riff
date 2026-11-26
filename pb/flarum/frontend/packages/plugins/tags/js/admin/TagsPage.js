@@ -23,6 +23,13 @@ import { sortTags, tagIcon } from '../helpers';
 
 /**
  * One tag in the tree.
+ *
+ * The children are found by FILTERING THE STORE on `parent()`, which is what
+ * upstream does — not from a `children` relationship, because the API does
+ * not carry one: a tag serves its own `parent` relationship and nothing
+ * points back. A `children()` accessor therefore read a relationship that is
+ * never sent, returned nothing, and a nested tag vanished from the page
+ * entirely (it is filtered out of the root list by `!tag.parent()` above).
  */
 function tagItem(tag) {
   return (
@@ -39,7 +46,7 @@ function tagItem(tag) {
       </div>
       {!tag.isChild() && tag.position() !== null && (
         <ol className="TagListItem-children TagList">
-          {sortTags(tag.children() || []).map(tagItem)}
+          {sortTags(app.store.all('tags')).filter((child) => child.parent() === tag).map(tagItem)}
         </ol>
       )}
     </li>
@@ -301,28 +308,60 @@ export default class TagsPage extends ExtensionPage {
   }
 
   /**
-   * Persist a new order.
+   * Persist a new arrangement, and mirror it into the store.
+   *
+   * The store half is not cosmetic. The tree renders from the STORE, and the
+   * server answers the reorder with a 204 — so a redraw without the local
+   * update would render the arrangement the page LOADED with, and the tag
+   * would snap back to where it came from even though the write succeeded.
+   * Upstream updates the store for the same reason (`TagsPage.onSortUpdate`).
    */
   onSortUpdate(e) {
+    // A tag dragged from the primary list into the "Secondary tags" one is
+    // UNSET: it has no position and no parent. The payload below does not
+    // mention it (it is not in `.TagList--primary` any more), and the server
+    // treats silence as "nowhere" — so the local copy has to say the same or
+    // the redraw puts it back.
+    if (e.from instanceof HTMLOListElement && e.to instanceof HTMLUListElement) {
+      const moved = app.store.getById('tags', e.item.getAttribute('data-id'));
+
+      if (moved) {
+        moved.pushData({ attributes: { position: null, isChild: false }, relationships: { parent: null } });
+      }
+    }
+
     const order = [];
 
     this.$('.TagList--primary > li')
-      .map((element) => {
-        const id = element.getAttribute('data-id');
-
+      .map(function () {
         order.push({
-          id: id,
-          children: Array.from(element.querySelectorAll('.TagListItem-children > li'))
-            .map((child) => child.getAttribute('data-id'))
-            .get(),
+          id: this.getAttribute('data-id'),
+          children: Array.from(this.querySelectorAll('.TagListItem-children > li')).map((child) => child.getAttribute('data-id')),
         });
       })
       .get();
 
+    // The same arrangement, applied to the store.
+    order.forEach((entry, i) => {
+      const parent = app.store.getById('tags', entry.id);
+
+      if (!parent) return;
+
+      parent.pushData({ attributes: { position: i, isChild: false }, relationships: { parent: null } });
+
+      entry.children.forEach((childId, j) => {
+        const child = app.store.getById('tags', childId);
+
+        if (!child) return;
+
+        child.pushData({ attributes: { position: j, isChild: true }, relationships: { parent } });
+      });
+    });
+
     app.request({
       url: app.forum.attribute('apiUrl') + '/tags/order',
       method: 'POST',
-      body: { order: order },
+      body: { order },
     });
 
     this.forcedRefreshKey++;

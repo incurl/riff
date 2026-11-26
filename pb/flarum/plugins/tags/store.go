@@ -286,27 +286,82 @@ func applyTag(record *core.Record, tag *domain.Tag) {
 	}
 }
 
-// setTagPositions writes the position of every tag in a list.
+// setTagOrder writes the tag tree.
 //
-// It is upstream's `POST /tags/order`: the admin drags the tags into
-// an order, and the whole list is written in one go.
-func setTagPositions(app core.App, physical string, order []string) error {
+// It is upstream's `OrderTagsController`, and the RESET is the half that is
+// easy to miss: EVERY tag is cleared first, so a tag the payload does not
+// mention becomes an unplaced secondary tag. That is how dragging a tag out
+// of the primary list demotes it, and how a child dragged back to the root
+// stops being anybody's child — the payload says where the placed tags go,
+// and silence means "nowhere".
+//
+// A placed tag gets its index as its position; a CHILD gets its index among
+// its siblings and its parent's id, and upstream marks it `is_primary` too
+// (a child is positioned, just not at the root). `isChild` — which the
+// frontend sorts on — is the parent relation, so the two agree.
+func setTagOrder(app core.App, physical string, order []tagOrderEntry) error {
 	collection, err := app.FindCollectionByNameOrId(physical)
 	if err != nil {
 		return errors.Wrapf(err, "tags: the %q collection is missing", physical)
 	}
 
-	for index, tagID := range order {
-		record, err := app.FindRecordById(collection, tagID)
-		if err != nil {
+	records, err := app.FindAllRecords(collection, nil)
+	if err != nil {
+		return errors.Wrap(err, "tags: the tags could not be read")
+	}
+
+	byID := make(map[string]*core.Record, len(records))
+	for _, record := range records {
+		byID[record.Id] = record
+	}
+
+	// The reset. `position` is a non-nullable column here, so clearing it
+	// stores 0; the RESOURCE serves null for a tag that is not primary, and
+	// that is what the admin page reads. `is_primary` is the flag that says
+	// which of the two a tag is.
+	for _, record := range records {
+		record.Set("position", nil)
+		record.Set("parent", "")
+		record.Set("is_primary", false)
+		if err := app.Save(record); err != nil {
+			return errors.Wrap(err, "tags: the order could not be cleared")
+		}
+	}
+
+	place := func(id string, position int, parentID string) error {
+		record, ok := byID[id]
+		if !ok {
 			// A tag that no longer exists is skipped rather than
 			// failing the whole reorder.
+			return nil
+		}
+
+		record.Set("position", position)
+		record.Set("parent", parentID)
+		record.Set("is_primary", true)
+
+		if err := app.Save(record); err != nil {
+			return errors.Wrap(err, "tags: the position could not be saved")
+		}
+		return nil
+	}
+
+	for index, entry := range order {
+		if entry.ID == "" {
 			continue
 		}
 
-		record.Set("position", index)
-		if err := app.Save(record); err != nil {
-			return errors.Wrap(err, "tags: the position could not be saved")
+		if err := place(entry.ID, index, ""); err != nil {
+			return err
+		}
+
+		for childIndex, childID := range entry.Children {
+			if childID == "" || childID == entry.ID {
+				continue
+			}
+			if err := place(childID, childIndex, entry.ID); err != nil {
+				return err
+			}
 		}
 	}
 

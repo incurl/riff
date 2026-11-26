@@ -45,9 +45,12 @@ export class Tag extends Model {
     return Model.hasOne('parent').call(this);
   }
 
-  children() {
-    return Model.hasMany('children').call(this);
-  }
+  // NOT `children()`. The API carries a tag's `parent` relationship and
+  // nothing that points back, so a `hasMany('children')` accessor read a
+  // relationship that is never sent: it returned false, and the admin tree
+  // (which is the only reader) rendered a nested tag nowhere at all. The
+  // tree filters the STORE on `parent()` instead, which is upstream's
+  // approach.
 
   defaultSort() {
     return Model.attribute('defaultSort').call(this);
