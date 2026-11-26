@@ -86,20 +86,33 @@ func voteAs(t *testing.T, handler http.Handler, postID, vote string, cookies []*
 // flipped: a row with `allowed = false` would be a deny, and the
 // permission service's lookup stops at the first ALLOW, so a deny row
 // alongside an allow row for another group would not take effect.
-func removeMemberPermission(t *testing.T, app core.App, permission string) {
+// removeGroupPermission takes a permission away from a group.
+//
+// The rows are per (group, permission), so the row is DELETED rather than
+// flipped: a row with `allowed = false` would be a deny, and the
+// permission service's lookup stops at the first ALLOW, so a deny row
+// alongside an allow row for another group would not take effect.
+func removeGroupPermission(t *testing.T, app core.App, groupID, permission string) {
 	t.Helper()
 
 	collection := mustCollection(t, app, "forum_permissions")
 
 	records, err := app.FindRecordsByFilter(collection, "permission = {:permission} && group = {:group}", "", 0, 0, map[string]any{
 		"permission": permission,
-		"group":      domain.GroupMemberID,
+		"group":      groupID,
 	})
 	require.NoError(t, err)
 
 	for _, record := range records {
 		require.NoError(t, app.Delete(record))
 	}
+}
+
+// removeMemberPermission takes a permission away from the member group.
+func removeMemberPermission(t *testing.T, app core.App, permission string) {
+	t.Helper()
+
+	removeGroupPermission(t, app, domain.GroupMemberID, permission)
 }
 
 // setGameSetting writes a forum setting.
@@ -268,7 +281,9 @@ func TestGamification_TheLeaderboardRanksByMetric(t *testing.T) {
 
 	firstEntry := entries[0]
 	require.Equal(t, "leaderboard-entries", firstEntry["type"])
-	require.Contains(t, firstEntry["id"], "posts-all-", "the id must name the ranking: %v", firstEntry["id"])
+	// Upstream composes the id as `metric:period:position`, so an entry
+	// from a different board is a different record to a client store.
+	require.Equal(t, "posts:all:1", firstEntry["id"], "the id must name the ranking")
 }
 
 // TestGamification_TheDefaultMetricAndPeriodAreHonoured pins
@@ -303,8 +318,8 @@ func TestGamification_TheDefaultMetricAndPeriodAreHonoured(t *testing.T) {
 	entries := leaderboardEntries(t, recorder)
 	require.NotEmpty(t, entries, "the seeded discussion must appear")
 
-	require.Contains(t, entries[0]["id"], "votes-all-",
-		"the default metric and period must decide the ranking: %v", entries[0]["id"])
+	require.Equal(t, "votes:all:1", entries[0]["id"],
+		"the default metric and period must decide the ranking")
 }
 
 // TestGamification_TheDefaultMetricAndPeriodAreValidated pins that a
@@ -345,27 +360,55 @@ func TestGamification_AnUnknownMetricIsAValidationFailure(t *testing.T) {
 // TestGamification_TheLeaderboardIsGated pins that the ranking page has
 // its own permission, upstream's `fof.gamification.viewRankingPage`.
 //
-// The permission is seeded for the member group, so a member may read it
-// and a GUEST may not: the ranking names who has been active, which is
-// nothing a guest should be able to enumerate.
+// Upstream seeds it for the GUEST group — the ranking is public — and this
+// port seeds the member group too. The test therefore takes the grant AWAY
+// rather than assuming a guest has none: a permission that answers yes for
+// everybody would pass a "the member may read it" assertion without the
+// permission doing anything at all.
 func TestGamification_TheLeaderboardIsGated(t *testing.T) {
 	app, handler := newTestForum(t)
 
 	_, cookies := memberSession(t, app, "game_ranking")
 
+	// A member and a guest may both read it: the ranking is public.
 	recorder := do(t, handler, http.MethodGet, "/forum/api/leaderboard", "", cookies)
 	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
 
-	// A guest may not.
 	recorder = do(t, handler, http.MethodGet, "/forum/api/leaderboard", "", nil)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	// Take the grant away from both groups: now neither may.
+	removeGroupPermission(t, app, domain.GroupGuestID, domain.PermissionViewRankingPage)
+	removeGroupPermission(t, app, domain.GroupMemberID, domain.PermissionViewRankingPage)
+
+	recorder = do(t, handler, http.MethodGet, "/forum/api/leaderboard", "", nil)
+	require.Equal(t, http.StatusForbidden, recorder.Code, recorder.Body.String())
+
+	recorder = do(t, handler, http.MethodGet, "/forum/api/leaderboard", "", cookies)
 	require.Equal(t, http.StatusForbidden, recorder.Code, recorder.Body.String())
 }
 
 // TestGamification_ThePermissionKeysTranslate pins that the admin
 // application's upstream key names reach the forum's own keys.
 func TestGamification_ThePermissionKeysTranslate(t *testing.T) {
+	// The admin grid posts the `discussion.`-prefixed spellings, and an
+	// unknown key is stored under its own name — so a missing row here is
+	// a checkbox that grants nothing.
+	require.Equal(t, domain.PermissionVotePost, domain.ForumPermissionKey("discussion.votePosts"))
 	require.Equal(t, domain.PermissionVotePost, domain.ForumPermissionKey("votePosts"))
-	require.Equal(t, domain.PermissionSeeVoters, domain.ForumPermissionKey("canSeeVotes"))
+
+	// The tally and the NAMES are two powers upstream keeps apart.
+	require.Equal(t, domain.PermissionSeeVoteCount, domain.ForumPermissionKey("discussion.canSeeVotes"))
+	require.Equal(t, domain.PermissionSeeVoters, domain.ForumPermissionKey("discussion.canSeeVoters"))
+	require.NotEqual(t, domain.PermissionSeeVoteCount, domain.PermissionSeeVoters)
+
+	// The extension's own key for the leaderboard.
+	require.Equal(t, domain.PermissionViewRankingPage, domain.ForumPermissionKey("fof.gamification.viewRankingPage"))
+
+	// And the reverse, which is what the admin payload publishes.
+	require.Equal(t, "discussion.votePosts", domain.UpstreamPermissionKey(domain.PermissionVotePost))
+	require.Equal(t, "discussion.canSeeVotes", domain.UpstreamPermissionKey(domain.PermissionSeeVoteCount))
+	require.Equal(t, "discussion.canSeeVoters", domain.UpstreamPermissionKey(domain.PermissionSeeVoters))
 }
 
 // postVoteScore reads a post's vote score.
@@ -428,4 +471,188 @@ func leaderboardEntries(t *testing.T, recorder *httptest.ResponseRecorder) []map
 	}
 
 	return entries
+}
+
+// --- the ranks, as upstream's RankResource serves them ------------------
+
+// TestGamification_TheRanksAreServed pins `GET /api/ranks`.
+//
+// It is upstream's `RankResource` index, and it must be readable by
+// EVERYBODY who reads a post: a rank is drawn next to a member's name.
+// The order is the ladder's — fewest points first — because that is the
+// order a rank editor lays its rows out in.
+func TestGamification_TheRanksAreServed(t *testing.T) {
+	app, handler := newTestForum(t)
+
+	seedRank(t, app, "Veteran", "#2ecc71", 100)
+	seedRank(t, app, "Rookie", "#3498db", 1)
+
+	// A guest reads them: the index is not gated.
+	recorder := do(t, handler, http.MethodGet, "/forum/api/ranks", "", nil)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	ranks := leaderboardEntries(t, recorder)
+	require.Len(t, ranks, 2)
+
+	first := ranks[0]
+	require.Equal(t, "ranks", first["type"])
+
+	attributes, ok := first["attributes"].(map[string]any)
+	require.True(t, ok)
+
+	require.Equal(t, "Rookie", attributes["name"], "the ladder starts at its lowest threshold")
+	require.Equal(t, "#3498db", attributes["color"])
+	require.InDelta(t, 1, attributes["points"], 0.001)
+}
+
+// TestGamification_ARankCanBeManagedByAnAdministrator pins upstream's three
+// admin endpoints.
+//
+// Without them a rank can only appear by seeding the database: the ranks
+// table starts empty, so every `user.rank` and every badge renders as
+// nothing on a fresh forum — and the frontend has no editor to write one.
+func TestGamification_ARankCanBeManagedByAnAdministrator(t *testing.T) {
+	app, handler := newTestForum(t)
+
+	admin := testSuperuser(t, app)
+
+	// CREATE.
+	body := `{"data":{"type":"ranks","attributes":{"name":"Veteran","color":"#2ecc71","points":100}}}`
+	recorder := doWithHeaders(t, handler, http.MethodPost, "/forum/api/ranks", body, admin,
+		map[string]string{"X-CSRF-Token": "csrf-token"})
+	require.Equal(t, http.StatusCreated, recorder.Code, recorder.Body.String())
+
+	created := map[string]any{}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &created))
+
+	data, ok := created["data"].(map[string]any)
+	require.True(t, ok, "the create must answer with the resource: %s", recorder.Body.String())
+
+	rankID, ok := data["id"].(string)
+	require.True(t, ok)
+	require.NotEmpty(t, rankID)
+
+	// UPDATE, as a PATCH.
+	recorder = doWithHeaders(t, handler, http.MethodPatch, "/forum/api/ranks/"+rankID,
+		`{"data":{"attributes":{"name":"Veteran II"}}}`, admin,
+		map[string]string{"X-CSRF-Token": "csrf-token"})
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	updated := map[string]any{}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &updated))
+	updatedData, ok := updated["data"].(map[string]any)
+	require.True(t, ok)
+
+	attributes, ok := updatedData["attributes"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "Veteran II", attributes["name"], "a named field is updated")
+	require.InDelta(t, 100, attributes["points"], 0.001, "an absent field keeps its value")
+
+	// DELETE, as a POST carrying the override the frontend sends.
+	recorder = doWithHeaders(t, handler, http.MethodPost, "/forum/api/ranks/"+rankID, "", admin,
+		map[string]string{"X-CSRF-Token": "csrf-token", "X-HTTP-Method-Override": "DELETE"})
+	require.Equal(t, http.StatusNoContent, recorder.Code, recorder.Body.String())
+
+	recorder = do(t, handler, http.MethodGet, "/forum/api/ranks", "", admin)
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Empty(t, leaderboardEntries(t, recorder), "the rank is gone")
+}
+
+// TestGamification_AMemberMayNotManageRanks pins the admin gate.
+//
+// Upstream's endpoints are `->admin()`: a rank is a forum configuration
+// row, and a member who could write one could award themselves the highest
+// badge on the forum.
+func TestGamification_AMemberMayNotManageRanks(t *testing.T) {
+	app, handler := newTestForum(t)
+
+	_, cookies := memberSession(t, app, "game_rank_writer")
+
+	recorder := doWithHeaders(t, handler, http.MethodPost, "/forum/api/ranks",
+		`{"data":{"attributes":{"name":"Boss","color":"#fff","points":0}}}`, cookies,
+		map[string]string{"X-CSRF-Token": "csrf-token"})
+	require.Equal(t, http.StatusForbidden, recorder.Code, recorder.Body.String())
+
+	// The same for an anonymous caller.
+	recorder = do(t, handler, http.MethodPost, "/forum/api/ranks", `{}`, nil)
+	require.Equal(t, http.StatusForbidden, recorder.Code, recorder.Body.String())
+}
+
+// TestGamification_ARankNeedsItsFields pins the create validation.
+//
+// Upstream marks all three `requiredOnCreate`: a rank with no name cannot
+// be rendered, and one with no threshold is reachable by everybody at
+// once.
+func TestGamification_ARankNeedsItsFields(t *testing.T) {
+	app, handler := newTestForum(t)
+
+	admin := testSuperuser(t, app)
+
+	recorder := doWithHeaders(t, handler, http.MethodPost, "/forum/api/ranks",
+		`{"data":{"attributes":{"color":"#fff","points":10}}}`, admin,
+		map[string]string{"X-CSRF-Token": "csrf-token"})
+	require.Equal(t, http.StatusUnprocessableEntity, recorder.Code, recorder.Body.String())
+
+	recorder = doWithHeaders(t, handler, http.MethodPost, "/forum/api/ranks",
+		`{"data":{"attributes":{"name":"Nameless","color":"#fff"}}}`, admin,
+		map[string]string{"X-CSRF-Token": "csrf-token"})
+	require.Equal(t, http.StatusUnprocessableEntity, recorder.Code, recorder.Body.String())
+}
+
+// TestGamification_TheUsersRanksAreResources pins the relationship.
+//
+// The frontend resolves `user.ranks()` out of the STORE, and the store is
+// filled from `included` — so the identifier alone renders nothing. The
+// plugin declares a resource serializer for exactly this, and without it
+// the badge is in the database and absent from the page, with no error
+// anywhere.
+func TestGamification_TheUsersRanksAreResources(t *testing.T) {
+	app, handler := newTestForum(t)
+
+	author, _ := memberSession(t, app, "game_badged")
+	_, voter := memberSession(t, app, "game_badger")
+
+	seedRank(t, app, "Rookie", "#3498db", 1)
+
+	discussionID, _ := seedDiscussionWithAuthor(t, app, author.Id, "Badged", "Hello")
+	postID := postIDOf(t, app, discussionID)
+
+	require.Equal(t, http.StatusOK, voteAs(t, handler, postID, "up", voter).Code)
+
+	recorder := do(t, handler, http.MethodGet, "/forum/api/users/"+author.Id+"?include=ranks", "", voter)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	document := map[string]any{}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &document))
+
+	// The account carries the relationship...
+	data, ok := document["data"].(map[string]any)
+	require.True(t, ok)
+	relationships, ok := data["relationships"].(map[string]any)
+	require.True(t, ok, "the user must carry its relationships: %v", data)
+
+	ranks, ok := relationships["ranks"].(map[string]any)
+	require.True(t, ok, "the user must carry a ranks relationship: %v", relationships)
+
+	identifiers, ok := ranks["data"].([]any)
+	require.True(t, ok)
+	require.Len(t, identifiers, 1)
+
+	// ...and the RESOURCE travels with it.
+	included, ok := document["included"].([]any)
+	require.True(t, ok, "the response must carry the rank resource: %s", recorder.Body.String())
+
+	found := false
+	for _, item := range included {
+		resource, ok := item.(map[string]any)
+		if !ok || resource["type"] != "ranks" {
+			continue
+		}
+		found = true
+		attributes, ok := resource["attributes"].(map[string]any)
+		require.True(t, ok)
+		require.Equal(t, "Rookie", attributes["name"])
+		require.Equal(t, "#3498db", attributes["color"])
+	}
+	require.True(t, found, "the ranks relationship must resolve to a resource, not an identifier: %v", included)
 }

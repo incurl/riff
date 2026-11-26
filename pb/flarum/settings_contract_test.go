@@ -109,6 +109,11 @@ func TestForum_ThePluginSettingsAreTheOnesTheServerReads(t *testing.T) {
 		gamification.SettingAllowSelfVotes: true,
 		gamification.SettingDefaultMetric:  true,
 		gamification.SettingDefaultPeriod:  true,
+		// The rank badges a name shows is read by the forum document's
+		// `fof-gamification.rankAmt` attribute
+		// (`plugins/gamification/gamification.go`), which the frontend's
+		// rank stack branches on.
+		gamification.SettingRankAmt: true,
 		// The uploads plugin's limit is read by `maxFileSizeBytes`
 		// (`plugins/uploads/handlers.go`), which caps the effective size
 		// at the collection's own field maximum.
@@ -260,6 +265,10 @@ func TestForum_TheAdminBundlesCarryNoDeadSettings(t *testing.T) {
 		gamification.SettingAllowSelfVotes: true,
 		gamification.SettingDefaultMetric:  true,
 		gamification.SettingDefaultPeriod:  true,
+		// The rank stack reads it (`plugins/gamification/js/models.js::
+		// ranksToShow`, fed by the forum document's
+		// `fof-gamification.rankAmt`).
+		gamification.SettingRankAmt: true,
 		// The tags extension's `allow_tag_change` is upstream's FLAT key, not a
 		// `flarum-tags.`-prefixed one, because the server reads it by that name
 		// (`api.AllowTagChangeSetting`) and the admin payload publishes it there.

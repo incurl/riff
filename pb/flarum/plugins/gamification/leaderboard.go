@@ -2,7 +2,9 @@ package gamification
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -11,6 +13,7 @@ import (
 	"github.com/pocketbase/pocketbase/core"
 
 	"github.com/incurl/riff/pb/flarum/api"
+	"github.com/incurl/riff/pb/flarum/domain"
 )
 
 // The leaderboard's metrics.
@@ -71,8 +74,9 @@ const (
 // new figures never appear.
 func (p *Plugin) leaderboardHandler(e *core.RequestEvent) error {
 	// The ranking page is gated by its own permission, upstream's
-	// `fof.gamification.viewRankingPage`.
-	allowed, err := api.Can(e, "viewRankingPage", TypeLeaderboardEntry, "")
+	// `fof.gamification.viewRankingPage` (`domain.PermissionViewRankingPage`
+	// is that key's forum spelling).
+	allowed, err := api.Can(e, domain.PermissionViewRankingPage, TypeLeaderboardEntry, "")
 	if err != nil {
 		return api.WriteError(e, http.StatusInternalServerError, api.CodeInternal, "The leaderboard could not be read.")
 	}
@@ -82,7 +86,7 @@ func (p *Plugin) leaderboardHandler(e *core.RequestEvent) error {
 
 	query := e.Request.URL.Query()
 
-	metric := query.Get("metric")
+	metric := queryParam(query, "metric")
 	if metric == "" {
 		metric = settingString(e, SettingDefaultMetric, MetricPosts)
 	}
@@ -90,10 +94,14 @@ func (p *Plugin) leaderboardHandler(e *core.RequestEvent) error {
 		// A metric that does not exist is a validation failure rather than
 		// an empty board: an empty board reads as "nobody has scored",
 		// which is a different and wrong statement.
+		//
+		// Upstream FALLS BACK instead ("the value comes off a query
+		// string, so it may be a stale link") — but a fallback answers a
+		// question the caller did not ask, and the caller cannot tell.
 		return api.WriteError(e, http.StatusUnprocessableEntity, api.CodeValidationFailed, "That metric does not exist.")
 	}
 
-	period := query.Get("period")
+	period := queryParam(query, "period")
 	if period == "" {
 		period = settingString(e, SettingDefaultPeriod, PeriodYear)
 	}
@@ -127,6 +135,13 @@ func (p *Plugin) leaderboardHandler(e *core.RequestEvent) error {
 				"period":   period,
 				"position": position,
 				"score":    entry.score,
+				// `movement` is upstream's "places gained since the
+				// previous window", and it is NULL for this port: the
+				// board is computed per request and no previous window
+				// is kept. Null is what upstream itself sends for
+				// all-time, and the frontend renders no arrow for it —
+				// a zero would read as "no change", which is a claim.
+				"movement": nil,
 			},
 			Relationships: map[string]api.Relationship{
 				"user": {Data: api.Identifier{Type: api.TypeUser, ID: entry.userID}},
@@ -134,13 +149,65 @@ func (p *Plugin) leaderboardHandler(e *core.RequestEvent) error {
 		})
 	}
 
+	// The users the page names, so the client has names and avatars
+	// without a second round trip — upstream's `defaultInclude(['user'])`.
+	//
+	// The walk is the core's own: it resolves the identifier through the
+	// same account lookup every other response uses, so a private
+	// account's fields are filtered exactly as they are elsewhere.
+	included, err := api.IncludeRelations(e, entries, "user")
+	if err != nil {
+		return api.WriteError(e, http.StatusInternalServerError, api.CodeInternal, "The leaderboard could not be read.")
+	}
+
+	// `links.next` is the "load more" button: the frontend renders it only
+	// when the link is present (`hasMore = !!payload.links?.next`), so a
+	// page that ends without one stops the list there.
+	links := &api.Links{}
+	if offset+len(entries) < len(scores) {
+		links.Next = leaderboardPageURL(e, metric, period, offset+len(entries), limit)
+	}
+	if offset > 0 {
+		previous := max(offset-limit, 0)
+		links.Prev = leaderboardPageURL(e, metric, period, previous, limit)
+	}
+
 	return api.WriteDocument(e, http.StatusOK, api.Document{
-		Data: entries,
+		Data:     entries,
+		Included: included,
+		Links:    links,
 		Meta: &api.Meta{
 			Page:    &api.PageMeta{Total: len(scores), Offset: offset, Limit: limit},
 			PerPage: limit,
 		},
 	})
+}
+
+// queryParam reads a query parameter in either spelling.
+//
+// Upstream's resource has no path of its own, so its metric and period
+// live where JSON:API reserves a resource's own parameters — under
+// `filter`:
+//
+//	GET /api/leaderboard-entries?filter[metric]=posts&filter[period]=year
+//
+// The flat form is this port's older spelling and is still read, because
+// a client that was written against it is not wrong, only older.
+func queryParam(query url.Values, name string) string {
+	if value := strings.TrimSpace(query.Get("filter[" + name + "]")); value != "" {
+		return value
+	}
+	return strings.TrimSpace(query.Get(name))
+}
+
+// leaderboardPageURL composes a page link.
+//
+// It carries the ranking with it: a `next` that dropped the metric would
+// hand the client the DEFAULT board's second page, which is a different
+// ranking than the one it is paging through.
+func leaderboardPageURL(e *core.RequestEvent, metric, period string, offset, limit int) string {
+	return fmt.Sprintf("%s?filter[metric]=%s&filter[period]=%s&page[offset]=%d&page[limit]=%d",
+		e.Request.URL.Path, url.QueryEscape(metric), url.QueryEscape(period), offset, limit)
 }
 
 // leaderboardScore is one account's score in one ranking.
@@ -410,9 +477,12 @@ func knownPeriod(period string) bool {
 
 // leaderboardEntryID composes an entry's id.
 //
-// It names the RANKING, not just the place in it — see the handler.
+// It names the RANKING, not just the place in it — see the handler. Upstream
+// composes the same three parts with colons
+// (`implode(':', [$metric, $period, $position])`), and a client that caches by
+// type and id would otherwise hold two spellings of one entry.
 func leaderboardEntryID(metric, period string, position int) string {
-	return metric + "-" + period + "-" + strconv.Itoa(position)
+	return metric + ":" + period + ":" + strconv.Itoa(position)
 }
 
 // settingString reads a string forum setting.
@@ -439,22 +509,27 @@ func settingString(e *core.RequestEvent, key, fallback string) string {
 
 // pageParams reads the offset pagination parameters.
 //
-// The forum's own pagination is a page token; the leaderboard is a computed
-// ranking, and a token over a computed set is meaningless, so the offset
-// form upstream uses is the one that applies.
+// Upstream's resource is `->paginate(10, 50)`: ten entries a page, fifty
+// at most. Both spellings are read — `page[limit]`/`page[offset]`, which
+// is what `app.store.find` sends, and the flat `limit`/`offset` this port
+// used before.
+//
+// The forum's own pagination is a page token; the leaderboard is a
+// computed ranking, and a token over a computed set is meaningless, so the
+// offset form upstream uses is the one that applies.
 func pageParams(e *core.RequestEvent) (limit, offset int) {
-	limit = 25
+	limit = defaultPageLimit
 	offset = 0
 
 	query := e.Request.URL.Query()
 
-	if raw := query.Get("limit"); raw != "" {
-		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 && parsed <= 100 {
-			limit = parsed
+	if raw := pageParam(query, "limit"); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
+			limit = min(parsed, maxPageLimit)
 		}
 	}
 
-	if raw := query.Get("offset"); raw != "" {
+	if raw := pageParam(query, "offset"); raw != "" {
 		if parsed, err := strconv.Atoi(raw); err == nil && parsed >= 0 {
 			offset = parsed
 		}
@@ -462,6 +537,27 @@ func pageParams(e *core.RequestEvent) (limit, offset int) {
 
 	return limit, offset
 }
+
+// pageParam reads a pagination parameter in either spelling.
+//
+// JSON:API's is `page[limit]`/`page[offset]` — that is what
+// `app.store.find(type, { page: { offset, limit } })` sends — and the flat
+// `limit`/`offset` is this port's older spelling.
+func pageParam(query url.Values, name string) string {
+	if value := strings.TrimSpace(query.Get("page[" + name + "]")); value != "" {
+		return value
+	}
+	return strings.TrimSpace(query.Get(name))
+}
+
+// The page size upstream's resource declares (`paginate(10, 50)`).
+const (
+	// defaultPageLimit is the page size the client gets when it asks for
+	// none.
+	defaultPageLimit = 10
+	// maxPageLimit is the largest page the resource will serve.
+	maxPageLimit = 50
+)
 
 // errBadPeriod reports an unknown period.
 var errBadPeriod = errors.New("gamification: the period is not known")

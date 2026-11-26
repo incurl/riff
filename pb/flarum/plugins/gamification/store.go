@@ -18,22 +18,24 @@ const (
 // postScore returns the sum of a post's votes.
 //
 // A post with no votes scores zero, which is what the frontend shows.
+//
+// The rows are filtered by the post in the QUERY: the score is asked for
+// once per post on a page (and once more per discussion in a list), so
+// summing every vote in the forum for each of them would make a listing
+// cost the whole vote table per row.
 func postScore(app core.App, physical, postID string) (int, error) {
 	collection, err := app.FindCollectionByNameOrId(physical)
 	if err != nil {
 		return 0, errors.Wrapf(err, "gamification: the %q collection is missing", physical)
 	}
 
-	records, err := app.FindAllRecords(collection, nil)
+	records, err := app.FindRecordsByFilter(collection, "post = {:post}", "", 0, 0, map[string]any{"post": postID})
 	if err != nil {
 		return 0, errors.Wrap(err, "gamification: the votes could not be read")
 	}
 
 	score := 0
 	for _, record := range records {
-		if record.GetString("post") != postID {
-			continue
-		}
 		score += record.GetInt("value")
 	}
 
@@ -72,16 +74,16 @@ func voterIDs(app core.App, physical, postID string, value int) ([]plugin.Identi
 		return nil, errors.Wrapf(err, "gamification: the %q collection is missing", physical)
 	}
 
-	records, err := app.FindAllRecords(collection, nil)
+	records, err := app.FindRecordsByFilter(collection, "post = {:post} && value = {:value}", "created_at", 0, 0, map[string]any{
+		"post":  postID,
+		"value": value,
+	})
 	if err != nil {
 		return nil, errors.Wrap(err, "gamification: the votes could not be read")
 	}
 
-	ids := make([]plugin.Identifier, 0)
+	ids := make([]plugin.Identifier, 0, len(records))
 	for _, record := range records {
-		if record.GetString("post") != postID || record.GetInt("value") != value {
-			continue
-		}
 		ids = append(ids, plugin.Identifier{Type: "users", ID: record.GetString("user")})
 	}
 
@@ -93,20 +95,20 @@ func voterIDs(app core.App, physical, postID string, value int) ([]plugin.Identi
 // It is the sum of the votes RECEIVED on the account's posts, which is
 // upstream's `Vote::updateUserVotes`: a post's author is scored by the
 // votes that post attracts, not by the votes they cast.
-func userScore(app core.App, physical, userID string) (int, error) {
-	collection, err := app.FindCollectionByNameOrId(physical)
+func userScore(app core.App, votesPhysical, postsPhysical, userID string) (int, error) {
+	collection, err := app.FindCollectionByNameOrId(votesPhysical)
 	if err != nil {
-		return 0, errors.Wrapf(err, "gamification: the %q collection is missing", physical)
+		return 0, errors.Wrapf(err, "gamification: the %q collection is missing", votesPhysical)
+	}
+
+	posts, err := postsByAuthor(app, postsPhysical, userID)
+	if err != nil {
+		return 0, err
 	}
 
 	records, err := app.FindAllRecords(collection, nil)
 	if err != nil {
 		return 0, errors.Wrap(err, "gamification: the votes could not be read")
-	}
-
-	posts, err := postsByAuthor(app, userID)
-	if err != nil {
-		return 0, err
 	}
 
 	score := 0
@@ -131,13 +133,13 @@ func userScore(app core.App, physical, userID string) (int, error) {
 // The HIGHEST one is the singular answer. A lowest-first reading would
 // report "Rookie" for an account that has passed "Veteran", which is the
 // opposite of what the badge is for.
-func userRank(app core.App, ranksPhysical, votesPhysical, userID string) (string, error) {
+func userRank(app core.App, ranksPhysical, votesPhysical, postsPhysical, userID string) (string, error) {
 	collection, err := app.FindCollectionByNameOrId(ranksPhysical)
 	if err != nil {
 		return "", errors.Wrapf(err, "gamification: the %q collection is missing", ranksPhysical)
 	}
 
-	score, err := userScore(app, votesPhysical, userID)
+	score, err := userScore(app, votesPhysical, postsPhysical, userID)
 	if err != nil {
 		return "", err
 	}
@@ -173,13 +175,13 @@ func userRank(app core.App, ranksPhysical, votesPhysical, userID string) (string
 }
 
 // rankIDs returns the ranks an account has earned.
-func rankIDs(app core.App, ranksPhysical, votesPhysical, userID string) ([]plugin.Identifier, error) {
+func rankIDs(app core.App, ranksPhysical, votesPhysical, postsPhysical, userID string) ([]plugin.Identifier, error) {
 	collection, err := app.FindCollectionByNameOrId(ranksPhysical)
 	if err != nil {
 		return nil, errors.Wrapf(err, "gamification: the %q collection is missing", ranksPhysical)
 	}
 
-	score, err := userScore(app, votesPhysical, userID)
+	score, err := userScore(app, votesPhysical, postsPhysical, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -236,26 +238,74 @@ func setVote(app core.App, physical, postID, userID string, value int) (int, boo
 }
 
 // postsByAuthor returns the ids of the posts an account wrote.
-func postsByAuthor(app core.App, userID string) (map[string]struct{}, error) {
-	collection, err := app.FindCollectionByNameOrId("forum_posts")
+//
+// The collection is the PLUGIN's resolved one, not the literal
+// `forum_posts`: an instance with a different forum prefix would otherwise
+// read a collection that does not exist, take the fallback below, and
+// score every account at zero — silently.
+func postsByAuthor(app core.App, postsPhysical, userID string) (map[string]struct{}, error) {
+	collection, err := app.FindCollectionByNameOrId(postsPhysical)
 	if err != nil {
-		// The collection is looked up by its default name; an instance
-		// with a different prefix falls back to an empty set, which
-		// scores zero rather than failing the whole request.
 		return map[string]struct{}{}, nil //nolint:nilerr // a missing collection scores zero
 	}
 
-	records, err := app.FindAllRecords(collection, nil)
+	records, err := app.FindRecordsByFilter(collection, "user = {:user}", "", 0, 0, map[string]any{"user": userID})
 	if err != nil {
 		return nil, errors.Wrap(err, "gamification: the posts could not be read")
 	}
 
-	ids := make(map[string]struct{})
+	ids := make(map[string]struct{}, len(records))
 	for _, record := range records {
-		if record.GetString("user") == userID {
-			ids[record.Id] = struct{}{}
-		}
+		ids[record.Id] = struct{}{}
 	}
 
 	return ids, nil
+}
+
+// discussionOfPost returns the discussion a post belongs to.
+func discussionOfPost(app core.App, postsPhysical, postID string) (string, error) {
+	collection, err := app.FindCollectionByNameOrId(postsPhysical)
+	if err != nil {
+		return "", errors.Wrapf(err, "gamification: the %q collection is missing", postsPhysical)
+	}
+
+	record, err := app.FindRecordById(collection, postID)
+	if err != nil {
+		return "", err
+	}
+
+	return record.GetString("discussion"), nil
+}
+
+// firstPostOfDiscussion returns a discussion's first post id.
+//
+// It is the `first_post` column the post-creation path stamps, which is
+// what upstream's `$discussion->first_post_id` is.
+func firstPostOfDiscussion(app core.App, discussionsPhysical, discussionID string) (string, error) {
+	collection, err := app.FindCollectionByNameOrId(discussionsPhysical)
+	if err != nil {
+		return "", errors.Wrapf(err, "gamification: the %q collection is missing", discussionsPhysical)
+	}
+
+	record, err := app.FindRecordById(collection, discussionID)
+	if err != nil {
+		return "", err
+	}
+
+	return record.GetString("first_post"), nil
+}
+
+// postAuthor returns the id of the account that wrote a post.
+func postAuthor(app core.App, postsPhysical, postID string) (string, error) {
+	collection, err := app.FindCollectionByNameOrId(postsPhysical)
+	if err != nil {
+		return "", errors.Wrapf(err, "gamification: the %q collection is missing", postsPhysical)
+	}
+
+	record, err := app.FindRecordById(collection, postID)
+	if err != nil {
+		return "", err
+	}
+
+	return record.GetString("user"), nil
 }

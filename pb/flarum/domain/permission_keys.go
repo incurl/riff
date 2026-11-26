@@ -92,11 +92,26 @@ var upstreamPermissionKeys = map[string]string{
 	"bypassTagCounts": PermissionBypassTagCounts,
 
 	// The gamification powers. `fof/gamification` registers
-	// `votePosts` and `canSeeVotes` (its `Access\PostPolicy` reads both
-	// against a discussion), and its admin page sends the same names.
-	"votePosts":    PermissionVotePost,
-	"canSeeVotes":  PermissionSeeVoters,
-	"canSeeVoters": PermissionSeeVoters,
+	// `discussion.votePosts`, `discussion.canSeeVotes`,
+	// `discussion.canSeeVoters` and its own
+	// `fof.gamification.viewRankingPage`, and its admin page posts those
+	// spellings.
+	//
+	// THE THREE `discussion.` NAMES ARE THE ONES THAT MATTER: the grid's
+	// checkbox for "Upvote/Downvote posts" posts
+	// `discussion.votePosts`, and an unknown key is stored under its own
+	// name (see [ForumPermissionKey]) — so without these rows granting
+	// voting (or the tally, or the names, or the ranking page) wrote a
+	// row no handler ever asks for, and the permission changed nothing.
+	// The bare spellings stay because an API client may use them.
+	"discussion.votePosts":             PermissionVotePost,
+	"votePosts":                        PermissionVotePost,
+	"discussion.canSeeVotes":           PermissionSeeVoteCount,
+	"canSeeVotes":                      PermissionSeeVoteCount,
+	"discussion.canSeeVoters":          PermissionSeeVoters,
+	"canSeeVoters":                     PermissionSeeVoters,
+	"fof.gamification.viewRankingPage": PermissionViewRankingPage,
+	"viewRankingPage":                  PermissionViewRankingPage,
 
 	// The poll powers. `fof/polls` registers `polls.vote`,
 	// `polls.changeVote` and `polls.viewResultsWithoutVoting` (its
@@ -171,6 +186,16 @@ func reversePermissionKeys(table map[string]string) map[string]string {
 var canonicalPermissionKeys = map[string]string{
 	PermissionVotePoll:         "polls.vote",
 	PermissionSeePollVoteCount: "polls.viewResultsWithoutVoting",
+	// The gamification powers: the admin grid's checkboxes are registered
+	// under the `discussion.`-prefixed names, and `fof/gamification`'s own
+	// page sends `fof.gamification.viewRankingPage`. The bare spellings
+	// sort FIRST, so without these the reverse map would publish a key the
+	// extension's page does not read — and the checkbox would be drawn
+	// unchecked however the row says.
+	PermissionVotePost:        "discussion.votePosts",
+	PermissionSeeVoteCount:    "discussion.canSeeVotes",
+	PermissionSeeVoters:       "discussion.canSeeVoters",
+	PermissionViewRankingPage: "fof.gamification.viewRankingPage",
 }
 
 // sortedKeys returns a table's keys in a stable order.

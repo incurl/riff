@@ -197,6 +197,16 @@ func (s *Server) userResourceWithGroups(actorID string, user *domain.User, group
 		s.logger.Debug("forum: a user attribute could not be computed", slog.String("error", err.Error()))
 	}
 
+	// A plugin's relation on a USER is the same story: `user.ranks()` is
+	// resolved out of the store, which is filled from `included`, so a
+	// relation the serializer never emitted is a badge that never draws.
+	//
+	// A failure is logged rather than fatal, for the same reason the
+	// attributes are: this resource is rendered inside list responses.
+	if err := s.applyPluginRelationships(context.Background(), &resource, actorID, user.ID); err != nil {
+		s.logger.Debug("forum: a user relationship could not be computed", slog.String("error", err.Error()))
+	}
+
 	return resource
 }
 

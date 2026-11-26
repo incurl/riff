@@ -66,7 +66,17 @@ const (
 	SettingDefaultMetric = "fof-gamification.defaultMetric"
 	// SettingDefaultPeriod is the leaderboard's default period.
 	SettingDefaultPeriod = "fof-gamification.defaultPeriod"
+	// SettingRankAmt is how many rank badges a member's name shows.
+	//
+	// It is upstream's `fof-gamification.rankAmt` (default 2), and its
+	// `addUserInfo` reads it off the forum document before it renders the
+	// stack of badges: a member who has passed five ranks wears the two
+	// highest, so a name is not buried under a wall of labels.
+	SettingRankAmt = "fof-gamification.rankAmt"
 )
+
+// DefaultRankAmt is upstream's default for [SettingRankAmt].
+const DefaultRankAmt = 2
 
 // Plugin is the Gamification plugin.
 type Plugin struct {
@@ -132,9 +142,15 @@ func (p *Plugin) Register(_ context.Context, ext *plugin.Extenders) error {
 
 	// --- layer 2: the API -----------------------------------------------
 	// The post's vote state and the score.
+	//
+	// The tally and the caller's own vote are VISIBLE only where the
+	// caller may see the tally (upstream's `Field::visible()`): an
+	// invisible field is ABSENT rather than zero, so a reader without the
+	// permission is not told a post scored nothing.
 	ext.AddAttribute(plugin.AttributeContributor{
 		Resource: api.TypePost,
 		Name:     "votes",
+		Visible:  p.canSeeVotes,
 		Value: func(_ context.Context, req *plugin.AttributeRequest) (any, error) {
 			return postScore(req.App, p.physical[votesCollection], req.RecordID)
 		},
@@ -142,45 +158,127 @@ func (p *Plugin) Register(_ context.Context, ext *plugin.Extenders) error {
 	ext.AddAttribute(plugin.AttributeContributor{
 		Resource: api.TypePost,
 		Name:     "hasUpvoted",
+		Visible:  p.canSeeVotes,
 		Value: func(_ context.Context, req *plugin.AttributeRequest) (any, error) {
-			return hasVote(req.App, p.physical[votesCollection], req.RecordID, req.ActorID, 1)
+			return hasVote(req.App, p.physical[votesCollection], req.RecordID, req.ActorID, VoteUp)
 		},
 	})
 	ext.AddAttribute(plugin.AttributeContributor{
 		Resource: api.TypePost,
 		Name:     "hasDownvoted",
+		Visible:  p.canSeeVotes,
 		Value: func(_ context.Context, req *plugin.AttributeRequest) (any, error) {
-			return hasVote(req.App, p.physical[votesCollection], req.RecordID, req.ActorID, -1)
+			return hasVote(req.App, p.physical[votesCollection], req.RecordID, req.ActorID, VoteDown)
 		},
 	})
 	ext.AddAttribute(plugin.AttributeContributor{
 		Resource: api.TypePost,
 		Name:     "canSeeVotes",
 		Value: func(_ context.Context, req *plugin.AttributeRequest) (any, error) {
-			return req.Can(domain.PermissionVotePost, api.TypePost, req.RecordID), nil
+			return p.canSeeVotes(req), nil
 		},
 	})
 	ext.AddAttribute(plugin.AttributeContributor{
 		Resource: api.TypePost,
 		Name:     "seeVoters",
 		Value: func(_ context.Context, req *plugin.AttributeRequest) (any, error) {
-			return req.Can(domain.PermissionSeeVoters, api.TypePost, req.RecordID), nil
+			return p.canSeeVoters(req), nil
+		},
+	})
+	ext.AddAttribute(plugin.AttributeContributor{
+		Resource: api.TypePost,
+		Name:     "canVote",
+		Value: func(_ context.Context, req *plugin.AttributeRequest) (any, error) {
+			return p.canVote(req), nil
 		},
 	})
 
-	// The user's own score and the ranks they have earned.
+	// The DISCUSSION carries the same state for its first post.
+	//
+	// Upstream serves `votes`, `seeVotes`, `canVote`, `hasUpvoted` and
+	// `hasDownvoted` on the discussion resource, which is what the
+	// discussion LIST renders: a reader sees the original post's score
+	// without opening anything.
+	ext.AddAttribute(plugin.AttributeContributor{
+		Resource: api.TypeDiscussion,
+		Name:     "votes",
+		Visible:  func(req *plugin.AttributeRequest) bool { return canOnSelf(req, domain.PermissionSeeVoteCount) },
+		Value: func(_ context.Context, req *plugin.AttributeRequest) (any, error) {
+			score, _, _, err := p.discussionVoteAttributes(req.App, req.RecordID, req.ActorID)
+			return score, err
+		},
+	})
+	ext.AddAttribute(plugin.AttributeContributor{
+		Resource: api.TypeDiscussion,
+		Name:     "seeVotes",
+		Value: func(_ context.Context, req *plugin.AttributeRequest) (any, error) {
+			return canOnSelf(req, domain.PermissionSeeVoteCount), nil
+		},
+	})
+	ext.AddAttribute(plugin.AttributeContributor{
+		Resource: api.TypeDiscussion,
+		Name:     "canVote",
+		Value: func(_ context.Context, req *plugin.AttributeRequest) (any, error) {
+			postID, err := firstPostOfDiscussion(req.App, p.discussionsPhysical, req.RecordID)
+			if err != nil || postID == "" {
+				return false, nil //nolint:nilerr // a discussion with no first post takes no votes
+			}
+
+			// The SELF-VOTE rule is part of the question here too: the
+			// discussion's tally is its first post's, so a reader who wrote
+			// that post is asking about their own post.
+			return p.mayVoteOnPost(req.App, postID, req.ActorID) &&
+				req.Can(domain.PermissionVotePost, api.TypeDiscussion, req.RecordID), nil
+		},
+	})
+	ext.AddAttribute(plugin.AttributeContributor{
+		Resource: api.TypeDiscussion,
+		Name:     "hasUpvoted",
+		Visible: func(req *plugin.AttributeRequest) bool {
+			return canOnSelf(req, domain.PermissionSeeVoteCount) && req.ActorID != ""
+		},
+		Value: func(_ context.Context, req *plugin.AttributeRequest) (any, error) {
+			_, up, _, err := p.discussionVoteAttributes(req.App, req.RecordID, req.ActorID)
+			return up, err
+		},
+	})
+	ext.AddAttribute(plugin.AttributeContributor{
+		Resource: api.TypeDiscussion,
+		Name:     "hasDownvoted",
+		Visible: func(req *plugin.AttributeRequest) bool {
+			return canOnSelf(req, domain.PermissionSeeVoteCount) && req.ActorID != ""
+		},
+		Value: func(_ context.Context, req *plugin.AttributeRequest) (any, error) {
+			_, _, down, err := p.discussionVoteAttributes(req.App, req.RecordID, req.ActorID)
+			return down, err
+		},
+	})
+
+	// The user's score and the ranks they have earned.
+	//
+	// `points` is upstream's name for it (`UserResourceFields`:
+	// `Schema\Number::make('points')->property('votes')`), and `votes` is
+	// kept because this port's older frontend and its clients read that
+	// one. Both are the votes the account's posts RECEIVED.
 	ext.AddAttribute(plugin.AttributeContributor{
 		Resource: api.TypeUser,
 		Name:     "votes",
 		Value: func(_ context.Context, req *plugin.AttributeRequest) (any, error) {
-			return userScore(req.App, p.physical[votesCollection], req.RecordID)
+			return userScore(req.App, p.physical[votesCollection], p.postsPhysical, req.RecordID)
+		},
+	})
+	ext.AddAttribute(plugin.AttributeContributor{
+		Resource: api.TypeUser,
+		Name:     "points",
+		Value: func(_ context.Context, req *plugin.AttributeRequest) (any, error) {
+			return userScore(req.App, p.physical[votesCollection], p.postsPhysical, req.RecordID)
 		},
 	})
 	ext.AddAttribute(plugin.AttributeContributor{
 		Resource: api.TypeUser,
 		Name:     "rank",
 		Value: func(_ context.Context, req *plugin.AttributeRequest) (any, error) {
-			return userRank(req.App, p.physical[ranksCollection], p.physical[votesCollection], req.RecordID)
+			return userRank(req.App, p.physical[ranksCollection], p.physical[votesCollection], p.postsPhysical, req.RecordID)
 		},
 	})
 
@@ -212,7 +310,7 @@ func (p *Plugin) Register(_ context.Context, ext *plugin.Extenders) error {
 		Type:     TypeRank,
 		Many:     true,
 		Resolve: func(_ context.Context, req *plugin.RelationshipRequest) ([]plugin.Identifier, error) {
-			return rankIDs(req.App, p.physical[ranksCollection], p.physical[votesCollection], req.RecordID)
+			return rankIDs(req.App, p.physical[ranksCollection], p.physical[votesCollection], p.postsPhysical, req.RecordID)
 		},
 	})
 
@@ -225,10 +323,123 @@ func (p *Plugin) Register(_ context.Context, ext *plugin.Extenders) error {
 	})
 
 	// The leaderboard.
+	//
+	// It is served at the resource's own URL — `/api/leaderboard-entries`,
+	// which is what `app.store.find('leaderboard-entries', …)` requests,
+	// since upstream's `LeaderboardResource` has no path of its own (the
+	// framework prefixes `/api/{type}`) — and at the older `/api/leaderboard`
+	// alias, so an existing client keeps working.
 	ext.AddRoute(plugin.RouteDef{
 		Method:  "GET",
 		Path:    "/api/leaderboard",
 		Handler: p.leaderboardHandler,
+	})
+	ext.AddRoute(plugin.RouteDef{
+		Method:  "GET",
+		Path:    "/api/leaderboard-entries",
+		Handler: p.leaderboardHandler,
+	})
+
+	// The ranks, at upstream's four endpoints.
+	//
+	// The index is PUBLIC (a rank is drawn next to a member's name on
+	// every post), and the three writes are administrator-only. The
+	// update and the delete share the `{id}` path and are told apart by
+	// the EFFECTIVE METHOD, because the admin application sends a DELETE
+	// as a POST carrying `X-HTTP-Method-Override`.
+	ext.AddRoute(plugin.RouteDef{
+		Method:  "GET",
+		Path:    "/api/ranks",
+		Handler: p.listRanksHandler,
+	})
+	ext.AddRoute(plugin.RouteDef{
+		Method:  "POST",
+		Path:    "/api/ranks",
+		Handler: p.createRankHandler,
+	})
+	ext.AddRoute(plugin.RouteDef{
+		Method:  "PATCH",
+		Path:    "/api/ranks/{id}",
+		Handler: p.updateRanksHandler,
+	})
+	ext.AddRoute(plugin.RouteDef{
+		Method:  "POST",
+		Path:    "/api/ranks/{id}",
+		Handler: p.updateRanksHandler,
+	})
+
+	// --- the plugin's own resource type ---------------------------------
+	// `ranks` is the type the `user.ranks` relationship points at, and the
+	// type the frontend's `Rank` model is registered under. A relationship
+	// identifier alone is not enough — the frontend resolves a relation
+	// out of the STORE, and the store is filled from `included` — so the
+	// resource has to be renderable or the badge draws nothing.
+	ext.AddResourceSerializer(plugin.ResourceSerializer{
+		Type:   TypeRank,
+		Render: p.renderRankAt,
+	})
+
+	// --- the forum document ----------------------------------------------
+	// The settings the RANKINGS PAGE reads before it loads anything.
+	//
+	// Upstream publishes them on the forum resource
+	// (`Api\ForumResourceFields`) and its `RankingsPage` reads them from
+	// `app.forum`:
+	//
+	//	canViewRankingPage        the gate the page branches on
+	//	leaderboardMetrics        the metric selector's options
+	//	leaderboardPeriods        the period selector's options
+	//	defaultLeaderboardMetric  the metric it opens on
+	//	defaultLeaderboardPeriod  the period it opens on
+	//	rankAmt                   how many badges a member's name shows
+	//
+	// An empty list is not harmless: the page would render a selector with
+	// no options and load whatever its hardcoded fallback is, which is how
+	// an operator's "default metric" becomes a control that changes
+	// nothing.
+	ext.AddAttribute(plugin.AttributeContributor{
+		Resource: api.TypeForum,
+		Name:     "canViewRankingPage",
+		Value: func(_ context.Context, req *plugin.AttributeRequest) (any, error) {
+			return req.Can(domain.PermissionViewRankingPage, api.TypeForum, req.RecordID), nil
+		},
+	})
+	ext.AddAttribute(plugin.AttributeContributor{
+		Resource: api.TypeForum,
+		Name:     "fof-gamification.leaderboardMetrics",
+		Value: func(_ context.Context, _ *plugin.AttributeRequest) (any, error) {
+			return leaderboardMetricOptions(), nil
+		},
+	})
+	ext.AddAttribute(plugin.AttributeContributor{
+		Resource: api.TypeForum,
+		Name:     "fof-gamification.leaderboardPeriods",
+		Value: func(_ context.Context, _ *plugin.AttributeRequest) (any, error) {
+			return leaderboardPeriodOptions(), nil
+		},
+	})
+	ext.AddAttribute(plugin.AttributeContributor{
+		Resource: api.TypeForum,
+		Name:     "fof-gamification.defaultLeaderboardMetric",
+		Value: func(_ context.Context, req *plugin.AttributeRequest) (any, error) {
+			// The REGISTRY's first metric is the fallback, which is what
+			// the page's own `metrics()[0]?.key` would have used.
+			return settingStringAt(req.App, SettingDefaultMetric, MetricPosts), nil
+		},
+	})
+	ext.AddAttribute(plugin.AttributeContributor{
+		Resource: api.TypeForum,
+		Name:     "fof-gamification.defaultLeaderboardPeriod",
+		Value: func(_ context.Context, req *plugin.AttributeRequest) (any, error) {
+			return settingStringAt(req.App, SettingDefaultPeriod, PeriodYear), nil
+		},
+	})
+	ext.AddAttribute(plugin.AttributeContributor{
+		Resource: api.TypeForum,
+		Name:     "fof-gamification.rankAmt",
+		Value: func(_ context.Context, req *plugin.AttributeRequest) (any, error) {
+			return settingIntAt(req.App, SettingRankAmt, DefaultRankAmt), nil
+		},
 	})
 
 	// --- the permissions -------------------------------------------------
@@ -239,7 +450,19 @@ func (p *Plugin) Register(_ context.Context, ext *plugin.Extenders) error {
 		},
 	})
 	ext.AddPermission(plugin.PermissionHandler{
+		Action: domain.PermissionSeeVoteCount,
+		Check: func(_ context.Context, _ *plugin.PermissionRequest) error {
+			return nil
+		},
+	})
+	ext.AddPermission(plugin.PermissionHandler{
 		Action: domain.PermissionSeeVoters,
+		Check: func(_ context.Context, _ *plugin.PermissionRequest) error {
+			return nil
+		},
+	})
+	ext.AddPermission(plugin.PermissionHandler{
+		Action: domain.PermissionViewRankingPage,
 		Check: func(_ context.Context, _ *plugin.PermissionRequest) error {
 			return nil
 		},
@@ -278,6 +501,12 @@ func (p *Plugin) Register(_ context.Context, ext *plugin.Extenders) error {
 				Type:    "select",
 				Default: PeriodYear,
 				Options: []string{PeriodDay, PeriodWeek, PeriodMonth, PeriodYear, PeriodAllTime},
+			},
+			{
+				Key:     SettingRankAmt,
+				Label:   "Rank badges shown next to a name",
+				Type:    "number",
+				Default: DefaultRankAmt,
 			},
 		},
 	})

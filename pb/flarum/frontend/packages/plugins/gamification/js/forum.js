@@ -1,7 +1,11 @@
 // The Gamification extension's forum initialiser.
 //
-// It mirrors upstream `fof/gamification`'s vote controls: an upvote, the
-// score and a downvote on a post.
+// It mirrors upstream `fof/gamification`'s forum half:
+//
+//   vote buttons       an upvote, the score and a downvote on a post
+//   /rankings          the leaderboard page (components/RankingsPage.js)
+//   rank badges        a member's ranks next to their name (addUserInfo.js)
+//   the list's score   the first post's tally on a discussion row
 //
 // The vote is a ROUTE in this port (`POST /api/posts/{id}/vote`) rather
 // than a writable field on the post, because the permission that governs
@@ -16,8 +20,15 @@ import Extend from 'flarum/common/extenders';
 import { extend as extendMethod } from 'flarum/common/extend';
 import CommentPost from 'flarum/forum/components/CommentPost';
 import Post from 'flarum/common/models/Post';
+import Discussion from 'flarum/common/models/Discussion';
+import User from 'flarum/common/models/User';
 import Button from 'flarum/common/components/Button';
 import classList from 'flarum/common/utils/classList';
+
+import { Rank, LeaderboardEntry } from './models';
+import RankingsPage from './components/RankingsPage';
+import { addUserInfo } from './addUserInfo';
+import { addUpvotesToDiscussion } from './addUpvotesToDiscussion';
 
 /** The forum's API root, e.g. `/forum/api`. */
 function apiUrl() {
@@ -46,6 +57,14 @@ function saveVote(post, vote) {
 }
 
 export const extend = [
+  // The store must know the two plugin-owned types, or `pushObject` throws
+  // "Pushing object of type `ranks` not allowed" and the response is
+  // dropped — a rank badge and a leaderboard row that never appear.
+  new Extend.Store().add('ranks', Rank).add('leaderboard-entries', LeaderboardEntry),
+
+  // `/rankings` is upstream's route name and path.
+  new Extend.Routes().add('rankings', '/rankings', RankingsPage),
+
   // The post's vote attributes have to be registered as MODEL METHODS.
   //
   // The server sends them as plain attributes, but `post.canSeeVotes()`
@@ -57,7 +76,22 @@ export const extend = [
     .attribute('canSeeVotes')
     .attribute('canVote')
     .attribute('hasUpvoted')
+    .attribute('hasDownvoted')
+    .attribute('seeVoters'),
+
+  // The discussion carries the first post's tally, which the list renders.
+  new Extend.Model(Discussion)
+    .attribute('votes')
+    .attribute('seeVotes')
+    .attribute('canVote')
+    .attribute('hasUpvoted')
     .attribute('hasDownvoted'),
+
+  // The account's score and the ranks it has earned. `ranks` is a
+  // RELATIONSHIP: its resources travel in `included`, and `ranksToShow`
+  // drops an identifier whose resource has not arrived rather than
+  // throwing on it.
+  new Extend.Model(User).attribute('points').attribute('votes').attribute('rank').hasMany('ranks'),
 
   {
     extend() {
@@ -112,6 +146,9 @@ export const extend = [
           10
         );
       });
+
+      addUserInfo();
+      addUpvotesToDiscussion();
     },
   },
 ];

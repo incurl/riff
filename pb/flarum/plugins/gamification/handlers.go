@@ -34,7 +34,19 @@ func (p *Plugin) voteHandler(e *core.RequestEvent) error {
 		return api.WriteError(e, http.StatusUnprocessableEntity, api.CodeValidationFailed, "A post is required.")
 	}
 
-	allowed, err := api.Can(e, domain.PermissionVotePost, api.TypePost, postID)
+	// The permission is asked against the POST'S DISCUSSION, which is what
+	// upstream's `Access\PostPolicy::vote()` does
+	// (`$actor->can('votePosts', $post->discussion)`).
+	//
+	// The discussion is what a permission can be SCOPED to: a restricted
+	// tag carries its own grant, and asking on the post would ignore it —
+	// the grant for one tag would apply to every post, or to none.
+	discussionID, err := discussionOfPost(e.App, p.postsPhysical, postID)
+	if err != nil || discussionID == "" {
+		return api.WriteError(e, http.StatusNotFound, api.CodeNotFound, "That post does not exist.")
+	}
+
+	allowed, err := api.Can(e, domain.PermissionVotePost, api.TypeDiscussion, discussionID)
 	if err != nil {
 		return api.WriteError(e, http.StatusInternalServerError, api.CodeInternal, "The vote could not be recorded.")
 	}

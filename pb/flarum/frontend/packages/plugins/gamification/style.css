@@ -45,3 +45,66 @@
   font-size: 0.75em;
   padding: 0.1rem 0.35rem;
 }
+
+/* The rank stack on a post and on a user card. */
+
+.Post-Ranks,
+.RankingsPage-ranks {
+  display: inline-flex;
+  gap: 0.25rem;
+  margin-left: 0.35rem;
+}
+
+.UserCard-ranks {
+  display: flex;
+  gap: 0.25rem;
+  list-style: none;
+  margin: 0.25rem 0;
+  padding: 0;
+}
+
+/* The tally on a discussion row. */
+
+.DiscussionListItem-votes {
+  color: var(--muted-color, #667);
+}
+
+/* The leaderboard page. */
+
+.RankingsPage-selectors {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.RankingsPage-table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.RankingsPage-table th,
+.RankingsPage-table td {
+  border-bottom: 1px solid var(--control-bg, #e8e8e8);
+  padding: 0.5rem 0.35rem;
+  text-align: left;
+}
+
+.RankingsPage-place {
+  text-align: center;
+  width: 3.5rem;
+}
+
+.RankingsPage-score {
+  text-align: right;
+  width: 6rem;
+}
+
+.RankingsPage-user {
+  align-items: center;
+  display: inline-flex;
+  gap: 0.35rem;
+}
+
+.RankingsPage-empty {
+  padding: 1rem 0;
+}

@@ -68,5 +68,13 @@ export const extend = [
         all: 'All time',
       },
       default: 'year',
+    }))
+    .setting(() => ({
+      setting: 'fof-gamification.rankAmt',
+      section: 'voting',
+      type: 'number',
+      label: 'Rank badges shown next to a name',
+      help: 'A member who has passed more ranks wears the highest few, so a name is not buried under a wall of labels. Leave empty to show them all.',
+      default: 2,
     })),
 ];

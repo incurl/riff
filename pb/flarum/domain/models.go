@@ -334,16 +334,33 @@ const (
 	PermissionSuspendUser = "suspendUser"
 	// PermissionVotePost allows voting on a post.
 	//
-	// It is upstream's `votePosts`, which `fof/gamification` registers and
-	// its `Access\PostPolicy::vote()` reads.
+	// It is upstream's `discussion.votePosts`, which `fof/gamification`
+	// registers and its `Access\PostPolicy::vote()` reads against the
+	// POST'S DISCUSSION.
 	PermissionVotePost = "votePost"
+	// PermissionSeeVoteCount allows seeing a post's vote TALLY.
+	//
+	// It is upstream's `discussion.canSeeVotes` — a power of its own, and
+	// NOT the same one as seeing who cast the votes: upstream's
+	// `Access\PostPolicy` asks `canSeeVotes` for the score and
+	// `canSeeVoters` for the names, and a reader may hold either without
+	// the other. Mapping both onto one key made the admin grid unable to
+	// express the difference, and granted the names to everyone who could
+	// see a number.
+	PermissionSeeVoteCount = "canSeeVotes"
 	// PermissionSeeVoters allows seeing WHO voted.
 	//
-	// It is upstream's `canSeeVotes`/`canSeeVoters`, which the same
-	// extension registers. It is separate from the vote permission on
-	// purpose: being able to vote is not the same as being entitled to see
-	// the list of voters.
-	PermissionSeeVoters = "seeVoters"
+	// It is upstream's `discussion.canSeeVoters`. The frontend reaches it
+	// through the post's `seeVoters` attribute, and the voters modal is
+	// rendered only when it is true.
+	PermissionSeeVoters = "canSeeVoters"
+	// PermissionViewRankingPage allows seeing the leaderboard.
+	//
+	// It is upstream's `fof.gamification.viewRankingPage`, the extension's
+	// own key: `fof/gamification`'s admin page registers the checkbox
+	// under that name, and its `LeaderboardResource` denies the request
+	// when the actor cannot.
+	PermissionViewRankingPage = "viewRankingPage"
 	// PermissionVotePoll allows voting in a poll.
 	//
 	// It is upstream's `polls.vote`, which `fof/polls` registers and its

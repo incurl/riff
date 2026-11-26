@@ -99,6 +99,13 @@ func seedGroups(app core.App, registry *repository.Registry) error {
 var defaultPermissions = map[string][]string{
 	domain.GroupGuestID: {
 		domain.PermissionViewForum,
+		// The leaderboard is PUBLIC upstream: `fof/gamification`'s own
+		// migration seeds `fof.gamification.viewRankingPage` for the
+		// GUEST group, because a ranking of who has been active holds
+		// nothing private. It is seeded for the member group too (below):
+		// a guest-group row alone would hide the page from every
+		// signed-in member, which is a bug rather than a policy.
+		domain.PermissionViewRankingPage,
 	},
 	domain.GroupMemberID: {
 		domain.PermissionViewForum,
@@ -107,12 +114,24 @@ var defaultPermissions = map[string][]string{
 		domain.PermissionLikePost,
 		domain.PermissionSearchUsers,
 		// Voting is a participation power, so it belongs to the member
-		// group: upstream's default permissions grant `votePosts` to
-		// everybody who can post.
+		// group: upstream's default permissions grant `discussion.vote`
+		// (renamed `discussion.votePosts`) to everybody who can post.
 		domain.PermissionVotePost,
+		// Seeing the TALLY is what makes a vote meaningful — the count is
+		// drawn next to the buttons the member may press — so the member
+		// group holds it.
+		//
+		// Upstream seeds neither `canSeeVotes` nor `canSeeVoters` at all,
+		// which is how an extension page with two checkboxes starts with
+		// both off. This port seeds the tally and leaves the NAMES to the
+		// moderators: a fresh forum's votes must be visible to the people
+		// casting them, and a list of who voted is a stricter power
+		// (upstream's admin page offers it with `allowGuest`, and its
+		// voters modal is what it gates).
+		domain.PermissionSeeVoteCount,
 		// The leaderboard is readable by any member; it holds nothing
 		// private, only who has been active.
-		permissionViewRankingPage,
+		domain.PermissionViewRankingPage,
 		// Voting in a poll is a participation power, exactly like
 		// voting on a post: upstream grants `polls.vote` to everybody
 		// who may take part in a discussion.
@@ -151,17 +170,17 @@ var defaultPermissions = map[string][]string{
 		domain.PermissionLockDiscussion,
 		domain.PermissionStickyDiscussion,
 		domain.PermissionSuspendUser,
-		// The gamification powers: `fof/gamification` registers
-		// `votePosts` and `canSeeVotes`, and both are moderator-tier —
-		// a member may vote, but seeing WHO voted is a separate,
-		// stricter permission upstream keeps apart.
+		// The gamification moderation powers. Voting itself is a member
+		// power (seeded above); what stays here is seeing WHO voted —
+		// upstream's `discussion.canSeeVoters` is a stricter power than
+		// the tally (`discussion.canSeeVotes`), and it is what the voters
+		// modal asks for.
 		domain.PermissionVotePost,
-		// Seeing WHO voted is a stricter power than voting, so it stays
-		// with the moderators.
+		domain.PermissionSeeVoteCount,
 		domain.PermissionSeeVoters,
 		// The leaderboard is a whole surface, and upstream gates it with
 		// its own permission (`fof.gamification.viewRankingPage`).
-		permissionViewRankingPage,
+		domain.PermissionViewRankingPage,
 		// Changing a discussion's tags is a moderator power: upstream's
 		// `discussion.tag` is seeded for the moderator group, and the
 		// AUTHOR's own right to tag their discussion is a POLICY
@@ -196,14 +215,16 @@ var defaultPermissions = map[string][]string{
 	},
 }
 
-// permissionViewRankingPage gates the leaderboard.
+// The gamification plugin's own permission key.
 //
-// It is upstream's own name (`fof.gamification.viewRankingPage`), and it
-// is NOT in the domain package because it belongs to the gamification
-// extension rather than to the forum's core — but the permission service
-// resolves permissions by name, so the seed has to write it under the name
-// the handler asks for.
-const permissionViewRankingPage = "viewRankingPage"
+// It is upstream's name (`fof.gamification.viewRankingPage`), and the
+// seed writes it under the FORUM's spelling
+// (`domain.PermissionViewRankingPage`) because the permission service
+// resolves permissions by the name a handler asks for. The admin grid
+// posts the upstream spelling, and `domain.ForumPermissionKey` translates
+// it — which is why the key is in `upstreamPermissionKeys`; without that
+// row the checkbox wrote `fof.gamification.viewRankingPage` and the
+// handler, asking for `viewRankingPage`, never saw it.
 
 // seedPermissions writes the default permission rows.
 //

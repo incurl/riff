@@ -91,6 +91,48 @@ func (p includePath) first() string { return p[0] }
 // rest returns the path's remaining hops.
 func (p includePath) rest() includePath { return p[1:] }
 
+// IncludeRelations builds the `included` array for a set of primary
+// resources, following the given relation chains.
+//
+// It is [Server.includedResources] with the chains stated EXPLICITLY
+// rather than read off the request. A plugin that computes its own
+// resources (the gamification extension's leaderboard entries have no
+// stored row and no resource type the core knows) still needs the accounts
+// its entries name: the frontend resolves a relation out of the STORE, and
+// the store is filled from `included`, so an entry whose `user`
+// relationship carries only an identifier renders as a blank row.
+//
+// It is the same walk, with the same permission checks, as a core
+// response's `included` array.
+func IncludeRelations(e *core.RequestEvent, primaries []Resource, paths ...string) ([]Resource, error) {
+	server := ServerFrom(e)
+	if server == nil || len(primaries) == 0 || len(paths) == 0 {
+		return nil, nil
+	}
+
+	walk := &includeWalk{
+		server:    server,
+		event:     e,
+		seen:      map[string]struct{}{},
+		users:     map[string]*domain.User{},
+		actorID:   server.actor(e).ID(),
+		isAdmin:   server.actor(e).IsAdmin(),
+		can:       server.permissionChecker(e),
+		canScoped: server.permissionCheckerScoped(e),
+	}
+
+	for _, primary := range primaries {
+		for _, path := range paths {
+			chain := includePath(strings.Split(path, "."))
+			if err := walk.includePath(primary, chain, 0); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	return walk.out, nil
+}
+
 // includedResources builds the `included` array for a set of primary
 // resources.
 //

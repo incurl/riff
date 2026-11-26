@@ -373,6 +373,11 @@ func (s *Server) discussionResource(e *core.RequestEvent, discussion *domain.Dis
 		return Resource{}, err
 	}
 
+	// ...and their relations, the same way a post gets them.
+	if err := s.applyPluginRelationships(e.Request.Context(), &resource, actor.ID(), discussion.ID); err != nil {
+		return Resource{}, err
+	}
+
 	return resource, nil
 }
 
@@ -450,19 +455,7 @@ func (s *Server) showPostHandler(e *core.RequestEvent) error {
 
 // postResource renders a post with its plugin-contributed attributes.
 func (s *Server) postResource(e *core.RequestEvent, post *domain.Post) (Resource, error) {
-	extra := map[string]any{}
 	ctx := e.Request.Context()
-	for _, source := range s.attributes[TypePost] {
-		value, err := source.Value(ctx, AttributeRequest{
-			ActorID:  s.actor(e).ID(),
-			RecordID: post.ID,
-			Type:     TypePost,
-		})
-		if err != nil {
-			return Resource{}, err
-		}
-		extra[source.Name] = value
-	}
 
 	// The same owner-aware check the write path uses, so the flags and
 	// the endpoint always agree.
@@ -479,29 +472,25 @@ func (s *Server) postResource(e *core.RequestEvent, post *domain.Post) (Resource
 		canEdit,
 		canDelete,
 		s.can(e, domain.PermissionHidePost, TypePost, post.ID),
-		extra,
+		map[string]any{},
 	)
 
-	// A plugin may contribute a relationship too.
-	for _, source := range s.relationships[TypePost] {
-		identifiers, err := source.Resolve(ctx, RelationshipRequest{
-			ActorID:  s.actor(e).ID(),
-			RecordID: post.ID,
-			Type:     TypePost,
-		})
-		if err != nil {
-			return Resource{}, err
-		}
-		if resource.Relationships == nil {
-			resource.Relationships = map[string]Relationship{}
-		}
-		if source.Many {
-			resource.Relationships[source.Name] = Relationship{Data: identifiers}
-		} else if len(identifiers) > 0 {
-			resource.Relationships[source.Name] = Relationship{Data: identifiers[0]}
-		} else {
-			resource.Relationships[source.Name] = Relationship{Data: nil}
-		}
+	// The plugins' attributes go through the SHARED helper, which honours
+	// each contributor's `Visible` predicate. A private copy of this loop
+	// lived here and called `Value` alone, so a field that was meant to be
+	// invisible (`votes` for a reader who may not see the tally) was sent
+	// to everybody anyway — the field said "visible to some" and the wire
+	// said "visible to all".
+	actor := s.actor(e)
+	if err := s.applyPluginAttributes(ctx, &resource, actor.ID(), post.ID, actor.User != nil && actor.User.IsAdmin); err != nil {
+		return Resource{}, err
+	}
+
+	// A plugin may contribute a relationship too. The single helper is what
+	// every resource type shares, so a relation declared on a user or a
+	// discussion reaches the wire the same way it does on a post.
+	if err := s.applyPluginRelationships(ctx, &resource, actor.ID(), post.ID); err != nil {
+		return Resource{}, err
 	}
 
 	return resource, nil
@@ -812,6 +801,14 @@ func (s *Server) ForumDocument(e *core.RequestEvent) (Resource, error) {
 	}
 	isAdmin := actor.User != nil && actor.User.IsAdmin
 	if err := s.applyPluginAttributes(e.Request.Context(), &resource, actorID, resource.ID, isAdmin); err != nil {
+		return Resource{}, err
+	}
+
+	// The document's relations too: a plugin may publish a collection on
+	// the forum document (`fof/gamification` lists the ranks there
+	// upstream), and a relation the document never carries is one the
+	// frontend cannot read.
+	if err := s.applyPluginRelationships(e.Request.Context(), &resource, actorID, resource.ID); err != nil {
 		return Resource{}, err
 	}
 

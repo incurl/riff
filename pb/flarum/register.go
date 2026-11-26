@@ -323,9 +323,13 @@ func (m *Module) pluginCan(ctx context.Context, actorID string) func(action, sub
 	actor := m.pluginActor(actorID)
 
 	return func(action, subjectType, subjectID string) bool {
-		if actor.UserID == "" {
-			return false
-		}
+		// NO guest short-circuit: the permission service resolves an
+		// unauthenticated caller onto the GUEST group on its own, which is
+		// what upstream does — a guest really does hold `viewForum`, and the
+		// admin grid's `allowGuest` checkboxes are grants to that group.
+		// Returning false for an empty id made every guest-facing `can*`
+		// attribute a lie: the ranking page's `canViewRankingPage` read
+		// false for a guest that the endpoint let straight in.
 		allowed, err := m.permissions.Can(ctx, actor, action, subjectType, subjectID)
 		return err == nil && allowed
 	}
@@ -341,9 +345,6 @@ func (m *Module) pluginCanScoped(ctx context.Context, actorID string) func(actio
 	actor := m.pluginActor(actorID)
 
 	return func(action, subjectType, subjectID string) bool {
-		if actor.UserID == "" {
-			return false
-		}
 		allowed, err := m.permissions.CanScoped(ctx, actor, action, subjectType, subjectID)
 		return err == nil && allowed
 	}
@@ -442,6 +443,13 @@ func (m *Module) boot(ctx context.Context) error {
 					RecordID: req.RecordID,
 					Type:     req.Type,
 					IsAdmin:  req.IsAdmin,
+					// A `Visible` predicate may ask a permission — it is
+					// upstream's `->visible(fn ($post, $context) =>
+					// $context->getActor()->can('canSeeVotes', $post))`.
+					// Without this the predicate answered nil for everybody and
+					// the field was ABSENT on every resource, while its value
+					// computed correctly — a field that is never sent.
+					Can: m.pluginCan(ctx, req.ActorID),
 				})
 			}, value)
 		}

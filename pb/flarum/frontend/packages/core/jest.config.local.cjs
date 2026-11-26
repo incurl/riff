@@ -39,7 +39,7 @@ module.exports = {
   // first, and the Tags extension's admin permission scope is the second.
   // `<rootDir>` is packages/core, so `../plugins/<name>/js` is the
   // sibling package's source tree.
-  roots: ['<rootDir>/src', '<rootDir>/../plugins/statistics/js', '<rootDir>/../plugins/tags/js'],
+  roots: ['<rootDir>/src', '<rootDir>/../plugins/statistics/js', '<rootDir>/../plugins/tags/js', '<rootDir>/../plugins/gamification/js'],
   setupFilesAfterEnv: ['<rootDir>/jest.setup.local.cjs'],
   transform: {
     '^.+\\.[tj]sx?$': ['babel-jest', babelConfig],

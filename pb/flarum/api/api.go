@@ -163,6 +163,12 @@ type RelationshipSource struct {
 
 // RelationshipRequest is what a relationship source receives.
 type RelationshipRequest struct {
+	// App is the PocketBase app.
+	//
+	// A plugin's resolver reads its own collection, and the resolver has no
+	// request to reach it through: a resource may be rendered from a hook
+	// or, as the leaderboard does, from a plugin's own loop over rows.
+	App core.App
 	// ActorID is the acting user's id, empty for anonymous.
 	ActorID string
 	// RecordID is the record the relationship belongs to.
@@ -400,6 +406,52 @@ func (s *Server) AddPluginRelationship(resourceType, name string) {
 	s.pluginRelationships[resourceType] = append(s.pluginRelationships[resourceType], name)
 }
 
+// applyPluginRelationships fills in the relationships the plugins
+// contributed for a resource type.
+//
+// It is the relationship twin of [Server.applyPluginAttributes], and the
+// same reasoning applies: a plugin DECLARES a relation through
+// `AddRelationship`, and a resource that never consults the table carries
+// the relation nowhere. The frontend then reads `user.ranks()` as
+// undefined — the identifiers exist in the database, the declaration
+// exists in the plugin, and the wire has neither.
+//
+// It used to be applied to POSTS only, which is why a plugin's relation on
+// a user (`ranks`) or on a discussion reached no response at all.
+func (s *Server) applyPluginRelationships(ctx context.Context, resource *Resource, actorID, recordID string) error {
+	sources := s.relationships[resource.Type]
+	if len(sources) == 0 {
+		return nil
+	}
+
+	for _, source := range sources {
+		identifiers, err := source.Resolve(ctx, RelationshipRequest{
+			App:      s.app,
+			ActorID:  actorID,
+			RecordID: recordID,
+			Type:     resource.Type,
+		})
+		if err != nil {
+			return err
+		}
+
+		if resource.Relationships == nil {
+			resource.Relationships = map[string]Relationship{}
+		}
+
+		switch {
+		case source.Many:
+			resource.Relationships[source.Name] = Relationship{Data: identifiers}
+		case len(identifiers) > 0:
+			resource.Relationships[source.Name] = Relationship{Data: identifiers[0]}
+		default:
+			resource.Relationships[source.Name] = Relationship{Data: nil}
+		}
+	}
+
+	return nil
+}
+
 // RelationshipWriterSource is a plugin's write side of a relationship.
 type RelationshipWriterSource struct {
 	// Name is the relationship name.
@@ -596,9 +648,11 @@ func (s *Server) permissionChecker(e *core.RequestEvent) func(action, subjectTyp
 	ctx := e.Request.Context()
 
 	return func(action, subjectType, subjectID string) bool {
-		if actor.UserID == "" {
-			return false
-		}
+		// No guest short-circuit: the permission service resolves an
+		// unauthenticated caller onto the GUEST group itself, which is how a
+		// guest holds `viewForum` at all. Returning false for an empty id
+		// made every guest-facing `can*` attribute disagree with the route
+		// that serves the same permission.
 		allowed, err := s.permissions.Can(ctx, actor, action, subjectType, subjectID)
 		if err != nil {
 			s.logger.Error("forum: permission check failed",
@@ -622,9 +676,6 @@ func (s *Server) permissionCheckerScoped(e *core.RequestEvent) func(action, subj
 	ctx := e.Request.Context()
 
 	return func(action, subjectType, subjectID string) bool {
-		if actor.UserID == "" {
-			return false
-		}
 		allowed, err := s.permissions.CanScoped(ctx, actor, action, subjectType, subjectID)
 		if err != nil {
 			s.logger.Error("forum: permission check failed",

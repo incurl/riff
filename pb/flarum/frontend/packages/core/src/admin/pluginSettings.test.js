@@ -33,7 +33,16 @@ const path = require('path');
  */
 const PLUGIN_SETTINGS = {
   likes: { keys: ['flarum-likes.like_own_post'] },
-  gamification: { keys: ['fof-gamification.allowSelfVotes', 'fof-gamification.defaultMetric', 'fof-gamification.defaultPeriod'] },
+  gamification: {
+    keys: [
+      'fof-gamification.allowSelfVotes',
+      'fof-gamification.defaultMetric',
+      'fof-gamification.defaultPeriod',
+      // How many rank badges a name wears: the rank stack reads it off the
+      // forum document (`fof-gamification.rankAmt`).
+      'fof-gamification.rankAmt',
+    ],
+  },
   tags: {
     // `allow_tag_change` is upstream's FLAT key (no `flarum-tags.` prefix):
     // the server reads it by that name (api.AllowTagChangeSetting) and the

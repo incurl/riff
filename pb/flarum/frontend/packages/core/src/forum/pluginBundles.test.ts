@@ -226,6 +226,33 @@ describeIfBuilt('the first-party plugin bundles', () => {
       expect(typeof Post.prototype[method]).toBe('function');
     }
   });
+
+  it('register the model methods the gamification UI calls', () => {
+    bootExtensions(appById('forum'));
+
+    const reg = (global as any).flarum.reg;
+    const Post = reg.get('core', 'common/models/Post');
+    const Discussion = reg.get('core', 'common/models/Discussion');
+    const User = reg.get('core', 'common/models/User');
+
+    // The vote controls read `post.canSeeVotes()` and the list reads
+    // `discussion.seeVotes()`. Both are METHOD calls, so an attribute the
+    // server sends without a registration here does not exist — the render
+    // throws and `extend()` swallows it, and the control never appears.
+    for (const method of ['votes', 'canSeeVotes', 'canVote', 'hasUpvoted', 'hasDownvoted', 'seeVoters']) {
+      expect(typeof Post.prototype[method]).toBe('function');
+    }
+
+    for (const method of ['votes', 'seeVotes', 'canVote', 'hasUpvoted', 'hasDownvoted']) {
+      expect(typeof Discussion.prototype[method]).toBe('function');
+    }
+
+    // The rank stack reads `user.ranks()`, and the user card reads
+    // `user.points()`.
+    for (const method of ['points', 'votes', 'rank', 'ranks']) {
+      expect(typeof User.prototype[method]).toBe('function');
+    }
+  });
 });
 
 /** One of the applications, by label. */
