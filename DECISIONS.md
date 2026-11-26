@@ -5,6 +5,56 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## THE WIKI'S BRANDING IS REAL, AND A REFUSED SAVE IS NOT A SILENT ONE (2026-11-26)
+
+The wiki answered every branding write with `501 Not Implemented`. That was
+honest — nothing was stored — and the operator's report was that the site name
+never applied *and* that saving popped "Cannot read properties of null (reading
+'faviconFile')". Both halves come from the same place, and neither is what a
+refusal should look like.
+
+`pb/leafwiki/branding.go` now stores the configuration at upstream LeafWiki's
+paths — `<storage>/leafwiki/branding.json`, `branding/logo.<ext>`,
+`branding/favicon.<ext>` — so a data directory still round-trips, and the SPA's
+whole branding page works: the name, the logo, the favicon, and the delete
+controls.
+
+**The toast is the interesting half.** The SPA's `updateBranding` does
+`const updated = await brandingAPI.updateBranding(...)` and then reads
+`updated.faviconFile`. Its transport (`fetchWithAuth`) throws on a non-2xx and
+returns `null` from `await res.json()` when the body is not JSON — and a PUT to
+an UNROUTED path is `ok` with the SPA shell in the body, because the catch-all
+is the least specific route in the mux. So the failure an operator sees is a
+TypeError about a field of `null`, not "branding is not configurable". That is
+the wiki's documented unrouted-path trap seen from the other side: the earlier
+cases parsed markup as data, this one read a FIELD off the absence of data.
+
+Every branding route therefore exists and every one of them answers with the
+whole configuration. The writes are administrator-only (upstream's
+`RequireAdmin`; in this port the `admin` role is a PocketBase superuser), which
+is why `requireAdmin` is a separate gate from `requireWriter`: the latter is
+the PAGE gate, and `RIFF_WIKI_PUBLIC_WRITE` deliberately lets an anonymous
+caller through it. A wiki editor may write pages; the site's identity is not a
+page.
+
+The limits are upstream's, and they are PUBLISHED rather than only enforced:
+`brandingConstraints` (nested, as the SPA reads it) carries the extension
+lists, the 1 MiB caps and the 100-character name cap, so the uploader refuses
+a file before sending it and the server refuses it again if the client does
+not — one limit, two enforcement points, no drift. The images are served at
+`<prefix>/branding/{filename}` and only for the two names the configuration
+currently holds, which is what makes path traversal impossible without a
+sanitiser; `<prefix>/favicon.ico` answers a browser's own request, and 404s so
+the shell's `/favicon.svg` stays in place until something is uploaded.
+
+The shell reads the store too — `{{__SITE_NAME__}}` and
+`{{__FAVICON_HREF__}}` are rendered from it, not from literals — because the
+shell is what the browser tab and the first frame show. A name that only
+reached the SPA would leave the tab reading the old one until React mounted,
+which is exactly the "it did not apply" the operator reported.
+
+Pinned by `go test -count=1 -run 'TestBranding_' ./pb/leafwiki/`.
+
 ## GAMIFICATION ALIGNED WITH `fof/gamification` 2.x (2026-11-26)
 
 The port had votes, a score and a leaderboard endpoint, and almost none of the
