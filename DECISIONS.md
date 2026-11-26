@@ -5,6 +5,73 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## DRAG-TO-REORDER WAS IMPLEMENTED AND NEVER ATTACHED (2026-11-26)
+
+Asked why drag/drop was not implemented "as upstream": it was — the tree, the
+`sortable` options, the nested `/api/tags/order` payload and the store mirror
+are all upstream's, line for line. **The library was never loaded**, so
+`onListOnCreate` returned early and the page rendered a complete, read-only
+tree. Every symptom of "not implemented" was present: nothing dragged, nothing
+errored, nothing 404'd, and the console was clean.
+
+The cause is a build-level gap that `import('flarum/…')` hides:
+
+* the shared Flarum webpack config rewrites `import('flarum/…')` into
+  `flarum.reg.asyncModuleImport('…')`, which loads the chunk and hands the
+  module back with `.default` filled in;
+* that rewrite is `autoChunkNameLoader`, registered with **`include: /src/`** —
+  upstream's layout. An extension's sources live in `js/`, so the rewrite never
+  ran;
+* the import therefore compiled to the config's externals entry,
+  `flarum.reg.get('core', 'admin/utils/loadSortable')`, which is SYNCHRONOUS and
+  returns `undefined` for a module the core registers with `addChunkModule`
+  (`ui/dist/js/core/admin/utils/loadSortable.js` — verified present and
+  served). Nothing fetches it, so it stays undefined forever;
+* `this.sortable = sortableModule.default` was `undefined`, and
+  `onListOnCreate` starts with `if (!this.sortable) return;`.
+
+Measured in the browser before the fix: `Object.keys(el).filter(k =>
+k.startsWith('Sortable'))` was empty on every `.TagList`, no request for
+`loadSortable.js` was made, and `reg.get('core','admin/utils/loadSortable')`
+was `undefined` after the page had loaded.
+
+**The same pattern had already broken a second feature**: the polls plugin's
+guest-vote path did `app.modal.show(() => import('flarum/forum/components/LogInModal'))`,
+and `LogInModal` is a chunk module too, so the promise resolved to nothing and
+the modal manager raised its generic error alert instead of the login form.
+
+Both now call `flarum.reg.asyncModuleImport(...)` explicitly, with the reason
+recorded at the call site, and the failure modes are no longer silent: a chunk
+that loads without a usable library logs `console.error`, and a rejected load
+still renders the page (read-only) instead of spinning forever — the old code
+had no `.catch`, so a failed tag list left the page on its loading indicator
+indefinitely.
+
+**`pluginBundles.test.ts` gains a build-level assertion**: no plugin bundle may
+contain `reg.get("core", "<lazy module>")` for a module the core ships as a
+chunk. It asserts on the BUILT artefact because the trap only exists after
+webpack has resolved the import — a source-level test passes in Jest, where
+`flarum/…` maps to the core's TypeScript sources and the chunking never
+happens. Mutation-checked: reinstating the `import()` spelling, rebuilding the
+tags bundle, and re-running the test turns it red.
+
+That test suite also had to be un-skipped. Its "have the bundles been built?"
+precondition required EVERY listed plugin to ship both bundles, and
+`statistics` has an admin bundle only while `mentions` has sources whose staged
+output was missing — so `describeIfBuilt` resolved to `describe.skip` and the
+whole suite (including the admin-boot tests added after the tags permission
+scope blanked the admin app) had been inert. With the current staging all 13
+plugin directories are present and the suite runs: 117 Jest tests, up from the
+116 that "passed" while nine of them were skipped.
+
+The verification is end to end, in a headless browser against a real instance,
+because that is the only layer that can see this class of bug: dragging one
+primary tag above another POSTs `{"order":[{"id":…,"children":[]},…]}`, gets a
+204 and the new order survives a reload (`GET /api/tags` reports the swapped
+positions); dragging a primary into "Secondary tags" POSTs the remaining
+primaries only — silence means unplaced — and the tag comes back with
+`position: null`.
+
 ## `forum_tags.parent` IS TEXT BECAUSE A RELATION CANNOT NAME THE COLLECTION THAT CREATES IT (2026-11-26)
 
 Asked whether the column had to be a text id because PocketBase cannot

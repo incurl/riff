@@ -203,6 +203,43 @@ describeIfBuilt('the first-party plugin bundles', () => {
   }
 
   /**
+   * A LAZY CORE MODULE MUST BE LOADED THROUGH THE ASYNC LOADER.
+   *
+   * `import('flarum/…')` inside an extension's `js/` tree is NOT rewritten by
+   * the shared Flarum webpack config: its `autoChunkNameLoader` is registered
+   * with `include: /src/`, and an extension's sources live in `js/`. So a bare
+   * `import()` compiles to the config's SYNCHRONOUS external,
+   * `flarum.reg.get('core', '<id>')` — which is `undefined` for a module the
+   * core ships as a lazy chunk (`addChunkModule`), because nothing fetches it.
+   *
+   * That is how the tags page lost drag-to-reorder ENTIRELY: `this.sortable`
+   * came back undefined, `onListOnCreate` returned early, and the tree
+   * rendered read-only with a clean console and no failed request. The polls'
+   * guest-vote path lost its login modal the same way (the modal manager
+   * awaits a function that resolves to `{ default: Modal }`; the sync read
+   * resolved to nothing, and the click raised a generic alert instead).
+   *
+   * Both now call `flarum.reg.asyncModuleImport`, which loads the chunk and
+   * fills in `.default`. This assertion is on the BUILT bundle on purpose:
+   * the trap only exists after webpack has resolved the import.
+   */
+  it('load lazy core modules through the async loader, never a synchronous registry read', () => {
+    const lazyModules = ['admin/utils/loadSortable', 'forum/components/LogInModal'];
+
+    for (const bundle of [...apps[0].plugins, ...apps[1].plugins]) {
+      const source = fs.readFileSync(bundle.file, 'utf-8');
+
+      for (const id of lazyModules) {
+        expect({ bundle: bundle.file, id, sync: source.includes(`reg.get("core","${id}")`) }).toEqual({
+          bundle: bundle.file,
+          id,
+          sync: false,
+        });
+      }
+    }
+  });
+
+  /**
    * The model methods the likes UI CALLS.
    *
    * A missing `attribute('name')` registration is invisible in a bundle that

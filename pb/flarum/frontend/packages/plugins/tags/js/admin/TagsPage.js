@@ -91,14 +91,47 @@ export default class TagsPage extends ExtensionPage {
   oninit(vnode) {
     super.oninit(vnode);
 
-    // The sortable library is ~120KB, so it is loaded only when this
-    // page is opened.
-    Promise.all([this.loadTags(), import('flarum/admin/utils/loadSortable')]).then(([, sortableModule]) => {
-      this.sortable = sortableModule.default;
-      this.loading = false;
+    // The sortable library is ~120KB, so it is loaded only when this page is
+    // opened.
+    //
+    // THE CALL IS `flarum.reg.asyncModuleImport`, NOT `import('flarum/…')`.
+    // The shared Flarum webpack config rewrites `import('flarum/…')` into
+    // exactly this call (`autoChunkNameLoader`), but its loader only covers
+    // `src/` — an extension's sources live in `js/`, so the rewrite never
+    // ran and the bare `import()` compiled to the config's SYNCHRONOUS
+    // external, `flarum.reg.get('core', 'admin/utils/loadSortable')`. That is
+    // `undefined` for a module the core registers with `addChunkModule` and
+    // has not fetched: the chunk was never requested, `this.sortable` was
+    // undefined, `onListOnCreate` returned early, and the page had NO DRAG AT
+    // ALL — with a clean console and a rendered, read-only tree. The
+    // registry's async loader loads the chunk and hands back the module with
+    // its default filled in, which is what the `import()` spelling is meant
+    // to do.
+    Promise.all([this.loadTags(), flarum.reg.asyncModuleImport('flarum/admin/utils/loadSortable')])
+      .then(([, sortableModule]) => {
+        this.sortable = sortableModule.default;
 
-      m.redraw();
-    });
+        // A chunk that loads but carries no library is a broken build. Say
+        // so once rather than rendering a page whose drag silently does
+        // nothing — that is how this bug survived its first review.
+        if (typeof this.sortable?.create !== 'function') {
+          console.error('tags: the sortable library did not load, so drag-to-reorder is unavailable');
+        }
+
+        this.loading = false;
+
+        m.redraw();
+      })
+      .catch((error) => {
+        // The list must still render: read-only tags beat a spinner that
+        // never clears, and the failure is logged rather than swallowed so
+        // it can be diagnosed.
+        console.error('tags: the tags page could not finish loading', error);
+
+        this.loading = false;
+
+        m.redraw();
+      });
   }
 
   /**

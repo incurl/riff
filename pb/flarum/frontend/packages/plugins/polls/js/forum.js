@@ -148,8 +148,18 @@ function PostPoll({ poll, post }) {
                   if (guest) {
                     // The tick is undone: the guest has not voted, and
                     // the control is offered only to ask them to log in.
+                    //
+                    // `flarum.reg.asyncModuleImport`, NOT `import(...)`: the
+                    // shared webpack config only rewrites `import('flarum/…')`
+                    // to that call for sources under `src/`, and an extension's
+                    // sources live in `js/` — so the bare `import()` compiles to
+                    // the config's SYNCHRONOUS external, `flarum.reg.get(...)`,
+                    // which is undefined for a lazily-chunked core component.
+                    // `ModalManagerState.show` awaits a function that resolves
+                    // to `{ default: Modal }`, which is exactly what the async
+                    // loader hands back.
                     event.target.checked = false;
-                    app.modal.show(() => import('flarum/forum/components/LogInModal'));
+                    app.modal.show(() => flarum.reg.asyncModuleImport('flarum/forum/components/LogInModal'));
                     return;
                   }
                   toggleOption(poll, option.id(), selected);
