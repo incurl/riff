@@ -10,6 +10,8 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/pocketbase/pocketbase/core"
+
+	"github.com/incurl/riff/internal/pattoken"
 )
 
 const (
@@ -109,11 +111,19 @@ func (s *Server) currentUser(e *core.RequestEvent) *core.Record {
 	}
 
 	if token := bearerToken(e.Request); token != "" {
-		record, err := s.app.FindAuthRecordByToken(token, core.TokenTypeAuth)
-		if err != nil {
-			return nil
+		if record, err := s.app.FindAuthRecordByToken(token, core.TokenTypeAuth); err == nil {
+			return record
 		}
-		return record
+
+		// A riff personal access token ("memos_pat_*") is the REVOCABLE
+		// credential, which is the one an agent carries — an MCP tool call
+		// forwards this header and nothing else. Without this a PAT could
+		// post a memo and not edit a wiki page.
+		if record, err := pattoken.Verify(s.app, token); err == nil && record != nil {
+			return record
+		}
+
+		return nil
 	}
 
 	cookie, err := e.Request.Cookie(accessCookieName)

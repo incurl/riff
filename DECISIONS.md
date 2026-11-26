@@ -5,6 +5,91 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## ONE MCP CATALOG, THREE MODULES THAT ARE NOT PROTO (2026-11-26)
+
+The MCP service derives its tools from `proto/gen/openapi.yaml`, which describes
+the Connect/gRPC surface. The wiki, the forum and Bark are hand-written
+PocketBase surfaces with no proto document, so they had no tools at all — the
+instance's own MCP endpoint could post a memo but could not read a wiki page,
+start a discussion or send a push.
+
+**They declare their tools, and the declaration lives next to the routes it
+calls.** `internal/mcptools` holds one pure-data type (`Tool`: name,
+description, method, path, parameters, optional JSON body);
+`pb/leafwiki/MCPTools`, `pb/flarum/MCPTools` and `pb/bark/MCPTools` return
+declarations built from their own mount prefix; `main.go` passes them to
+`mcp.Register(..., mcp.WithTools(...))`. A declared tool becomes the same
+`*sdkmcp.Tool` an OpenAPI operation does, with the same input-schema shape (a
+body is ONE nested `body` argument) and the same method-derived annotations,
+and a call executes through the SAME adapter: an in-process request to the
+module's route carrying the caller's `Authorization` header. So the module's
+authentication, its access rules and its error shapes are the ones that
+answer — the MCP surface must never be a second, more permissive way into the
+same data.
+
+The layering is why the type lives in `internal/`: `server/mcp` and `pb/*` are
+siblings in the import graph, so neither may import the other. Each module
+keeps one dependency on `internal/mcptools`; for Bark that breaks its
+documented "imports no riff package" property, which now reads "imports one, a
+zero-dependency data type". A second MCP endpoint per module was the
+alternative — and Bark already HAD one (`/bark/mcp`, upstream's `notify`
+tool): a second catalog and a second credential for the same capability is
+exactly what an agent cannot use.
+
+**A declaration is validated at startup**, not at call time: snake_case name,
+a description (it is what an agent reads before choosing), a supported
+method, an absolute path, `path`/`query` parameter locations only, every
+`{placeholder}` backed by a parameter, and no duplicate or curated-colliding
+name. A tool that registers and then cannot run is a catalog entry an agent
+will pick and the server will refuse.
+
+**Two traps came with the seam, and both are now reported by name.**
+
+*An unrouted path is not a 404 here.* The Memos SPA's catch-all is the least
+specific route in the mux, so a path that had drifted from its module's mount
+point answered `index.html` with a 200, and the tool failed as "failed to
+decode API JSON response" — a message about HTML that says nothing about the
+cause. The adapter now recognises an HTML reply and answers that the path is
+not an API route and the request reached the single-page app's catch-all.
+Each module ALSO pins its declared paths in `mcptools_test.go`, because driving
+the real mux is the only thing that catches a prefix change.
+
+*A write route that demands a CSRF cookie refuses every tool call.* The adapter
+forwards only `Authorization` — there is no cookie jar to double-submit from.
+The forum's `session.VerifyCSRF` now returns early when the request carries a
+bearer token: a token travels in an explicit header a cross-site page cannot
+set, so there is no ambient credential to forge, and a COOKIE caller still
+needs the double submit (both halves are pinned by
+`TestForum_ABearerCallerWritesWithoutCSRF`). Upstream's framework has the same
+rule. Without it, `forum_create_discussion` and `forum_reply` over MCP answered
+403 while the same writes over HTTP worked.
+
+**ONE CREDENTIAL, EVERYWHERE: THE PAT.** The seam above exposed a second
+credential problem. riff's revocable credential is the personal access token
+(`memos_pat_*`): a PocketBase auth token is a stateless JWT with a fixed
+lifetime, so an agent cannot be told "stop" — while a PAT can be deleted.
+`pb/connect` understood PATs, but the forum's session resolver and the wiki's
+current-user lookup accepted PocketBase auth tokens only, so a PAT could post a
+memo through `/mcp` and not a forum reply or a wiki edit. The verifier now
+lives in `internal/pattoken` (a leaf package: core + bcrypt), `pb/connect`
+delegates to it, and both SPA-facing resolvers fall back to it — the same
+three-package duplication that `api.SettingTruthy` was consolidated to avoid.
+Pinned by `TestForum_APersonalAccessTokenWrites` and
+`TestWiki_APersonalAccessTokenWrites`; each seeds a PAT row and writes through
+the module's own route.
+
+The wiki's CSRF check already skipped a header-authenticated caller; the
+forum's did not, which is the asymmetric half of the same question. Both now
+agree: a COOKIE caller double-submits, a BEARER caller does not, because a
+header the browser cannot attach cross-site is not an ambient credential.
+
+Verified end to end by `TestMCP_DeclaredModuleToolsAreCallable` in
+`main_test.go`, which mounts the three modules, registers `/mcp` with their
+declarations and drives the HTTP endpoint: `tools/list` carries `wiki_*`,
+`forum_*` and `bark_*`, `wiki_list_pages` answers a JSON tree, and
+`bark_check_device` for an unknown key answers Bark's own JSON 400 as a tool
+error.
+
 ## STICKY, LOCK AND SUSPEND, ALIGNED WITH UPSTREAM (2026-11-26)
 
 The three moderation plugins had their ATTRIBUTES and their ROUTES and were

@@ -371,7 +371,7 @@ func TestExecuteOperationReturnsObjectStructuredContent(t *testing.T) {
 }
 
 func TestExecuteOperationConvertsAPIErrorsToToolErrors(t *testing.T) {
-	handler := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+	handler := http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
 		writer.WriteHeader(http.StatusNotFound)
 		_, _ = io.WriteString(writer, `{"message":"missing memo"}`)

@@ -56,10 +56,11 @@ type MCPService struct {
 // call; pass the path of the file produced by `buf generate` (typically
 // proto/gen/openapi.yaml). An empty specPath causes NewMCPService to return
 // an error explaining the dependency.
-func NewMCPService(p *profile.Profile, api http.Handler, specPath string) (*MCPService, error) {
+func NewMCPService(p *profile.Profile, api http.Handler, specPath string, options ...Option) (*MCPService, error) {
 	if specPath == "" {
 		return nil, errSpecPathRequired
 	}
+	settings := newServiceOptions(options)
 	spec, err := loadMCPServiceOpenAPISpec(specPath)
 	if err != nil {
 		return nil, err
@@ -69,6 +70,14 @@ func NewMCPService(p *profile.Profile, api http.Handler, specPath string) (*MCPS
 		return nil, err
 	}
 	tools, operationsByTool, err := buildCuratedTools(registry)
+	if err != nil {
+		return nil, err
+	}
+
+	// The tools the wiki, the forum and Bark declare for themselves. They
+	// join the curated catalog here rather than in a second server, so a
+	// client sees one catalog and one endpoint.
+	tools, operationsByTool, err = declareCatalog(tools, operationsByTool, settings.declared)
 	if err != nil {
 		return nil, err
 	}

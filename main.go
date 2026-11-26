@@ -179,13 +179,14 @@ func main() {
 	// RIFF_BARK_* env vars override the APNs identifiers; the defaults
 	// are the official Bark app's, which is what the embedded signing
 	// key in pb/bark/apns_certs.go is bound to.
-	if err := bark.RegisterWithOptions(app, bark.Options{
+	barkOptions := bark.Options{
 		APNsTopic:  os.Getenv("RIFF_BARK_APNS_TOPIC"),
 		APNsKeyID:  os.Getenv("RIFF_BARK_APNS_KEY_ID"),
 		APNsTeamID: os.Getenv("RIFF_BARK_APNS_TEAM_ID"),
 		Version:    version.GetCurrentVersion(),
 		Commit:     version.Commit,
-	}); err != nil {
+	}
+	if err := bark.RegisterWithOptions(app, barkOptions); err != nil {
 		log.Fatal(err)
 	}
 
@@ -237,10 +238,11 @@ func main() {
 	// operator sets RIFF_WIKI_PUBLIC_WRITE=1. The routes are bound
 	// from an OnServe hook inside Register, so the storage directory
 	// and the migrated collections exist by the time they are used.
-	if err := leafwiki.Register(app, leafwiki.Options{
+	wikiOptions := leafwiki.Options{
 		Version:     version.Version,
 		PublicWrite: envBool("RIFF_WIKI_PUBLIC_WRITE"),
-	}); err != nil {
+	}
+	if err := leafwiki.Register(app, wikiOptions); err != nil {
 		log.Fatal(err)
 	}
 
@@ -253,11 +255,13 @@ func main() {
 	// The core ships `en`; the bundled Chinese language pack provides
 	// `zh-Hans`. An empty or unknown value falls back to `en`, so a typo
 	// never leaves the forum rendering raw translation keys.
-	if err := flarum.Register(app, flarum.Options{
-		BasePath:         envOr("RIFF_FORUM_BASE_PATH", flarum.DefaultBasePath),
+	forumBasePath := envOr("RIFF_FORUM_BASE_PATH", flarum.DefaultBasePath)
+	forumOptions := flarum.Options{
+		BasePath:         forumBasePath,
 		CollectionPrefix: envOr("RIFF_FORUM_COLLECTION_PREFIX", "forum_"),
 		Locale:           envOr("RIFF_FORUM_LOCALE", ""),
-	}); err != nil {
+	}
+	if err := flarum.Register(app, forumOptions); err != nil {
 		log.Fatal(err)
 	}
 
@@ -280,7 +284,20 @@ func main() {
 	// server/mcp/service.go for the message. The profile is
 	// forwarded so the origin allow-list can match the
 	// canonical instance URL (server/mcp/origin.go).
-	if err := mcp.Register(app, prof, mcpSpecPath()); err != nil {
+	// The MCP catalog is the OpenAPI-derived toolset PLUS the tools the
+	// three hand-written modules declare for themselves. They have no proto
+	// document to derive a catalog from, so each module declares its tools
+	// next to the routes they call (`pb/<module>/mcptools.go`), and the MCP
+	// service executes them through the same in-process adapter the
+	// generated tools use — same caller, same credentials, same access
+	// rules. The prefixes are the ones the modules were registered with
+	// just above, so a tool can never point at a path that is not mounted.
+	mcpOptions := []mcp.Option{
+		mcp.WithTools(leafwiki.MCPTools("")...),
+		mcp.WithTools(flarum.MCPTools(forumBasePath)...),
+		mcp.WithTools(bark.MCPTools("")...),
+	}
+	if err := mcp.Register(app, prof, mcpSpecPath(), mcpOptions...); err != nil {
 		log.Fatal(err)
 	}
 

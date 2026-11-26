@@ -23,6 +23,7 @@ import (
 	"github.com/pocketbase/pocketbase/core"
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/incurl/riff/internal/pattoken"
 	"github.com/incurl/riff/pb/flarum/domain"
 )
 
@@ -162,11 +163,20 @@ func (r *Resolver) recordFromRequest(e *core.RequestEvent) *core.Record {
 	}
 
 	if token := BearerToken(e.Request); token != "" {
-		record, err := r.app.FindAuthRecordByToken(token, core.TokenTypeAuth)
-		if err != nil {
-			return nil
+		if record, err := r.app.FindAuthRecordByToken(token, core.TokenTypeAuth); err == nil {
+			return record
 		}
-		return record
+
+		// A riff personal access token ("memos_pat_*"). It is the instance's
+		// REVOCABLE credential, which is what an agent carries — an MCP tool
+		// call forwards exactly this header and nothing else (see
+		// `server/mcp`). Without this branch a PAT could post a memo and not
+		// a forum reply.
+		if record, err := pattoken.Verify(r.app, token); err == nil && record != nil {
+			return record
+		}
+
+		return nil
 	}
 
 	cookie, err := e.Request.Cookie(AccessCookieName)
@@ -338,6 +348,22 @@ func (*Resolver) csrfToken(e *core.RequestEvent) string {
 func VerifyCSRF(e *core.RequestEvent) error {
 	switch e.Request.Method {
 	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return nil
+	}
+
+	// A request that authenticates with a BEARER TOKEN needs no double
+	// submit: the token travels in an explicit header, and a cross-site
+	// page cannot set one on the caller's behalf — so there is no ambient
+	// credential to forge. The cookie is the ambient one, and the cookie
+	// path still requires the token.
+	//
+	// It is not a nicety. The MCP service executes a tool by replaying the
+	// call in-process with the caller's `Authorization` header (see
+	// `server/mcp`), which carries no cookie jar: without this branch every
+	// forum write over MCP answered `missing CSRF cookie`, while the same
+	// write over the HTTP API worked. Upstream's framework has the same
+	// rule — its CSRF middleware skips token-authenticated requests.
+	if BearerToken(e.Request) != "" {
 		return nil
 	}
 

@@ -214,7 +214,20 @@ func buildCuratedTools(registry map[string]*openAPIOperation) ([]*sdkmcp.Tool, m
 
 func buildToolFromOperation(operation *openAPIOperation) (*sdkmcp.Tool, *registeredOperation) {
 	name := toolNameFromOperationID(operation.OperationID)
-	title := titleFromToolName(name)
+	return buildToolWithName(operation, name, "")
+}
+
+// buildToolWithName builds a tool under an explicit name.
+//
+// An OpenAPI operation derives its name from its operationId; a tool a
+// module DECLARES (see WithTools) already carries the name the module chose,
+// because there is no operationId to derive it from. An empty title is
+// derived from the name, which is what the curated catalog does.
+func buildToolWithName(operation *openAPIOperation, name, explicitTitle string) (*sdkmcp.Tool, *registeredOperation) {
+	title := explicitTitle
+	if strings.TrimSpace(title) == "" {
+		title = titleFromToolName(name)
+	}
 	inputSchema := inputSchemaForOperation(operation)
 	tool := &sdkmcp.Tool{
 		Meta: sdkmcp.Meta{

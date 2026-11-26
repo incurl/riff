@@ -27,6 +27,11 @@ import (
 // actionable message. See DECISIONS.md and docs/design/mcp-port.md
 // for the integration rationale.
 //
+// options are passed through to NewMCPService. The one that matters here is
+// WithTools: the wiki, the forum and Bark declare their own tools, because
+// they are hand-written surfaces with no OpenAPI document to derive a
+// catalog from.
+//
 // The MCP service needs to forward tool calls into the same HTTP
 // handler the public API serves, so service construction is
 // deferred to the OnServe hook (the handler only exists after
@@ -36,7 +41,7 @@ import (
 //
 // Register does not start the server. The caller still has to
 // call app.Start() after all Register-style functions have run.
-func Register(app core.App, p *profile.Profile, specPath string) error {
+func Register(app core.App, p *profile.Profile, specPath string, options ...Option) error {
 	if specPath == "" {
 		// NewMCPService also rejects an empty specPath, but
 		// surfacing the error here keeps the failure mode
@@ -58,7 +63,7 @@ func Register(app core.App, p *profile.Profile, specPath string) error {
 			return err
 		}
 
-		svc, err := NewMCPService(p, apiHandler, specPath)
+		svc, err := NewMCPService(p, apiHandler, specPath, options...)
 		if err != nil {
 			return err
 		}

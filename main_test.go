@@ -20,6 +20,9 @@ import (
 	"github.com/stretchr/testify/require"
 	yaml "go.yaml.in/yaml/v3"
 
+	"github.com/incurl/riff/pb/bark"
+	"github.com/incurl/riff/pb/flarum"
+	"github.com/incurl/riff/pb/leafwiki"
 	_ "github.com/incurl/riff/pb/migrations"
 
 	"github.com/incurl/riff/internal/testutil"
@@ -379,4 +382,121 @@ func writeMinimalOpenAPISpec(t *testing.T) string {
 	path := filepath.Join(t.TempDir(), "openapi.yaml")
 	require.NoError(t, os.WriteFile(path, data, 0o600), "write minimal spec")
 	return path
+}
+
+// mcpCall posts one JSON-RPC request to the mounted /mcp endpoint.
+func mcpCall(t *testing.T, mux http.Handler, method string, params any) *httptest.ResponseRecorder {
+	t.Helper()
+
+	body, err := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  method,
+		"params":  params,
+	})
+	require.NoError(t, err)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+	request.Header.Set("content-type", "application/json")
+	request.Header.Set("accept", "application/json, text/event-stream")
+	mux.ServeHTTP(recorder, request)
+	require.Equal(t, http.StatusOK, recorder.Code, "the MCP endpoint must answer; body=%s", recorder.Body.String())
+
+	return recorder
+}
+
+// TestMCP_DeclaredModuleToolsAreCallable is the vertical slice for the
+// wiki, the forum and Bark: the three modules are mounted exactly as main.go
+// mounts them, the MCP service is given their declared tools, and the
+// endpoint is driven over HTTP.
+//
+// It pins the two halves that are easy to get wrong together:
+//
+//   - the CATALOG: a module's tools reach `tools/list`, so an agent can find
+//     them at all;
+//   - the EXECUTION: a tool call is dispatched through the module's own
+//     route and comes back as JSON. A path that drifts from the mount point
+//     is answered by the SPA's catch-all with index.html and a 200, and
+//     nothing else in the stack notices.
+func TestMCP_DeclaredModuleToolsAreCallable(t *testing.T) {
+	specPath := writeMinimalOpenAPISpec(t)
+	app := newTestApp(t)
+
+	// Registration order matters: the modules bind their routes from OnServe
+	// hooks, and mcp.Register captures the router's mux from its own hook. A
+	// module registered after that would be missing from the catalog's
+	// dispatch target. main.go has the same order.
+	require.NoError(t, leafwiki.Register(app, leafwiki.Options{Version: "test"}))
+	require.NoError(t, flarum.Register(app, flarum.Options{BasePath: flarum.DefaultBasePath}))
+	require.NoError(t, bark.RegisterWithOptions(app, bark.Options{Version: "test"}))
+
+	require.NoError(t, mcp.Register(app, nil, specPath,
+		mcp.WithTools(leafwiki.MCPTools("")...),
+		mcp.WithTools(flarum.MCPTools(flarum.DefaultBasePath)...),
+		mcp.WithTools(bark.MCPTools("")...),
+	))
+
+	baseRouter, err := apis.NewRouter(app)
+	require.NoError(t, err)
+	serveEvent := new(core.ServeEvent)
+	serveEvent.App = app
+	serveEvent.Router = baseRouter
+	var mux http.Handler
+	require.NoError(t, app.OnServe().Trigger(serveEvent, func(e *core.ServeEvent) error {
+		m, err := e.Router.BuildMux()
+		if err != nil {
+			return err
+		}
+		mux = m
+		return nil
+	}))
+
+	// --- the catalog ----------------------------------------------------
+	listed := mcpCall(t, mux, "tools/list", map[string]any{})
+	var listResponse struct {
+		Result struct {
+			Tools []struct {
+				Name string `json:"name"`
+			} `json:"tools"`
+		} `json:"result"`
+	}
+	require.NoError(t, json.Unmarshal(listed.Body.Bytes(), &listResponse), listed.Body.String())
+
+	names := make(map[string]bool, len(listResponse.Result.Tools))
+	for _, tool := range listResponse.Result.Tools {
+		names[tool.Name] = true
+	}
+	for _, expected := range []string{
+		"wiki_list_pages",
+		"wiki_get_page",
+		"forum_list_discussions",
+		"forum_create_discussion",
+		"bark_push_notification",
+	} {
+		require.True(t, names[expected], "the catalog must carry %q; got %v", expected, names)
+	}
+
+	// --- the execution --------------------------------------------------
+	// The wiki is empty on a fresh instance, so the tree is an empty list —
+	// which is still a JSON answer, and that is what proves the path is
+	// routed (an unrouted one answers the SPA shell).
+	called := mcpCall(t, mux, "tools/call", map[string]any{
+		"name":      "wiki_list_pages",
+		"arguments": map[string]any{},
+	})
+	require.NotContains(t, called.Body.String(), "<!doctype",
+		"an unrouted wiki path is answered by the SPA shell; got %s", called.Body.String())
+	require.Contains(t, called.Body.String(), `"structuredContent"`, called.Body.String())
+	require.NotContains(t, called.Body.String(), `"isError":true`,
+		"the wiki call must succeed, not report a tool error; got %s", called.Body.String())
+
+	// A Bark device that does not exist is a tool ERROR with a JSON body, not
+	// a 404 from an unrouted path: the tool reached Bark's own handler.
+	missing := mcpCall(t, mux, "tools/call", map[string]any{
+		"name":      "bark_check_device",
+		"arguments": map[string]any{"device_key": "does-not-exist"},
+	})
+	require.Contains(t, missing.Body.String(), `"isError":true`,
+		"a missing device is Bark's 400, reported as a tool error; got %s", missing.Body.String())
 }

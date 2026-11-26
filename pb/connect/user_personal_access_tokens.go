@@ -11,6 +11,8 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/incurl/riff/internal/pattoken"
+
 	v1 "github.com/incurl/riff/proto/gen/api/v1"
 
 	"github.com/incurl/riff/internal/random"
@@ -46,7 +48,9 @@ import (
 // `memos_pat_...`, so we keep that shape for parity with
 // the upstream Memos client. Operators can grep logs for
 // the prefix when they want to find leaked credentials.
-const personalAccessTokenPrefix = "memos_pat_"
+// The prefix itself lives in `internal/pattoken`, so the read side and the
+// write side cannot drift apart.
+const personalAccessTokenPrefix = pattoken.Prefix
 
 // personalAccessTokenRandomBytes is the entropy in the
 // raw token, before base64url encoding. 24 bytes yields

@@ -296,6 +296,11 @@ validate an error payload against the tool's success-only output schema:
 
 ## Adding a tool
 
+There are two ways in, and which one applies depends on whether the surface is
+generated from a proto document.
+
+### A tool for the generated API (`/api/v1/...`)
+
 1. Add the OpenAPI `operationId` to `curatedOperationIDs` in `catalog.go`.
 2. If the operation is **not** in the generated OpenAPI, add or adjust the
    proto/API surface first, then regenerate:
@@ -309,6 +314,51 @@ validate an error payload against the tool's success-only output schema:
 
 Never hand-edit `proto/gen/openapi.yaml` or other generated output — change the
 proto definitions and regenerate.
+
+### A tool for a MODULE (`/wiki`, `/forum`, `/bark`)
+
+Three modules are hand-written PocketBase surfaces with no OpenAPI document, so
+their tools are **declared by the module itself** (`pb/<module>/mcptools.go`,
+using `internal/mcptools`) and handed to `mcp.Register` from `main.go` with
+`WithTools`. This is deliberate: the MCP server must not know what a wiki or a
+forum is, and the module must not import the MCP server — they are siblings in
+the import graph, and `internal/mcptools` is the leaf type they share.
+
+```go
+// pb/<module>/mcptools.go
+func MCPTools(prefix string) []mcptools.Tool {
+    return []mcptools.Tool{{
+        Name:        "wiki_list_pages",
+        Description: "List the wiki's page tree. Public.",
+        Method:      "GET",
+        Path:        prefix + "/api/tree",
+    }}
+}
+```
+
+A declaration is validated at **startup**: the name must be snake_case, the
+method must be one of GET/POST/PUT/PATCH/DELETE, the path must be absolute, and
+every `{placeholder}` needs a parameter. A duplicate or colliding name is an
+error rather than a shadowed tool.
+
+The execution path is the same one the curated tools use: the call is replayed
+in-process against the module's own route with the caller's `Authorization`
+header, so the module's authentication, its access rules and its error shapes
+are the ones that answer. An MCP tool is therefore never a second, more
+permissive way into the same data.
+
+Two consequences are load-bearing:
+
+- **The declared path must be the path the module actually mounts.** An
+  unrouted path here is not a 404 — the Memos SPA's catch-all answers it with
+  `index.html` and a 200 — so the adapter refuses an HTML reply with an explicit
+  message instead of failing as a JSON decode. Each module also pins its own
+  paths (`pb/<module>/mcptools_test.go`).
+- **A write needs the module's credential to reach it.** The adapter forwards
+  only `Authorization`, so a write route that insists on a CSRF cookie would
+  refuse every tool call; the forum skips its CSRF double submit for
+  bearer-token callers for exactly this reason (a bearer token is not an
+  ambient credential, so there is nothing to forge).
 
 ## Testing
 

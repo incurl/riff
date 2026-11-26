@@ -43,6 +43,19 @@ func (a *apiAdapter) execute(ctx context.Context, operation *openAPIOperation, a
 	recorder := httptest.NewRecorder()
 	a.handler.ServeHTTP(recorder, req)
 
+	// An unrouted path in this codebase is not a 404: the Memos SPA's
+	// catch-all is the least specific route in the mux, so it answers with
+	// index.html and a 200. Decoding that as JSON fails with a message about
+	// HTML, which says nothing about the real fault — and a hand-declared
+	// tool (WithTools) is exactly where a path can drift from its module's
+	// mount point. Name the fault instead.
+	if isHTMLResponse(recorder) {
+		return newToolErrorResult(errors.Errorf(
+			"%s %s answered with an HTML page rather than JSON: the path is not an API route, so the request reached the single-page app's catch-all instead",
+			operation.Method, operation.Path,
+		).Error()), nil
+	}
+
 	value, err := decodeJSONValue(recorder.Body.Bytes())
 	if err != nil {
 		return newToolErrorResult(err.Error()), nil
@@ -51,6 +64,19 @@ func (a *apiAdapter) execute(ctx context.Context, operation *openAPIOperation, a
 		return newToolErrorResult(apiErrorMessage(recorder.Code, value)), nil
 	}
 	return newStructuredToolResult(value)
+}
+
+// isHTMLResponse reports whether a response is the SPA's HTML shell rather
+// than a JSON payload.
+//
+// The content type is the honest signal when the handler set one; the body
+// sniff covers the handlers that stream markup without naming a type.
+func isHTMLResponse(recorder *httptest.ResponseRecorder) bool {
+	if contentType := recorder.Header().Get("Content-Type"); strings.Contains(strings.ToLower(contentType), "text/html") {
+		return true
+	}
+	body := bytes.TrimSpace(recorder.Body.Bytes())
+	return len(body) > 0 && body[0] == '<'
 }
 
 func buildAPIRequest(ctx context.Context, operation *openAPIOperation, arguments map[string]any, authorization string) (*http.Request, error) {
