@@ -3,6 +3,7 @@ package flarum
 import (
 	"github.com/incurl/riff/pb/flarum/plugin"
 	"github.com/incurl/riff/pb/flarum/plugins/chinese"
+	"github.com/incurl/riff/pb/flarum/plugins/french"
 	"github.com/incurl/riff/pb/flarum/plugins/gamification"
 	"github.com/incurl/riff/pb/flarum/plugins/likes"
 	"github.com/incurl/riff/pb/flarum/plugins/lock"
@@ -28,10 +29,11 @@ import (
 // extension — so the forum implements them as a plugin that mirrors
 // that extension's contract.
 //
-// Chinese is the fourth and a different shape: a language pack is a
-// catalogue, not a feature. It is registered by default because a
-// translation that has to be installed explicitly is a translation
-// nobody uses, and it costs nothing when the active locale is `en`.
+// Chinese and French are a different shape: a language pack is a
+// catalogue, not a feature. They are registered by default because a
+// translation that has to be installed explicitly is a translation nobody
+// uses, and a pack costs nothing when the active locale is `en` (its
+// bundles are embedded, not loaded).
 func defaultPlugins() []plugin.Plugin {
 	return []plugin.Plugin{
 		tags.New(),
@@ -46,5 +48,6 @@ func defaultPlugins() []plugin.Plugin {
 		polls.New(),
 		statistics.New(),
 		chinese.New(),
+		french.New(),
 	}
 }

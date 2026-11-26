@@ -303,36 +303,137 @@ func (m *Module) locales() map[string]string {
 	return out
 }
 
-// activeLocale returns the locale the shell should load.
+// activeLocale returns the locale a request should be served in.
 //
-// An unset value means English. A value with no catalogue behind it also
-// means English, for two separate reasons:
+// Upstream's `SetLocale` middleware decides, in this order
+// (`framework/core/src/Http/Middleware/SetLocale.php`):
 //
-//   - no language pack declares it (a typo in `RIFF_FORUM_LOCALE`);
-//   - one declares it but its bundle was never built or staged.
+//  1. a signed-in caller's `locale` PREFERENCE — the language selector
+//     posts it with `savePreferences({ locale })`;
+//  2. a guest's `locale` COOKIE — the selector writes that cookie and
+//     reloads;
+//  3. the `default_locale` SETTING, which the admin's Basics page writes
+//     and `LocaleServiceProvider` seeds the translator with. THE PORT USED
+//     TO IGNORE IT: the locale came from `RIFF_FORUM_LOCALE` alone, so an
+//     operator could pick a default language and the forum kept rendering
+//     whatever the deployment was built for;
+//  4. `RIFF_FORUM_LOCALE`, the deployment-level fallback;
+//  5. `en`, the built-in catalogue.
 //
-// Both would otherwise render raw translation keys
-// (`core.forum.header.back_to_index_tooltip`) in the UI, which reads as a
-// frontend bug rather than a configuration or build one. warnMissingAssets
-// still names the missing file, so the degradation is visible in the logs
-// rather than silent.
-func (m *Module) activeLocale() string {
-	requested := strings.TrimSpace(m.opts.Locale)
+// Every candidate is validated against the catalogues the instance can
+// actually load, for the reason `localeAssetName` documents: a locale with
+// no staged bundle renders raw translation keys, which reads as a frontend
+// bug rather than as a deployment one.
+//
+// `e` may be nil (a caller with no request), which skips the cookie and the
+// setting: the settings table is reached through the request's app.
+func (m *Module) activeLocale(e *core.RequestEvent, actor session.Actor) string {
+	for _, candidate := range m.localeCandidates(e, actor) {
+		if locale := m.resolveLocale(candidate); locale != "" {
+			return locale
+		}
+	}
+
+	return defaultLocale
+}
+
+// localeCandidates returns the locales to try, in the order they win.
+func (m *Module) localeCandidates(e *core.RequestEvent, actor session.Actor) []string {
+	candidates := make([]string, 0, 4)
+
+	// 1. The caller's own choice.
+	candidates = append(candidates, m.actorLocale(actor))
+
+	// 2. A guest's choice, which the frontend keeps in a cookie.
+	if e != nil && e.Request != nil {
+		if cookie, err := e.Request.Cookie(localeCookieName); err == nil {
+			candidates = append(candidates, cookie.Value)
+		}
+	}
+
+	// 3. The forum's configured default.
+	candidates = append(candidates, m.settingText(localeSettingKey))
+
+	// 4. The deployment's default.
+	candidates = append(candidates, m.opts.Locale)
+
+	return candidates
+}
+
+// actorLocale returns the locale a signed-in caller chose, empty for none.
+//
+// It is upstream's `$actor->getPreference('locale')`: the frontend's
+// language selector saves it with `savePreferences({ locale })`, which this
+// port stores in the account's profile preferences.
+func (m *Module) actorLocale(actor session.Actor) string {
+	if actor.User == nil || m.repo == nil {
+		return ""
+	}
+
+	value, ok := m.repo.NotificationPreferences(actor.User.ID)["locale"]
+	if !ok {
+		return ""
+	}
+
+	locale, _ := api.SettingString(value)
+	return locale
+}
+
+// settingText reads a setting as text, empty when it is unset.
+//
+// It reads through the MODULE's repository rather than
+// `api.SettingValue`, which resolves the server from the request context:
+// the shell route is registered by the module, not by the API, so no API
+// server travels with its request and every setting would read as unset.
+func (m *Module) settingText(key string) string {
+	if m.repo == nil {
+		return ""
+	}
+
+	value, err := m.repo.SettingValue(key, nil)
+	if err != nil {
+		return ""
+	}
+
+	text, _ := api.SettingString(value)
+	return text
+}
+
+// resolveLocale returns the locale if the instance can serve it, else "".
+//
+// A locale is servable when a catalogue declares it AND its bundle is in
+// the embedded tree. `en` is the built-in, so it is the caller's fallback
+// rather than a candidate.
+func (m *Module) resolveLocale(requested string) string {
+	requested = strings.TrimSpace(requested)
 	if requested == "" || requested == defaultLocale {
-		return defaultLocale
+		return ""
 	}
 
 	if _, ok := m.locales()[requested]; !ok {
-		return defaultLocale
+		return ""
 	}
 
 	// Declared but not embedded: the catalogue the UI needs is not there.
 	if name := m.localeAssetName(requested, false); name == "" || !m.assets.Exists(name) {
-		return defaultLocale
+		return ""
 	}
 
 	return requested
 }
+
+// localeSettingKey is upstream's setting for the forum's default locale.
+//
+// The admin's Basics page writes it as "Default language", and it is what a
+// reader with no preference of their own gets.
+const localeSettingKey = "default_locale"
+
+// localeCookieName is the cookie a guest's language choice lives in.
+//
+// It is upstream's name (`HeaderSecondary.changeLocale` writes
+// `locale=…; path=/`), so a cookie set by an upstream frontend is honoured
+// here and vice versa.
+const localeCookieName = "locale"
 
 // localeAssetName returns the locale bundle for one frontend.
 //
@@ -375,7 +476,10 @@ func (m *Module) RenderBootShell(e *core.RequestEvent, admin bool) ([]byte, erro
 		return nil, err
 	}
 
-	scripts := m.scriptURLs(admin)
+	// The script list follows the locale the PAYLOAD carries: computing it
+	// again here would be a second answer, and the two could disagree (the
+	// payload resolves it from the caller, the cookie and the setting).
+	scripts := m.scriptURLs(admin, payload.Locale)
 	styles := m.styleURLs(admin)
 
 	// The shell's `<title>`, its header home-link text and that link's
@@ -440,7 +544,7 @@ func shellMetaOf(payload frontend.BootPayload, fallbackBasePath string) frontend
 // locale is wanted. Without it every `trans()` call renders the raw
 // key: the UI shows "core.forum.header.back_to_index_tooltip" instead
 // of the label.
-func (m *Module) scriptURLs(admin bool) []string {
+func (m *Module) scriptURLs(admin bool, locale string) []string {
 	base := m.opts.BasePath + "/assets/"
 	urls := []string{}
 
@@ -476,7 +580,7 @@ func (m *Module) scriptURLs(admin bool) []string {
 		urls = append(urls, base+strings.TrimPrefix(bundle.Locale, "/")+"?v="+bundle.Version)
 	}
 
-	if name := m.localeAssetName(m.activeLocale(), admin); name != "" && m.assets.Exists(name) {
+	if name := m.localeAssetName(locale, admin); name != "" && m.assets.Exists(name) {
 		urls = append(urls, base+name)
 	}
 
@@ -553,10 +657,21 @@ func (m *Module) styleURLs(admin bool) []string {
 // uses, so a bearer token, the PocketBase auth middleware and the
 // session cookie are all accepted.
 func (m *Module) bootPayload(e *core.RequestEvent, admin bool) (frontend.BootPayload, error) {
+	// The caller is resolved FIRST, because the locale depends on it: a
+	// signed-in reader may have chosen one (upstream's `SetLocale` asks the
+	// actor's preference before the setting), and resolving it once means
+	// the shell's locale and the session it carries cannot disagree.
+	actor, resolveErr := m.sessions.Resolve(e)
+	if resolveErr != nil {
+		m.logger.Debug("forum: the boot payload could not resolve the caller",
+			slog.String("error", resolveErr.Error()))
+		actor = session.Actor{}
+	}
+
 	payload := frontend.BootPayload{
 		Resources:      []any{},
 		Session:        frontend.BootSession{},
-		Locale:         m.activeLocale(),
+		Locale:         m.activeLocale(e, actor),
 		Locales:        m.locales(),
 		AssetsRevision: m.assets.Revision(),
 	}
@@ -575,13 +690,8 @@ func (m *Module) bootPayload(e *core.RequestEvent, admin bool) (frontend.BootPay
 	}
 
 	// The caller. A failure to resolve is not fatal: the page still
-	// boots, anonymously.
-	actor, resolveErr := m.sessions.Resolve(e)
-	if resolveErr != nil {
-		m.logger.Debug("forum: the boot payload could not resolve the caller",
-			slog.String("error", resolveErr.Error()))
-		return payload, nil
-	}
+	// boots, anonymously — and the actor resolved above is reused here, so
+	// the session and the locale describe the same caller.
 	if actor.User == nil {
 		return payload, nil
 	}
@@ -707,11 +817,15 @@ func (m *Module) adminSettings() map[string]any {
 		// Upstream's tags extension defaults this to "0" — "Never".
 		// Until an administrator picks an option, the author of a
 		// discussion may not change its tags.
-		"allow_tag_change":               "0",
-		"allow_sign_up":                  "1",
-		"avatar_driver":                  "default",
-		"custom_less":                    "",
-		"default_locale":                 "en",
+		"allow_tag_change": "0",
+		"allow_sign_up":    "1",
+		"avatar_driver":    "default",
+		"custom_less":      "",
+		"default_locale":   "en",
+		// Upstream's default is ON: the language selector is shown when the
+		// instance has more than one locale. The forum document serves the
+		// same setting, so the switch and the header agree.
+		"show_language_selector":         "1",
 		"default_route":                  "/all",
 		"display_name_driver":            "username",
 		"extension_bisect_state":         `{"ids":[],"low":0,"high":0}`,

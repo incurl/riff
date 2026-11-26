@@ -491,6 +491,25 @@ func (s *Server) listUsersHandler(e *core.RequestEvent) error {
 //
 // A setting that cannot be read falls back to the default, so a
 // missing or unreadable setting never blanks the forum document.
+// languageSelectorEnabled reports whether the forum shows its language
+// selector.
+//
+// Upstream serves the SETTING (`ForumResource`: `$this->settings->get(
+// 'show_language_selector', true)`), and its default is ON. The port
+// hardcoded `false`, so the selector never rendered — which made a second
+// language unreachable from the UI even when its catalogue was imported.
+//
+// The frontend needs more than the flag: `HeaderSecondary` also requires
+// more than one locale to list, so an instance with only `en` shows
+// nothing either way.
+func languageSelectorEnabled(settings map[string]any) bool {
+	value, ok := settings["show_language_selector"]
+	if !ok {
+		return true
+	}
+	return SettingTruthy(value, true)
+}
+
 func settingTextOr(settings map[string]any, key, fallback string) string {
 	value, ok := SettingString(settings[key])
 	if !ok {
@@ -685,7 +704,7 @@ func (s *Server) ForumDocument(e *core.RequestEvent) (Resource, error) {
 		"debug":                   false,
 		"welcomeTitle":            settingTextOr(settings, "welcome_title", ""),
 		"welcomeMessage":          settingTextOr(settings, "welcome_message", ""),
-		"showLanguageSelector":    false,
+		"showLanguageSelector":    languageSelectorEnabled(settings),
 		"showThemeSelector":       false,
 		"showPostSource":          false,
 		"allowSignUp":             false,

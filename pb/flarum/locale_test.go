@@ -14,6 +14,7 @@ import (
 	"github.com/incurl/riff/pb/flarum/frontend"
 	"github.com/incurl/riff/pb/flarum/plugin"
 	"github.com/incurl/riff/pb/flarum/plugins/chinese"
+	"github.com/incurl/riff/pb/flarum/session"
 )
 
 // The Chinese Simplified language pack is the reference implementation of
@@ -103,17 +104,22 @@ func TestLocale_TheChinesePackIsAFreeStandingPlugin(t *testing.T) {
 	require.Equal(t, "简体中文", chinese.LocaleTitle)
 }
 
-// TestLocale_TheModuleKnowsBothLocales pins the advertised set: the
-// built-in English catalogue plus the pack's code, with the pack listed
+// TestLocale_TheModuleKnowsEveryImportedLocale pins the advertised set: the
+// built-in English catalogue plus every pack this port imports, each listed
 // under its own name.
-func TestLocale_TheModuleKnowsBothLocales(t *testing.T) {
+//
+// The list is what the frontend's language selector renders, so a pack that
+// is registered but not advertised is a language a reader cannot pick — and
+// one that is advertised but not registered is a 404.
+func TestLocale_TheModuleKnowsEveryImportedLocale(t *testing.T) {
 	_, _, module := newTestForumModule(t)
 
 	locales := module.locales()
 
 	require.Equal(t, "English", locales["en"], "the core ships English")
-	require.Equal(t, "简体中文", locales["zh-Hans"], "the language pack is advertised")
-	require.Len(t, locales, 2)
+	require.Equal(t, "简体中文", locales["zh-Hans"], "the Chinese pack is advertised")
+	require.Equal(t, "Français", locales["fr"], "the French pack is advertised")
+	require.Len(t, locales, 3)
 }
 
 // TestLocale_EnglishIsTheDefault pins the unset case: no option means the
@@ -144,7 +150,7 @@ func TestLocale_TheChineseCatalogueIsLoadedWhenSelected(t *testing.T) {
 
 	_, handler, module := newLocaleTestForum(t, "zh-Hans")
 
-	require.Equal(t, "zh-Hans", module.activeLocale())
+	require.Equal(t, "zh-Hans", module.activeLocale(nil, session.Actor{}))
 
 	scripts := shellScripts(t, handler)
 
@@ -173,8 +179,8 @@ func TestLocale_TheAdminShellLoadsTheAdminCatalogue(t *testing.T) {
 
 	_, _, module := newLocaleTestForum(t, "zh-Hans")
 
-	admin := module.scriptURLs(true)
-	forum := module.scriptURLs(false)
+	admin := module.scriptURLs(true, "zh-Hans")
+	forum := module.scriptURLs(false, "zh-Hans")
 
 	require.True(t, containsURL(admin, "admin-zh-Hans.js"), "the admin shell needs the admin catalogue, got %v", admin)
 	require.False(t, containsURL(admin, "forum-zh-Hans.js"), "the admin shell must not load the forum catalogue")
@@ -194,13 +200,13 @@ func TestLocale_AnUnknownLocaleFallsBackToEnglish(t *testing.T) {
 		t.Skip("the forum frontend has not been built; run scripts/build_flarum_spa.sh")
 	}
 
-	_, handler, module := newLocaleTestForum(t, "fr")
+	_, handler, module := newLocaleTestForum(t, "de")
 
-	require.Equal(t, "en", module.activeLocale(), "an unknown locale must fall back to the built-in one")
+	require.Equal(t, "en", module.activeLocale(nil, session.Actor{}), "an unknown locale must fall back to the built-in one")
 
 	scripts := shellScripts(t, handler)
 	require.True(t, containsURL(scripts, "forum-en.js"), "the fallback catalogue must load, got %v", scripts)
-	require.False(t, containsURL(scripts, "forum-fr.js"), "a catalogue that does not exist must not be requested")
+	require.False(t, containsURL(scripts, "forum-de.js"), "a catalogue that does not exist must not be requested")
 }
 
 // TestLocale_TheBootPayloadAdvertisesTheActiveLocale pins the payload
@@ -378,7 +384,7 @@ func TestLocale_ALocaleThatWasNotBuiltFallsBackToEnglish(t *testing.T) {
 	require.False(t, assets.Exists("plugins/phantom/forum-xx-XX.js"), "nothing builds the phantom bundle")
 
 	// ... but it is not served, because the catalogue is not embedded.
-	require.Equal(t, "en", module.activeLocale())
+	require.Equal(t, "en", module.activeLocale(nil, session.Actor{}))
 
 	r := newTestRouter(t, app)
 	module.mount(r)

@@ -43,9 +43,20 @@ loads, in the same shape the core's own compiler produces (a single
 `scripts/build_flarum_spa.sh` runs it and stages the output into
 `ui/dist/plugins/chinese/`, which is what the Go binary embeds.
 
-## Enabling it
+## Using it
 
-The active locale is the host's decision: set `RIFF_FORUM_LOCALE=zh-Hans`
-(or pass `flarum.Options{Locale: "zh-Hans"}`). An unset or unknown value
-falls back to `en`, so a typo never leaves the forum with no catalogue
-at all.
+Three ways, and they are upstream's own (`SetLocale` middleware):
+
+- **The operator makes it the default**: the admin's **Basics** page, "Default
+  language", writes the `default_locale` setting. That is what a reader with no
+  choice of their own gets.
+- **The reader picks it**: the header's language selector (shown when
+  `show_language_selector` is on and more than one locale is available) saves
+  the choice as the `locale` preference for a signed-in reader, or as the
+  `locale` cookie for a guest.
+- **The deployment starts from it**: `RIFF_FORUM_LOCALE=zh-Hans` (or
+  `flarum.Options{Locale: "zh-Hans"}`) is the fallback when the setting is
+  unset.
+
+An unset or unknown value falls back to `en`, so a typo never leaves the
+forum with no catalogue at all.

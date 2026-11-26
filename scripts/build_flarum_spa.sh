@@ -113,7 +113,12 @@ done
 # scripts the SPA loads, named after the locale (forum-zh-Hans.js and
 # admin-zh-Hans.js). The Go plugin declares those paths, so a missing
 # build here is a locale that renders raw translation keys.
-for pack in chinese; do
+#
+# EVERY pack in this list must have a plugin under pb/flarum/plugins/ that
+# declares the same locale, and vice versa: a pack that is built but not
+# declared is dead weight, and a declared pack that is not built is a
+# locale whose bundle 404s (the module skips the tag and logs it).
+for pack in chinese french; do
   pack_dir="$ROOT/pb/flarum/plugins/$pack"
 
   echo "Building the $pack language pack"
