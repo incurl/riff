@@ -19,6 +19,8 @@
 #                                             riff, path VERBATIM
 #   https://${SITE_DOMAIN}/api/...        ->  the PocketBase REST API, on
 #                                             riff, path VERBATIM
+#   https://${SITE_DOMAIN}/mcp...         ->  riff's MCP endpoint, path
+#                                             VERBATIM (also /mcp/)
 #   https://${SITE_DOMAIN}/youtube/...    ->  the user-facing download
 #                                             tree at /youtube/
 #   https://${SITE_DOMAIN}/...            ->  static site at /var/www/site/
@@ -137,35 +139,42 @@
 		}
 	}
 
-	# PocketBase's OWN endpoints, exposed at the host root: /_/ is the
-	# dashboard (admin UI) and /api/* the REST API. They are the same
-	# handlers the /memos/* block above reaches through its prefix
+	# RIFF'S OWN SURFACE at the host root: /_/ is the PocketBase dashboard
+	# (admin UI), /api/* its REST API, and /mcp the MCP endpoint. They are
+	# the same handlers the /memos/* block above reaches through its prefix
 	# strip, served a second time unprefixed.
 	#
-	# The path is NOT rewritten. PocketBase serves both from the root of
+	# The path is NOT rewritten. riff serves all of them from the root of
 	# its listener and knows nothing about the /memos/ prefix, so a
 	# handle_path here would turn /api/collections into /collections and
-	# PocketBase would answer it with the SPA fallback — index.html with
-	# a 200, which an API client parses as data.
+	# /mcp into /mcp-less, and riff would answer with the SPA fallback —
+	# index.html with a 200, which an API or MCP client parses as data.
 	#
-	# Why expose them at all in a /memos/ layout: this is the surface
-	# PocketBase's own documentation and tooling assume. The install
-	# link the server prints at first boot (`.../_/#/pbinstall/<token>`)
-	# and every `curl http://<host>/api/health` in its docs are
-	# root-relative, and without these blocks the static site's
-	# file_server answered them with a 404. Mirroring /memos/_/ and
-	# /memos/api/* on the root means an operator never has to know which
-	# sub-path riff happens to be mounted on.
+	# Why expose them at all in a /memos/ layout: they are the surface the
+	# tools that talk to riff assume. The install link the server prints at
+	# first boot (`.../_/#/pbinstall/<token>`), every `curl
+	# http://<host>/api/health` in PocketBase's docs, and the MCP URL an
+	# editor is configured with (`https://<host>/mcp`) are all
+	# root-relative, and without these blocks the static site's file_server
+	# answered them with a 404. Mirroring them on the root means an
+	# operator never has to know which sub-path riff happens to be mounted
+	# on.
 	#
-	# This is not a new attack surface: they are the same collection
-	# rules and the same superuser gate, reached by a second URL.
-	@pocketbase {
+	# `/mcp/*` as well as `/mcp`: a client may address the endpoint with a
+	# trailing slash (`/mcp/`), which riff answers as the same endpoint.
+	#
+	# This is not a new attack surface: they are the same collection rules,
+	# the same superuser gate and the same bearer-token gate, reached by a
+	# second URL.
+	@riff {
 		path /_
 		path /_/*
 		path /api
 		path /api/*
+		path /mcp
+		path /mcp/*
 	}
-	handle @pocketbase {
+	handle @riff {
 		reverse_proxy localhost:8090 {
 			header_up X-Forwarded-For {remote_host}
 			header_up X-Forwarded-Proto {scheme}

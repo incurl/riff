@@ -58,6 +58,9 @@
 #                                                on riff, path VERBATIM
 #   https://<host>/api/...                  ->  the PocketBase REST API,
 #                                                on riff, path VERBATIM
+#   https://<host>/mcp                      ->  riff's MCP endpoint, on
+#                                                riff, path VERBATIM
+#                                                (it answers /mcp/ too)
 #   https://<host>/memos (no slash)         ->  308 redirect to /memos/
 #                                                so the SPA never boots
 #                                                against a parent-only URL
@@ -255,6 +258,18 @@
 		import proxy
 	}
 
+	# 2e. riff's MCP endpoint, also at the host root: every editor that
+	# speaks MCP is configured with `https://<host>/mcp`, and the endpoint
+	# answers `/mcp/` as well (a client may normalise the URL to end in a
+	# slash). Both spellings are proxied VERBATIM — the path IS the endpoint,
+	# so nothing here may rewrite it.
+	handle /mcp {
+		import proxy
+	}
+	handle /mcp/* {
+		import proxy
+	}
+
 	# 3. SPA-only paths: redirect to /memos/<path>. The named
 	# matcher @spa excludes anything that already has a more specific
 	# handler above (/memos, /memos/*) and the static site's
@@ -298,8 +313,13 @@
 	# /memos/api/health. Both landed on the right handler eventually, but
 	# not at the URL PocketBase documents, and a client that refuses to
 	# follow a redirect on POST never got there at all.
+	#
+	# /mcp and /mcp/* are excluded for the same reason once more: an MCP
+	# client POSTs a JSON-RPC handshake to exactly the URL it was
+	# configured with, and a 308 into /memos/mcp is a URL it never asked
+	# for — one that a strict client will not follow with the body intact.
 	@spa {
-		not path / /memos /memos/* /community /community/* /wiki /wiki/* /forum /forum/* /_ /_/* /api /api/* /assets /assets/* /docs /docs/* /download /download/* /firmware /firmware/* /hardware /hardware/* /reader /reader/* /workflow /workflow/* /youtube /youtube/* /favicon.svg /CNAME /index.html
+		not path / /memos /memos/* /community /community/* /wiki /wiki/* /forum /forum/* /_ /_/* /api /api/* /mcp /mcp/* /assets /assets/* /docs /docs/* /download /download/* /firmware /firmware/* /hardware /hardware/* /reader /reader/* /workflow /workflow/* /youtube /youtube/* /favicon.svg /CNAME /index.html
 	}
 	handle @spa {
 		redir * /memos{uri} 308

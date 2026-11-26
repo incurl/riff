@@ -73,7 +73,7 @@ echo ">> fly deploy -a ${RIFF_FLY_APP} --image ${RIFF_FLY_REGISTRY} -y"
 fly deploy -a "${RIFF_FLY_APP}" --image "${RIFF_FLY_REGISTRY}" -y
 
 # --- Smoke tests -------------------------------------------------------------
-# Four checks, all must pass:
+# Five checks, all must pass:
 #   1. The caddy-routed riff health endpoint (SPA sub-path mount is alive).
 #   2. The static site is reachable at the document root. `Caddyfile.fly.community`
 #      (the default) serves the baked Jekyll _site/ at /, so a GET / must
@@ -96,6 +96,12 @@ fly deploy -a "${RIFF_FLY_APP}" --image "${RIFF_FLY_REGISTRY}" -y
 #      client use. A client that does not follow a redirect on POST never
 #      reaches the API at all in that state.
 #
+#   5. riff's MCP endpoint answers at the host ROOT (`/mcp`), with a real
+#      JSON-RPC `initialize` handshake. It is a POST, so the check is not
+#      the GET probe the others use: an MCP client posts to exactly the URL
+#      it was configured with, and a 308 into /memos/ — or a 200 carrying the
+#      SPA's index.html — is a client that never connects.
+#
 # Checks 2 and 3 use -m timeout (not -fsS) because `-f` makes curl exit non-zero
 # on 3xx and we explicitly want to inspect the 308 to assert which
 # redirect target caddy chose. The case-statement below greps
@@ -104,13 +110,13 @@ fly deploy -a "${RIFF_FLY_APP}" --image "${RIFF_FLY_REGISTRY}" -y
 # slashes on the static site itself).
 
 echo
-echo ">> Smoke test 1/4: curl -fsS -m ${RIFF_FLY_SMOKE_TIMEOUT} https://${RIFF_FLY_SMOKE_HOST}${RIFF_FLY_SMOKE_PATH}"
+echo ">> Smoke test 1/5: curl -fsS -m ${RIFF_FLY_SMOKE_TIMEOUT} https://${RIFF_FLY_SMOKE_HOST}${RIFF_FLY_SMOKE_PATH}"
 curl -fsS -m "${RIFF_FLY_SMOKE_TIMEOUT}" "https://${RIFF_FLY_SMOKE_HOST}${RIFF_FLY_SMOKE_PATH}"
 echo
 echo "OK: ${RIFF_FLY_SMOKE_PATH} on ${RIFF_FLY_SMOKE_HOST} is healthy."
 
 echo
-echo ">> Smoke test 2/4: curl -sS -m ${RIFF_FLY_SMOKE_TIMEOUT} -o /dev/null -w 'http_code=%{http_code} redirect_url=%{redirect_url}\\n' https://${RIFF_FLY_SMOKE_HOST}/"
+echo ">> Smoke test 2/5: curl -sS -m ${RIFF_FLY_SMOKE_TIMEOUT} -o /dev/null -w 'http_code=%{http_code} redirect_url=%{redirect_url}\\n' https://${RIFF_FLY_SMOKE_HOST}/"
 _root_probe=$(curl -sS -m "${RIFF_FLY_SMOKE_TIMEOUT}" -o /dev/null -w 'http_code=%{http_code} redirect_url=%{redirect_url}' "https://${RIFF_FLY_SMOKE_HOST}/" || true)
 echo "${_root_probe}"
 _root_code=$(echo "${_root_probe}" | sed -n 's/^http_code=\([0-9][0-9][0-9]\).*/\1/p')
@@ -143,7 +149,7 @@ case "${_root_code}" in
 esac
 
 echo
-echo ">> Smoke test 3/4: curl -sS -m ${RIFF_FLY_SMOKE_TIMEOUT} -o /dev/null -w 'http_code=%{http_code} redirect_url=%{redirect_url}\n' https://${RIFF_FLY_SMOKE_HOST}${RIFF_FLY_FORUM_PATH}"
+echo ">> Smoke test 3/5: curl -sS -m ${RIFF_FLY_SMOKE_TIMEOUT} -o /dev/null -w 'http_code=%{http_code} redirect_url=%{redirect_url}\n' https://${RIFF_FLY_SMOKE_HOST}${RIFF_FLY_FORUM_PATH}"
 _forum_probe=$(curl -sS -m "${RIFF_FLY_SMOKE_TIMEOUT}" -o /dev/null -w 'http_code=%{http_code} redirect_url=%{redirect_url}' "https://${RIFF_FLY_SMOKE_HOST}${RIFF_FLY_FORUM_PATH}" || true)
 echo "${_forum_probe}"
 _forum_code=$(echo "${_forum_probe}" | sed -n 's/^http_code=\([0-9][0-9][0-9]\).*/\1/p')
@@ -177,7 +183,7 @@ case "${_forum_code}" in
 esac
 
 echo
-echo ">> Smoke test 4/4: curl -sS -m ${RIFF_FLY_SMOKE_TIMEOUT} -o /dev/null -w 'http_code=%{http_code} redirect_url=%{redirect_url}\\n' https://${RIFF_FLY_SMOKE_HOST}/_/ and /api/health"
+echo ">> Smoke test 4/5: curl -sS -m ${RIFF_FLY_SMOKE_TIMEOUT} -o /dev/null -w 'http_code=%{http_code} redirect_url=%{redirect_url}\\n' https://${RIFF_FLY_SMOKE_HOST}/_/ and /api/health"
 
 # PocketBase's own surface, at the ROOT of the host. Both paths are
 # served VERBATIM by the caddy blocks for /_ , /_/* , /api and /api/* ,
@@ -206,4 +212,51 @@ for _pb_path in /_/ /api/health; do
       ;;
   esac
 done
-echo "OK: /_/ and /api/health on ${RIFF_FLY_SMOKE_HOST} reach PocketBase at the root."
+echo "OK: /_/ and /api/health on ${RIFF_FLY_SMOKE_HOST} reach riff at the root."
+
+echo
+echo ">> Smoke test 5/5: an MCP initialize handshake against https://${RIFF_FLY_SMOKE_HOST}/mcp"
+
+# A real JSON-RPC initialize. The endpoint answers application/json (or an
+# event stream) for a POST, so a 200 carrying the SPA's index.html is the
+# failure this catches: a client would parse markup as JSON-RPC and report
+# a protocol error that says nothing about the routing.
+_mcp_body='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"riff-smoke","version":"0"}}}'
+_mcp_probe=$(curl -sS -m "${RIFF_FLY_SMOKE_TIMEOUT}" -o /dev/null \
+  -w 'http_code=%{http_code} content_type=%{content_type} redirect_url=%{redirect_url}' \
+  -X POST "https://${RIFF_FLY_SMOKE_HOST}/mcp" \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -d "${_mcp_body}" || true)
+echo "${_mcp_probe}"
+_mcp_code=$(echo "${_mcp_probe}" | sed -n 's/^http_code=\([0-9][0-9][0-9]\).*/\1/p')
+_mcp_type=$(echo "${_mcp_probe}" | sed -n 's/^.*content_type=\([^ ]*\).*/\1/p')
+_mcp_redirect=$(echo "${_mcp_probe}" | sed -n 's/^.*redirect_url=\(.*\)$/\1/p')
+case "${_mcp_code}" in
+  200)
+    case "${_mcp_type}" in
+      application/json*|text/event-stream*)
+        echo "OK: /mcp on ${RIFF_FLY_SMOKE_HOST} answers the MCP handshake."
+        ;;
+      *)
+        echo "FAIL: /mcp on ${RIFF_FLY_SMOKE_HOST} answered 200 as ${_mcp_type}, not JSON-RPC." >&2
+        echo "      That is the SPA's index.html: caddy is not proxying /mcp to riff," >&2
+        echo "      so the path falls through to the file_server (or to the SPA)." >&2
+        echo "      Add the /mcp and /mcp/* handle blocks to scripts/Caddyfile.fly.community" >&2
+        echo "      AND those two paths to the @spa matcher's 'not path' exclusion list." >&2
+        exit 1
+        ;;
+    esac
+    ;;
+  3[0-9][0-9])
+    echo "FAIL: /mcp on ${RIFF_FLY_SMOKE_HOST} is being redirected -> ${_mcp_redirect}" >&2
+    echo "      The MCP endpoint must answer at the ROOT of the host, verbatim." >&2
+    echo "      Check the /mcp and /mcp/* handle blocks and the @spa exclusion list." >&2
+    exit 1
+    ;;
+  *)
+    echo "FAIL: /mcp on ${RIFF_FLY_SMOKE_HOST} returned ${_mcp_code}" >&2
+    echo "      (expected 200 with a JSON-RPC reply from the MCP service.)" >&2
+    exit 1
+    ;;
+esac

@@ -266,6 +266,33 @@ func TestMCP_RegisterMountsEndpoint(t *testing.T) {
 		"the SDK must echo the legacy protocol version back when the handshake advertises it")
 	assert.Equal(t, "memos", response.Result.ServerInfo.Name,
 		"serverInfo.name is hard-coded in NewMCPService and proves the MCP service, not some other handler, answered")
+
+	// The TRAILING-SLASH spelling is the same endpoint, not the SPA's
+	// catch-all. Several MCP clients normalise the URL they were configured
+	// with to end in a slash, and an unrouted path is answered by the SPA
+	// catch-all — index.html with a 200 — which the client then parses as a
+	// JSON-RPC reply.
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/mcp/", bytes.NewReader(initializeReq))
+	req.Header.Set("content-type", "application/json")
+	req.Header.Set("accept", "application/json, text/event-stream")
+	mux.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code,
+		"healthy /mcp/ must answer the initialize handshake too; got body=%s", rec.Body.String())
+	require.Contains(t, rec.Header().Get("content-type"), "application/json",
+		"/mcp/ must answer JSON, not the SPA shell")
+	require.Contains(t, rec.Body.String(), `"jsonrpc"`, "the reply must be JSON-RPC: %s", rec.Body.String())
+
+	// A path BENEATH /mcp is not the endpoint: the subtree registration must
+	// not swallow it, and it must not fall through to the SPA either.
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/mcp/deeper", bytes.NewReader(initializeReq))
+	req.Header.Set("content-type", "application/json")
+	mux.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusNotFound, rec.Code,
+		"a path beneath /mcp is not the endpoint; got %d body=%s", rec.Code, rec.Body.String())
 }
 
 // minimalSchema is the small JSON-Schema-shaped fragment the

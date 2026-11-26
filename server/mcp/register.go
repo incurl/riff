@@ -64,10 +64,32 @@ func Register(app core.App, p *profile.Profile, specPath string) error {
 		}
 		mcpHandler := svc.Handler()
 
-		e.Router.Any("/mcp", func(re *core.RequestEvent) error {
-			mcpHandler.ServeHTTP(re.Response, re.Request)
-			return nil
-		})
+		// The endpoint answers at `/mcp`, and at `/mcp/` too.
+		//
+		// The trailing-slash spelling is not cosmetic: several MCP clients
+		// normalise the URL they were configured with to end in a slash, and
+		// an unrouted path is not a 404 here — the SPA's catch-all is the
+		// least specific pattern in the mux, so `/mcp/` was answered with
+		// index.html and a 200, which the client then parses as a JSON-RPC
+		// reply.
+		//
+		// A pattern ending in "/" is a SUBTREE in `http.ServeMux`, so the
+		// second registration also matches `/mcp/anything`. Only the two
+		// spellings of the endpoint are it; anything deeper answers a 404
+		// rather than reaching the handler, which would otherwise treat every
+		// sub-path as the endpoint.
+		serveMCP := func(re *core.RequestEvent) error {
+			switch re.Request.URL.Path {
+			case "/mcp", "/mcp/":
+				mcpHandler.ServeHTTP(re.Response, re.Request)
+				return nil
+			default:
+				return re.NotFoundError("The MCP endpoint is /mcp.", nil)
+			}
+		}
+
+		e.Router.Any("/mcp", serveMCP)
+		e.Router.Any("/mcp/", serveMCP)
 		return e.Next()
 	})
 	return nil
