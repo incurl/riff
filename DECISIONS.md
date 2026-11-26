@@ -5,6 +5,64 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## POCKETBASE'S OWN ENDPOINTS ANSWER AT THE HOST ROOT (2026-11-26)
+
+riff already served both surfaces on its own listener — `GET /_/` → 200 with the
+dashboard shell, `GET /api/health` → 200 JSON, `GET /api/collections` → 401 (the
+collection rules, not a miss). Nothing in `main.go`, `server/frontend` or the
+routers blocked them: the SPA's catch-all is a method-less `/{path...}`, and a
+method-less pattern is strictly the LEAST specific in the mux, so PocketBase's
+`GET /_/{path...}` and `GET /api/...` win on specificity. Verified by booting the
+binary and curling them.
+
+The gap was Caddy, and it was two different bugs in two layouts:
+
+* `scripts/Caddyfile` (static site at `/var/www/site`, riff under `/memos/`,
+  `/wiki/`, `/forum/`). Only those three prefixes were proxied, so `/_/` and
+  `/api/health` fell into the catch-all `handle` and the static site's
+  `file_server` answered them with a 404. PocketBase's dashboard was reachable
+  only at `/memos/_/`, which is the prefix strip doing its job and not something
+  an operator should have to know.
+* `scripts/Caddyfile.fly.community` (the layout `fly.toml` selects: static site
+  at the root, riff under `/memos/`). Both paths fell into the `@spa` matcher and
+  were 308'd to `/memos/_/` and `/memos/api/health`. That lands on the right
+  handler eventually, which is why it went unnoticed — but it is not the URL
+  PocketBase's own documentation uses, and any client that will not follow a
+  redirect on POST never gets there at all.
+* `scripts/Caddyfile.fly` needed nothing: riff owns that whole hostname, so its
+  catch-all already proxies `/_/` and `/api/*` verbatim (its own header comment
+  says so).
+
+Both layouts now carry a `/_`, `/_/*`, `/api`, `/api/*` proxy block that
+forwards the path **VERBATIM**. `handle`, never `handle_path`: PocketBase serves
+these from the root of its listener and knows nothing about `/memos/`, so
+stripping or prefixing turns `/api/collections` into `/collections`, which riff
+answers with the SPA fallback — `index.html` and a 200, which an API client
+parses as data. That failure shape is the same one behind the polls plugin and
+the wiki's null-dereference console errors, and it is worth naming here: **a
+`200` carrying markup is worse than a `404`.**
+
+`Caddyfile.fly.community` also needed the four paths in the `@spa` matcher's
+`not path` list. The `handle` blocks above it already win on declaration order,
+so the exclusion is belt-and-braces — but it is the thing that keeps the
+behaviour if those blocks are ever moved, and it is the only place the intent is
+written down.
+
+Why expose them at the root instead of only under `/memos/`: they are the
+surface PocketBase assumes. The install link the server prints at first boot is
+`<origin>/_/#/pbinstall/<token>`, its docs say `curl <origin>/api/health`, and
+`/api/collections` is what the dashboard itself calls. Mirroring them on the root
+means an operator never has to know which sub-path riff is mounted on this time.
+It is **not** a new attack surface: same collection rules, same superuser gate,
+reached by a second URL.
+
+`scripts/fly_deploy.sh` grew a fourth smoke check (`/_/` and `/api/health`, both
+200 with **no redirect**) because a routing regression here is silent: the page
+still loads, the API still works from the SPA (which talks to `/memos/api/...`),
+and only a client using the documented root URL notices. The existing check 1
+deliberately stays on `/memos/api/health` — it proves the prefix strip, a
+different chain from the root proxy, and one does not imply the other.
+
 ## THE WIKI ANSWERS THE ENDPOINTS ITS OWN SPA CALLS (2026-11-26)
 
 The wiki's console showed two `TypeError`s on **every page load**:
