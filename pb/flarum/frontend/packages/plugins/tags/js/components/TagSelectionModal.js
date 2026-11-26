@@ -28,6 +28,7 @@ import Stream from 'flarum/common/utils/Stream';
 
 import { loadTags, sortTags, tagIcon } from '../helpers';
 import { selectableTags } from '../utils/selectableTags';
+import { isPrimaryTag, selectionMeetsLimits } from '../utils/selectionLimits';
 
 /**
  * The limits on a selection.
@@ -51,24 +52,15 @@ export function tagLimits() {
       primary: number('minPrimaryTags', 0),
       secondary: number('minSecondaryTags', 0),
     },
+    // An absent MAXIMUM is no maximum, not zero: `0` would disable the
+    // confirm button for every selection and read as "this forum accepts no
+    // tags at all". Upstream's `initAttrs` defaults the maxima to Infinity
+    // for the same reason.
     max: {
-      primary: number('maxPrimaryTags', 0),
-      secondary: number('maxSecondaryTags', 0),
+      primary: number('maxPrimaryTags', Infinity),
+      secondary: number('maxSecondaryTags', Infinity),
     },
   };
-}
-
-/**
- * A tag is PRIMARY when it has a position and is not a child of another tag.
- *
- * Upstream's rule, and the server's: a child carries a position of its own,
- * so counting by position alone lets a child satisfy the primary minimum.
- *
- * @param {object} tag
- * @returns {boolean}
- */
-export function isPrimaryTag(tag) {
-  return tag.position() !== null && !tag.isChild();
 }
 
 export default class TagSelectionModal extends FormModal {
@@ -132,6 +124,49 @@ export default class TagSelectionModal extends FormModal {
         )}
 
         {this.hint()}
+
+        {/*
+          THE CONFIRM BUTTON. Without it the modal could only be LEFT — the
+          header's close button and the backdrop both call `hide()`, and
+          neither calls `onsubmit`, so the selection was made and then
+          silently thrown away: the composer's label stayed "Choose tags"
+          and the discussion was created untagged. That is the "the composer
+          tag selection does not stick" report.
+
+          It is `type="submit"`, so it submits the FormModal's own <form>
+          and our `onsubmit` runs. Disabled until the selection satisfies the
+          count rules, which is the same check the server makes — the hint
+          above says what is missing.
+        */}
+        {this.actions()}
+      </div>
+    );
+  }
+
+  /**
+   * Whether the selection satisfies the count rules.
+   *
+   * The same four numbers the server enforces (`validateTagCounts`), so the
+   * button cannot offer a save the server would refuse.
+   */
+  meetsRequirements() {
+    return selectionMeetsLimits(this.selected, this.limits);
+  }
+
+  /**
+   * The modal's actions: the button that COMMITS the selection.
+   *
+   * It is a method of its own so a test can assert what it is: a
+   * `type="submit"` control inside the FormModal's `<form>`. Without it the
+   * modal could only be left, and leaving never commits — the report this
+   * fixes.
+   */
+  actions() {
+    return (
+      <div className="TagSelectionModal-actions">
+        <Button type="submit" className="Button Button--primary" icon="fas fa-check" disabled={!this.meetsRequirements()}>
+          {this.attrs.submitLabel || 'Choose tags'}
+        </Button>
       </div>
     );
   }

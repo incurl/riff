@@ -5,6 +5,65 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## A TAG SELECTION NEEDS A BUTTON, AND AN INCLUDED RESOURCE MUST NOT LIE (2026-11-26)
+
+"Composer tag selection does not stick" was two independent faults that
+produce the same symptom, and neither was in the write path — the tag was
+being saved correctly the whole time. Both were found by driving the real
+SPA in a headless browser (`playwright-core` against the cached Chromium),
+which is the only thing that could have separated them: the Go suites were
+green, the payload was right, and the discussion really did carry its tag in
+the database.
+
+**First: the picker modal had no way to CONFIRM.** `TagSelectionModal`
+rendered the list, the chips and the hint, and no submit control — the only
+exits were the header's close button and the backdrop, and neither calls
+`onsubmit`. So the author picked tags, left the modal, `setComposerTags` was
+never called, and the composer posted with an empty set. A modal that can
+only be dismissed is a modal whose work is always discarded, and the hint
+("Choose at least 1 primary tag") made it look like a validation message
+rather than a dead end. The fix is upstream's own control — a
+`Button type="submit"` inside the FormModal's `<form>` — disabled until the
+selection satisfies the same four counts the server enforces
+(`selectionMeetsLimits`, the pure rule in `utils/selectionLimits.js`, so the
+button and `validateTagCounts` cannot drift). The same modal serves "Edit
+tags" on a discussion, which had the identical defect.
+
+**Second: the `included` discussion resource claimed the discussion had NO
+tags.** A discussion travels as an included resource whenever a payload
+names it as a relation — the post stream does exactly that
+(`defaultIncludesFor(TypePost)` is `["user", "discussion"]`) — and the
+include walk built that copy with a stub:
+
+```go
+discussionResource(discussion, false, false, false, false, false, nil)
+```
+
+`nil` tag ids, and every permission flag false. The store does not keep two
+copies of a resource: `Model.pushData` MERGES an included resource into the
+model it already holds, and a relationship the incoming copy names is taken
+from it verbatim — so `{tags: {data: []}}` from the post stream **wiped the
+tags the create response had put in the store**. In the browser this looked
+exactly like "the selection does not stick": the composer showed the tag, the
+discussion was created with it, the payloads all carried it, and the
+discussion page rendered untagged. The same copy also replaced
+`canReply`/`canRename`/`canTag` with false, which is why a moderator's
+controls could vanish on a page whose own endpoint reported them.
+
+The walk now calls the SAME builder the discussion's own endpoint uses
+(`s.discussionResource(w.event, discussion)`), so there is one rendering of a
+discussion and no way for a partial copy to exist. `TestTags_AnIncludedDiscussionCarriesItsTags`
+pins both halves (the tags relationship AND `canReply`); reverting the walk
+to the stub turns it red.
+
+**A third, smaller fault on the same surface**: the composer's "clear the
+chosen tags when it closes" extension hooked `Composer.onhide`, which does
+not exist (`onhide` is an ATTRS callback on `Dropdown` and
+`PostStreamScrubber`) — `extend` happily DEFINED the method, nothing ever
+called it, and the module-level selection leaked from one discussion to the
+next. It is `onremove` now, the composer's real lifecycle hook, and the second
+composer of a session opens with no tags.
+
 ## A TAG'S PARENT IS THE TREE'S EDGE, AND THE MODAL CAN SET IT (2026-11-26)
 
 An operator reported that a secondary tag's `parent` did not reference the

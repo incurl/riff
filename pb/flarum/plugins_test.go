@@ -272,8 +272,75 @@ func TestTags_AFreshDiscussionCarriesTheChosenTags(t *testing.T) {
 	require.Equal(t, tag.Id, identifier["id"])
 }
 
-// TestTags_AnExistingDiscussionsTagsCanBeChanged pins the control's write.
+// TestTags_AnIncludedDiscussionCarriesItsTags pins the INCLUDED copy.
 //
+// A discussion also travels as an `included` resource: the posts endpoint
+// carries it (`defaultIncludesFor(TypePost)` is `["user", "discussion"]`),
+// and so does every other response that names a discussion as a relation.
+// The store does not keep two copies — `Model.pushData` MERGES an included
+// resource into the model it already holds, and a relationship the included
+// copy names is taken from it verbatim.
+//
+// That copy used to be built with no tag ids at all, so its `tags`
+// relationship said "this discussion has no tags". The tag was saved, the
+// composer showed it, the create response carried it — and the next payload
+// (the post stream's, in the browser) took it out of the store, so the
+// discussion page rendered an untagged discussion. The same copy carried
+// `canReply: false` and friends, which is why the flags are asserted here
+// too: an included resource that lies about them disables controls on a
+// discussion that allows them.
+func TestTags_AnIncludedDiscussionCarriesItsTags(t *testing.T) {
+	app, handler := newTestForum(t)
+
+	tag := seedTag(t, app, "Included", "included")
+	tagRecord, err := app.FindRecordById(mustCollection(t, app, "forum_tags"), tag.Id)
+	require.NoError(t, err)
+	tagRecord.Set("is_primary", true)
+	require.NoError(t, app.Save(tagRecord))
+
+	_, cookies := memberSession(t, app, "included_member")
+
+	body := `{"data":{"type":"discussions","attributes":{"title":"Tagged","content":"Hello"},` +
+		`"relationships":{"tags":{"data":[{"type":"tags","id":"` + tag.Id + `"}]}}}}`
+
+	recorder := doWithHeaders(t, handler, http.MethodPost, "/forum/api/discussions", body, cookies, nil)
+	require.Equal(t, http.StatusCreated, recorder.Code, recorder.Body.String())
+
+	created := decodeDocument(t, recorder)
+	resource, ok := created.Data.(map[string]any)
+	require.True(t, ok, "the data should be a resource object")
+	discussionID, ok := resource["id"].(string)
+	require.True(t, ok)
+	require.NotEmpty(t, discussionID)
+
+	// The SPA's own request for the stream, with no `include` parameter:
+	// the default include set is what carries the discussion.
+	recorder = doWithHeaders(t, handler, http.MethodGet,
+		"/forum/api/posts?filter[discussion]="+discussionID, "", cookies, nil)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	discussions := includedResourcesOf(t, recorder.Body.String(), "discussions")
+	require.Len(t, discussions, 1, "the post list should include the discussion")
+
+	relationships, ok := discussions[0]["relationships"].(map[string]any)
+	require.True(t, ok, "the included discussion must carry relationships")
+
+	tags, ok := relationships["tags"].(map[string]any)
+	require.True(t, ok, "the included discussion must carry a tags relationship")
+
+	data, ok := tags["data"].([]any)
+	require.True(t, ok)
+	require.Len(t, data, 1, "an included discussion that claims no tags wipes the store's copy")
+
+	identifier, ok := data[0].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, tag.Id, identifier["id"])
+
+	attributes, ok := discussions[0]["attributes"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, true, attributes["canReply"], "the included copy must not report false permissions")
+}
+
 // The control saves the discussion with the `tags` RELATIONSHIP, and the
 // server's writer REPLACES the set — a tag the client left out is removed.
 //

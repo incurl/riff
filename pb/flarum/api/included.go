@@ -114,6 +114,7 @@ func IncludeRelations(e *core.RequestEvent, primaries []Resource, paths ...strin
 		server:    server,
 		event:     e,
 		seen:      map[string]struct{}{},
+		resolved:  map[string]resolvedRelation{},
 		users:     map[string]*domain.User{},
 		actorID:   server.actor(e).ID(),
 		isAdmin:   server.actor(e).IsAdmin(),
@@ -159,6 +160,7 @@ func (s *Server) includedResources(e *core.RequestEvent, primaries []Resource) (
 		server:    s,
 		event:     e,
 		seen:      map[string]struct{}{},
+		resolved:  map[string]resolvedRelation{},
 		users:     map[string]*domain.User{},
 		actorID:   s.actor(e).ID(),
 		isAdmin:   s.actor(e).IsAdmin(),
@@ -188,6 +190,13 @@ type includeWalk struct {
 	event *core.RequestEvent
 	// seen holds the `type:id` of every resource already emitted.
 	seen map[string]struct{}
+	// resolved caches the resources an identifier produced, so a page of
+	// posts by one discussion renders that discussion ONCE rather than
+	// once per post. The rendering is not free: the discussion's builder
+	// reads its post ids and its tag ids and asks the permission
+	// questions, and a page of twenty posts would otherwise repeat it
+	// twenty times.
+	resolved map[string]resolvedRelation
 	// users caches the accounts already loaded, so a page of posts by
 	// one author reads that author once.
 	users map[string]*domain.User
@@ -215,6 +224,13 @@ type includeWalk struct {
 // It is generous enough for upstream's own chains: `firstPost.user.groups`
 // is three hops deep.
 const maxIncludeDepth = 8
+
+// resolvedRelation is one cached resolution: the resources an
+// identifier produced, and whether it produced any at all.
+type resolvedRelation struct {
+	resources []Resource
+	ok        bool
+}
 
 // includePath resolves one include chain and recurses into it.
 //
@@ -296,7 +312,29 @@ func (w *includeWalk) includePath(primary Resource, path includePath, depth int)
 // The second answer is false when the relation names something that is
 // gone: a missing relation is not a failed request, the response still
 // stands without it.
+//
+// The result is CACHED per identifier: the same resource is rendered once,
+// however many relations name it, and the walk's `seen` set then decides
+// how many times it travels in the response.
 func (w *includeWalk) relatedResources(relatedType, identifier string) ([]Resource, bool, error) {
+	key := relatedType + ":" + identifier
+
+	if cached, hit := w.resolved[key]; hit {
+		return cached.resources, cached.ok, nil
+	}
+
+	resources, ok, err := w.resolveRelation(relatedType, identifier)
+	if err != nil {
+		return nil, false, err
+	}
+
+	w.resolved[key] = resolvedRelation{resources: resources, ok: ok}
+
+	return resources, ok, nil
+}
+
+// resolveRelation builds the resource an identifier names.
+func (w *includeWalk) resolveRelation(relatedType, identifier string) ([]Resource, bool, error) {
 	s := w.server
 
 	switch relatedType {
@@ -323,7 +361,22 @@ func (w *includeWalk) relatedResources(relatedType, identifier string) ([]Resour
 			// A discussion that is gone is simply absent.
 			return nil, false, nil //nolint:nilerr // a missing relation is not a failed request
 		}
-		return []Resource{discussionResource(discussion, false, false, false, false, false, nil)}, true, nil
+
+		// The SAME builder the discussion's own endpoint uses, not a stub.
+		//
+		// A minimal copy (`discussionResource(discussion, false, false, …,
+		// nil)`) is a resource that says the discussion has NO TAGS and NO
+		// permissions — and the store MERGES an included resource over the
+		// one it already holds, so a post page's `posts → discussion`
+		// relation silently wiped the discussion's tags and replaced its
+		// `can*` flags with false. That is the "the tag does not stick"
+		// half of the report that survived the composer fix: the tag WAS
+		// saved, and the next payload took it out of the store.
+		resource, err := s.discussionResource(w.event, discussion)
+		if err != nil {
+			return nil, false, err
+		}
+		return []Resource{resource}, true, nil
 	case TypeGroup:
 		group, err := s.repo.FindGroup(identifier)
 		if err != nil {

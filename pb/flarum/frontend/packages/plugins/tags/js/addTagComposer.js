@@ -21,7 +21,8 @@ import Button from 'flarum/common/components/Button';
 
 import { currentTag, loadTags, tagsLabel } from './helpers';
 import { selectableTags as filterSelectable } from './utils/selectableTags';
-import TagSelectionModal, { isPrimaryTag, tagLimits } from './components/TagSelectionModal';
+import TagSelectionModal, { tagLimits } from './components/TagSelectionModal';
+import { selectionMeetsLimits } from './utils/selectionLimits';
 
 /**
  * The tags chosen for the discussion being composed.
@@ -175,23 +176,23 @@ export function addTagComposer() {
   // The composer clears its fields when it closes, so the chosen tags must
   // be cleared with them: a later discussion would otherwise inherit the
   // previous one's tags.
-  extendMethod('flarum/common/components/Composer', 'onhide', function () {
+  //
+  // The hook is `onremove`, NOT `onhide`: `Composer` has no `onhide` method
+  // at all (`onhide` is an ATTRS callback on Dropdown and PostStreamScrubber),
+  // so the old extension DEFINED a method nothing ever called and the tags
+  // were never cleared. `onremove` is the composer's own lifecycle hook, fired
+  // when the composer is closed (minimising keeps the component mounted).
+  extendMethod('flarum/common/components/Composer', 'onremove', function () {
     setComposerTags([]);
   });
 
-  // The minimums are enforced BEFORE submitting: the modal opens instead of
-  // a request the server would refuse.
+  // The count rules are enforced BEFORE submitting: the modal opens instead
+  // of a request the server would refuse.
   override('flarum/forum/components/DiscussionComposer', 'onsubmit', function (original) {
     const tags = composerTags();
-    const primary = tags.filter(isPrimaryTag).length;
-    const secondary = tags.length - primary;
-    const { min, max } = tagLimits();
     const selectable = selectableTags();
 
-    const tooFew = primary < min.primary || secondary < min.secondary;
-    const tooMany = primary > max.primary || secondary > max.secondary;
-
-    if ((tooFew || tooMany) && selectable.length) {
+    if (!selectionMeetsLimits(tags, tagLimits()) && selectable.length) {
       showTagModal(tags, (chosen) => {
         setComposerTags(chosen);
         original();
