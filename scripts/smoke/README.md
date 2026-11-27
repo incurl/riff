@@ -61,10 +61,18 @@ is not a row there, so authoring as one is refused (403, and the flags say so).
 | `RIFF_SMOKE_PLAYWRIGHT` | path or package name of a playwright/playwright-core to use |
 | `RIFF_SMOKE_HEADLESS=0` | show the window (debugging) |
 
-`npm install` in this directory provides `playwright`; `npx playwright install
---with-deps chromium` provides the browser. The `forum-smoke` workflow does both,
+`pnpm install` in this directory provides `playwright` (the lockfile pins it, and
+therefore the Chromium build it downloads); `pnpm exec playwright install
+--with-deps chromium` fetches the browser. The `forum-smoke` workflow does both,
 builds `scripts/build_flarum_spa.sh`, stubs the Memos SPA embed (the smoke never
 opens `/`), and runs this script.
+
+On a machine whose cached Chromium does not match the pinned Playwright, point the
+launcher at the build you have:
+
+```sh
+PLAYWRIGHT_CHROMIUM_EXECUTABLE=/path/to/chrome pnpm exec node forum_smoke.mjs
+```
 
 ## Extending it
 

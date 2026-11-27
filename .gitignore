@@ -39,6 +39,9 @@ scripts/ravine
 # binary embeds, so a fresh clone compiles without a front-end build.
 pb/flarum/frontend/node_modules/
 pb/flarum/frontend/packages/*/node_modules/
+# The forum smoke is a dev-only tool; its Playwright install is not tracked,
+# but its lockfile is (the browser build it downloads is pinned by it).
+scripts/smoke/node_modules/
 pb/flarum/frontend/packages/core/dist/
 pb/flarum/frontend/packages/core/dist-typings/
 pb/flarum/frontend/ui/dist/
