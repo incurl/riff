@@ -1,0 +1,92 @@
+name: Forum Smoke
+
+# The forum's Go backend is a REIMPLEMENTATION of Flarum's JSON:API contract, and
+# the only specification is the vendored frontend itself. When the two disagree,
+# the SPA renders nothing and reports nothing: an attribute it reads comes back
+# `undefined` (the control does not appear), a route it calls falls through to the
+# SPA catch-all (a 200 with `index.html`, which the store parses into `null`), or a
+# lazily chunked library is never fetched (the drag handler returns early).
+#
+# None of that is visible to `go test` or to the frontend's Jest suite, and the
+# defects this job covers were each found by hand in a browser after the suites
+# were green: a tag picker with no confirm button, drag-to-reorder whose library
+# never loaded, a tag modal whose parent select was hidden, branding that answered
+# 200 with no body, and a superuser's post answering 500 because the author column
+# is a relation the superuser is not a row in.
+#
+# So: drive a real browser through the four flows that have actually broken (see
+# scripts/smoke/forum_smoke.mjs for what each one pins).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+    paths:
+      - "pb/flarum/**"
+      - "pb/migrations/**"
+      - "pb/leafwiki/**"
+      - "scripts/smoke/**"
+      - "scripts/build_flarum_spa.sh"
+      - "scripts/build_wiki_spa.sh"
+      - "main.go"
+      - ".github/workflows/forum-smoke.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: "1.27.0"
+  NODE_VERSION: "24"
+
+jobs:
+  smoke:
+    name: Browser smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      # The forum's frontend is the specification, so the job builds it exactly as
+      # a release does: the bundles are build output and are embedded into the
+      # binary, which is why the smoke runs the binary rather than a dev server.
+      - name: Build the forum frontend
+        run: bash scripts/build_flarum_spa.sh
+
+      # The Memos SPA is NOT exercised by this smoke, and building it would add a
+      # pnpm install and a Vite build to a job that never opens `/`. The embed is
+      # `//go:embed all:dist`, so the directory has to exist and carry an
+      # index.html for the binary to compile; a placeholder is enough.
+      - name: Stub the Memos SPA embed
+        run: |
+          mkdir -p server/frontend/dist
+          printf '<!doctype html><title>forum smoke</title>\n' > server/frontend/dist/index.html
+
+      - name: Build the binary
+        run: go build -buildvcs=false -o riff .
+
+      - name: Install the smoke's browser
+        working-directory: scripts/smoke
+        run: |
+          npm install --no-audit --no-fund
+          npx playwright install --with-deps chromium
+
+      - name: Run the browser smoke
+        env:
+          RIFF_SMOKE_BINARY: ./riff
+        run: node scripts/smoke/forum_smoke.mjs

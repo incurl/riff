@@ -5,6 +5,79 @@ while building riff, a PO-33 community site replacing the Memos Go
 backend with PocketBase. New entries are appended at the top, oldest at
 the bottom.
 
+## THE FORUM'S SPECIFICATION IS ITS FRONTEND, SO THE GUARD IS A BROWSER (2026-11-27)
+
+Asked whether porting Flarum onto PocketBase and Go was a good idea. The
+answer, measured on this repo, is "a defensible bet with a tax that nobody
+budgeted for". The numbers, so the next decision is not made from memory:
+
+| Measured | Value |
+| --- | --- |
+| `pb/flarum` Go (non-test) | 29,111 lines — the largest module in a 112k-line repo |
+| its tests | 14,201 lines, 375 test functions |
+| endpoints | ~90 (46 core + 44 plugin routes) |
+| reimplemented plugins | 13 |
+| the specification (vendored `frontend/packages/core/src`) | ~39,600 lines, unmodified |
+| commits touching `pb/flarum` | 63 — **32 `fix` vs 29 `feat`** |
+| `DECISIONS.md` entries | 146, of which 27 are forum-related |
+
+A fix-to-feature ratio above 1:1 is what reimplementing somebody else's contract
+looks like from the inside: mostly not new features, mostly corrections of
+mismatches. What the port bought is real and checkable — one binary, one
+database, one deploy (256 MB machine), one identity (`users` shared with memos
+and the wiki, one PAT, one superuser), one permission story, and the MCP catalog
+reaching the forum. What it costs is unbounded because **the specification is a
+40k-line SPA that is not ours and keeps moving**, and it fails SILENTLY: a
+missing attribute renders `undefined` (no control), a missing route answers the
+SPA shell with a 200, a lazy chunk that is never fetched leaves a handler
+returning early. Nothing errors, nothing 404s, the console stays clean.
+
+That silence is the actual finding, and it explains a run of defects that were
+all green in `go test`: the tag picker with no confirm button, drag-to-reorder
+whose library was never loaded, the tag modal's hidden parent select, branding
+answering 200 with no body, and — found by the smoke on its first run — a
+PocketBase superuser's post answering **500** because the author column is a
+relation to `users` and a superuser is not a row there.
+
+**Decision: keep the port, and pay for a guard instead of for a rewrite.** The
+375 Go tests, 117 Jest tests, the 53 KB `deviations.md` and the AGENTS row are
+the asset that makes this maintainable; a rewrite would pay the same tax again
+with less knowledge. What was missing was coverage of the layer where the bugs
+actually live.
+
+Two things were added, and they are the durable half of this decision:
+
+1. **`scripts/smoke/forum_smoke.mjs` + `.github/workflows/forum-smoke.yml`** — a
+   headless-browser run through the four flows that have broken (composer tag
+   picker, admin drag-to-reorder, the tag modal's parent select, wiki branding).
+   It boots its own instance from a fresh data directory, creates its first
+   superuser through PocketBase's installer token (printed to stdout; it is a
+   30-minute auth token, so no Go seeder and no second boot), authors as a MEMBER
+   because that is who authoring is for, and answers non-zero on any failure.
+   `RIFF_SMOKE_DEBUG=1` prints console errors, failed requests and every non-2xx
+   response; `RIFF_SMOKE_ONLY=<text>` runs a subset.
+2. **`pb/flarum/frontend/UPSTREAM.md`** — the pin of record. The vendored tree was
+   taken from a BRANCH (`2.x`) with `version: 0.0.0`, so the exact commit is
+   unrecoverable; the file records what can be established instead: the blob hash
+   of each sampled file and the bracket they prove (the snapshot contains
+   upstream's 2024-12-07 change to `common/extend.ts` and predates its 2025-01-03
+   change to `DiscussionComposer.js` — roughly two years behind `2.x`). It also
+   lists what an upgrade has to run.
+
+**What was deliberately NOT done**: growing the surface toward upstream parity.
+Every extension ported is another contract to re-audit forever, and the port is
+already far past the minimum the product needs (gamification, polls, statistics,
+two locale packs, the whole admin app). `docs/design/flarum/deviations.md` is the
+scope boundary, not a to-do list.
+
+**Also fixed on the way**: the polls plugin declares
+`Locale: "plugins/polls/forum-en.js"` and `build_flarum_spa.sh` never built or
+staged it, so every boot warned that a declared asset is missing and every poll
+label rendered its raw key. The catalogue is compiled from
+`pb/flarum/plugins/polls/{build-locale.cjs,locale/}` and staged now — a declared
+asset that nothing builds is the same class as a declared route that nothing
+serves.
+
 ## DRAG-TO-REORDER WAS IMPLEMENTED AND NEVER ATTACHED (2026-11-26)
 
 Asked why drag/drop was not implemented "as upstream": it was — the tree, the

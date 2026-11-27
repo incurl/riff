@@ -37,7 +37,11 @@ func TestLocale_TheDefaultLocaleSettingApplies(t *testing.T) {
 	body := recorder.Body.String()
 	require.Contains(t, body, "forum-zh-Hans.js",
 		"the default language's catalogue must be the one loaded")
-	require.NotContains(t, body, "forum-en.js",
+	// The CORE English catalogue, named by its own path. A bare "forum-en.js"
+	// substring also matches an EXTENSION's English catalogue
+	// (`plugins/polls/forum-en.js`), which loads regardless: an extension adds its
+	// keys BEFORE the active locale's, as upstream's AssetBundle does.
+	require.NotContains(t, body, "/assets/forum-en.js",
 		"the English catalogue must not also load: its keys would merge over the chosen ones")
 }
 

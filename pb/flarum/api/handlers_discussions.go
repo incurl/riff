@@ -327,7 +327,9 @@ func (s *Server) discussionResource(e *core.RequestEvent, discussion *domain.Dis
 	discussion.PostIDs = postIDs
 	discussion.TagIDs = tagIDs
 
-	canReply := s.can(e, domain.PermissionReply, TypeDiscussion, discussion.ID)
+	// A reply is stamped with its author, so the caller needs a `users` row as
+	// well as the permission (see `actorHasForumProfile`).
+	canReply := s.can(e, domain.PermissionReply, TypeDiscussion, discussion.ID) && s.actorHasForumProfile(e)
 
 	// A locked discussion takes no new replies — except from a caller who
 	// could unlock it. That is upstream's `Lock\Access\DiscussionPolicy::
@@ -727,6 +729,12 @@ func (s *Server) ForumDocument(e *core.RequestEvent) (Resource, error) {
 		settings = map[string]any{}
 	}
 
+	// The document's `can*` flags are the CALLER's, and an actor with no `users`
+	// row cannot author anything: the author columns are relations to that
+	// collection (see `actorHasForumProfile`). Saying "true" here opens the
+	// composer for a write that can only be refused.
+	canStartDiscussion := s.can(e, domain.PermissionStartDiscussion, TypeForum, "1") && s.actorHasForumProfile(e)
+
 	attributes := map[string]any{
 		"title":                   settingTextOr(settings, "forum_title", DefaultForumTitle),
 		"description":             "",
@@ -743,7 +751,7 @@ func (s *Server) ForumDocument(e *core.RequestEvent) (Resource, error) {
 		"allowSignUp":             false,
 		"defaultRoute":            settingTextOr(settings, "default_route", "/"),
 		"canViewForum":            s.can(e, domain.PermissionViewForum, TypeForum, "1"),
-		"canStartDiscussion":      s.can(e, domain.PermissionStartDiscussion, TypeForum, "1"),
+		"canStartDiscussion":      canStartDiscussion,
 		"canSearchUsers":          s.can(e, domain.PermissionSearchUsers, TypeForum, "1"),
 		"canCreateAccessToken":    false,
 		"canModerateAccessTokens": false,

@@ -86,6 +86,25 @@ for plugin in $PLUGINS; do
     cp "$plugin_dir/dist/"*.js "$TARGET/plugins/$plugin/"
   fi
 
+  # A plugin whose catalogue lives NEXT TO ITS GO CODE instead of in the
+  # frontend package. The polls extension is the case: `pb/flarum/plugins/polls`
+  # owns both the `.yml` and the compiler, and its comment has always claimed
+  # that "scripts/build_flarum_spa.sh runs this and stages the output into
+  # ui/dist/plugins/polls/" — it did not.
+  #
+  # The cost was not cosmetic. The Go side declares
+  # `Locale: "plugins/polls/forum-en.js"` in its AssetBundle, so every boot
+  # warned `a plugin's frontend asset is not embedded … plugin=fof/polls
+  # asset=plugins/polls/forum-en.js`, and every `trans()` call in a poll
+  # rendered its raw key ("fof-polls.forum.poll_ended"). A declared asset that
+  # nothing builds is the same class as a declared API path that nothing
+  # routes: the claim outlives the code.
+  if [ -f "$ROOT/pb/flarum/plugins/$plugin/build-locale.cjs" ]; then
+    echo "Compiling the $plugin extension's catalogue (plugin side)"
+    ( cd "$ROOT/pb/flarum/plugins/$plugin" && node build-locale.cjs )
+    cp "$ROOT/pb/flarum/plugins/$plugin/dist/"*.js "$TARGET/plugins/$plugin/"
+  fi
+
   # The extension's async chunks go under `js/<namespace>/`, next to
   # core's — the runtime builds a chunk's url as
   # `${jsChunksBaseUrl}/${namespace}/${urlPath}.js`, and

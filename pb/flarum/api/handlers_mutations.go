@@ -85,6 +85,13 @@ func (s *Server) createDiscussionHandler(e *core.RequestEvent) error {
 		return fail(e, errForbidden("You are not allowed to start a discussion."))
 	}
 
+	// The author columns are relations to the shared `users` collection, so an
+	// actor that is not a record there cannot be stamped: the save used to fail
+	// the relation validation and answer 500 instead of saying why.
+	if !s.actorHasForumProfile(e) {
+		return fail(e, errNoForumProfile())
+	}
+
 	if err := sessionCSRF(e); err != nil {
 		return fail(e, errForbidden("The request could not be verified."))
 	}
@@ -138,6 +145,12 @@ func (s *Server) createPostHandler(e *core.RequestEvent) error {
 	actor, err := s.requireAuth(e)
 	if err != nil {
 		return fail(e, err)
+	}
+
+	// A reply is stamped with its author, and the author column is a relation to
+	// the shared `users` collection (see `actorHasForumProfile`).
+	if !s.actorHasForumProfile(e) {
+		return fail(e, errNoForumProfile())
 	}
 
 	if err := sessionCSRF(e); err != nil {

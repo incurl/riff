@@ -92,6 +92,22 @@ li:not(.sortable-dragging) > .TagListItem-info:hover > .Button {
   visibility: visible;
 }
 
+/* The "add a secondary tag here" control is ALWAYS visible.
+
+   The pencil above is upstream's, and it is revealed on hover. The `+` is
+   this port's answer to "the UI does not accommodate secondary tag
+   creation", so hiding it behind a hover reproduces the very complaint it
+   was added for — present but invisible is indistinguishable from absent.
+   It is dimmed until the row is hovered, so it does not shout. */
+.TagListItem-info .TagListItem-addChild {
+  visibility: visible;
+  opacity: 0.55;
+}
+
+.TagListItem-info:hover .TagListItem-addChild {
+  opacity: 1;
+}
+
 .TagList--primary {
   font-size: 16px;
 }

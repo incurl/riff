@@ -55,5 +55,13 @@ MIT licensed). `pb/flarum/frontend/packages/composer.json` is a riff-authored st
 keeps the bundle namespace the upstream webpack config reads; it holds
 no PHP package metadata.
 
+**The branch name is not a pin, and neither is `version: 0.0.0`.** The exact
+upstream commit was never recorded, so `pb/flarum/frontend/UPSTREAM.md` records
+what *can* be established — the blob hash of each sampled vendored file and the
+resulting bracket (the snapshot contains upstream's 2024-12-07 change to
+`common/extend.ts` and predates its 2025-01-03 change to
+`DiscussionComposer.js`). Read it before an upgrade: it also lists the steps an
+upgrade has to run.
+
 Nothing from the upstream PHP backend is vendored: the Go module
 reimplements the contract.

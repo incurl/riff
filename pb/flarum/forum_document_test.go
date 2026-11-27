@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/incurl/riff/pb/flarum/domain"
 )
 
 // The `can*` attributes of the forum document are the CALLER's
@@ -53,8 +55,42 @@ func TestForum_TheMemberMayStartADiscussion(t *testing.T) {
 		"a member may search for accounts")
 }
 
-// TestForum_TheGuestMayNotStartADiscussion pins the other side.
+// TestForum_ASuperuserWithoutAForumProfileCannotAuthor pins the write that used
+// to answer 500.
 //
+// The author columns (`discussions.user`, `posts.user`, …) are RELATIONS to the
+// shared `users` collection, and a PocketBase superuser is an administrator of
+// the forum without being a record in it. Stamping one as an author failed the
+// relation validation inside the save, and `createDiscussionHandler` turned that
+// into "500 The request could not be completed." with nothing logged — while the
+// forum document said `canStartDiscussion: true` and the composer opened, so the
+// operator's first post was a blank error page.
+//
+// The refusal is now a 403 with a message the reader can act on, and the flags
+// the UI draws its controls from say false, so the composer is not offered for a
+// write that can only be refused.
+func TestForum_ASuperuserWithoutAForumProfileCannotAuthor(t *testing.T) {
+	app, handler := newTestForum(t)
+
+	cookies := testSuperuser(t, app)
+
+	// The forum document the SPA boots with.
+	shell := do(t, handler, http.MethodGet, "/forum/", "", cookies)
+	require.Equal(t, http.StatusOK, shell.Code, shell.Body.String())
+
+	attributes := forumAttributesOf(t, shell.Body.String())
+	require.Equal(t, false, attributes["canStartDiscussion"],
+		"a superuser with no `users` row cannot author, so the composer must not be offered")
+	require.Equal(t, true, attributes["canViewForum"], "it is still an administrator")
+
+	// And the write itself, rather than a 500.
+	body := `{"data":{"type":"discussions","attributes":{"title":"Operator post","content":"Hello"}}}`
+	recorder := doWithHeaders(t, handler, http.MethodPost, "/forum/api/discussions", body, cookies, nil)
+	require.Equal(t, http.StatusForbidden, recorder.Code, recorder.Body.String())
+	require.Contains(t, recorder.Body.String(), "no forum profile",
+		"the refusal has to say what to do, not that the request could not be completed")
+}
+
 // A guest holds only `viewForum`, so the flag has to be false — and the
 // frontend's own rule (`canStartDiscussion || !app.session.user`) means
 // an anonymous visitor still gets a clickable button, which opens the
@@ -104,16 +140,29 @@ func TestForum_TheBootPayloadAndTheAPIAgree(t *testing.T) {
 	}
 }
 
-// TestForum_TheAdministratorMayStartADiscussion pins that the flag
-// follows the permission for an administrator too.
+// TestForum_TheAdministratorMayStartADiscussion pins that the flag follows the
+// permission for an administrator too.
 //
 // An administrator holds every permission outright (upstream's
-// `Group::hasPermission()` returns true for the administrator group),
-// so the flag has to be true.
+// `Group::hasPermission()` returns true for the administrator group), so the flag
+// has to be true — for an administrator who is a MEMBER of the administrator
+// group, which means a `users` row.
+//
+// A PocketBase SUPERUSER is the one administrator the flag is false for, and not
+// because of a permission: the author columns are relations to `users`, so a
+// superuser that is not a row there cannot be stamped as an author at all (see
+// `TestForum_ASuperuserWithoutAForumProfileCannotAuthor`). Offering the composer
+// would offer a write that can only be refused.
 func TestForum_TheAdministratorMayStartADiscussion(t *testing.T) {
 	app, handler := newTestForum(t)
 
-	shell := do(t, handler, http.MethodGet, "/forum/", "", testSuperuser(t, app))
+	admin := testUser(t, app, "admin_group_member")
+	require.NoError(t, testRepo(t, app).AddUserToGroup(admin.Id, domain.GroupAdminID))
+
+	token, err := admin.NewAuthToken()
+	require.NoError(t, err)
+
+	shell := do(t, handler, http.MethodGet, "/forum/", "", sessionCookies(token, "csrf-token"))
 	require.Equal(t, http.StatusOK, shell.Code, shell.Body.String())
 
 	attributes := forumAttributesOf(t, shell.Body.String())

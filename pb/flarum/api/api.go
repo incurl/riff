@@ -565,6 +565,41 @@ func (s *Server) actor(e *core.RequestEvent) session.Actor {
 	return actor
 }
 
+// actorHasForumProfile reports whether the caller is a row in the shared
+// `users` collection.
+//
+// THE AUTHOR COLUMNS ARE RELATIONS TO THAT COLLECTION, and a PocketBase
+// superuser is an administrator of the forum without being a record in it. So
+// stamping a superuser as an author fails the relation validation deep inside
+// the save, and the write answered **500 "The request could not be completed."**
+// with nothing logged: the operator — who is exactly the account that is a
+// superuser and not a `users` row — could not start a discussion at all, while
+// the forum document told the UI `canStartDiscussion: true` and the composer
+// opened.
+//
+// The authoring paths therefore ask this first and refuse with a message the
+// reader can act on, and the `can*` flags that draw the controls ask it too. An
+// affordance that can only fail is worse than an absent one.
+func (s *Server) actorHasForumProfile(e *core.RequestEvent) bool {
+	actorID := s.actor(e).ID()
+	if actorID == "" {
+		return false
+	}
+
+	_, err := s.repo.UserByID(actorID)
+
+	return err == nil
+}
+
+// errNoForumProfile is the refusal a superuser-without-a-profile gets when it
+// tries to author content.
+func errNoForumProfile() *apiError {
+	return errForbidden(
+		"This PocketBase superuser has no forum profile, so it cannot author content. " +
+			"Sign in with a forum account to post, reply or react.",
+	)
+}
+
 // serverContext returns a context carrying this server.
 //
 // The relationship writer is called BY the server, and a plugin's

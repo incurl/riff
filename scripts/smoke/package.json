@@ -1,0 +1,18 @@
+{
+  "name": "@riff/forum-smoke",
+  "private": true,
+  "version": "1.0.0",
+  "description": "The headless-browser smoke for the flows that have actually broken: the composer's tag picker, admin drag-to-reorder, the tag modal's parent select, and the wiki's branding. See forum_smoke.mjs.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "smoke": "node forum_smoke.mjs",
+    "install-browser": "playwright install --with-deps chromium"
+  },
+  "devDependencies": {
+    "playwright": "^1.56.0"
+  }
+}
