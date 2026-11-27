@@ -89,6 +89,16 @@ func TestAPI_ServesTheSPAWithPrefixSubstitution(t *testing.T) {
 		assert.NotContains(t, html, tokenBasePath, "the mount prefix must be substituted")
 		assert.Contains(t, html, `content="/wiki"`, "the SPA must see the mount prefix")
 
+		// The BRANDING reaches whichever shell is served. The fallback reader is
+		// tracked in git and is what a checkout without a LeafWiki build serves (and
+		// what CI serves, which is why the browser smoke's branding flow runs against
+		// it): a shell that hardcoded "Wiki" showed a name the operator had replaced,
+		// in the tab and in the first frame, which is the report the branding store
+		// exists to answer.
+		assert.NotContains(t, html, tokenTitle, "the page title must be substituted")
+		assert.NotContains(t, html, tokenSiteName, "the site name must be substituted")
+		assert.Contains(t, html, "LeafWiki", "the stored site name must reach the shell")
+
 		// The served document must be the LeafWiki bundle, not riff's SPA
 		// catch-all. The bundle's entry chunk is referenced through the
 		// rewritten, absolute "/wiki/static/…" path; the fallback reader

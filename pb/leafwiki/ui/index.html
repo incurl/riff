@@ -4,7 +4,8 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="base-path" content="{{__BASE_PATH__}}" />
-    <title>Wiki</title>
+    <title>{{__PAGE_TITLE__}}</title>
+    <link rel="icon" href="{{__FAVICON_HREF__}}" />
     <style>
       :root { color-scheme: light dark; }
       body { margin: 0; font: 15px/1.5 ui-sans-serif, system-ui, sans-serif; }
@@ -19,11 +20,13 @@
       pre { white-space: pre-wrap; word-break: break-word; background: #8881; padding: 1rem; border-radius: 6px; }
       .muted { opacity: 0.65; font-size: 0.85rem; }
       .banner { margin-bottom: 1rem; padding: 0.6rem 0.8rem; border-radius: 6px; background: #f5a62322; font-size: 0.85rem; }
+      .site-name { font-weight: 600; margin-bottom: 0.35rem; }
     </style>
   </head>
   <body>
     <div class="layout">
       <nav>
+        <div class="site-name">{{__SITE_NAME__}}</div>
         <div class="muted" style="margin-bottom: 0.6rem">Pages</div>
         <ul id="tree"><li class="muted">loading…</li></ul>
       </nav>
@@ -33,7 +36,7 @@
           (<code>ui/leafwiki-ui</code>) and copy its <code>dist/</code> into
           <code>pb/leafwiki/ui/dist</code> to replace it.
         </div>
-        <h1 id="title">Wiki</h1>
+        <h1 id="title">{{__SITE_NAME__}}</h1>
         <p class="muted" id="meta"></p>
         <pre id="content">Select a page on the left.</pre>
       </main>
@@ -91,7 +94,10 @@
           const updated = page.metadata && page.metadata.updatedAt ? new Date(page.metadata.updatedAt) : null;
           metaEl.textContent = updated ? `updated ${updated.toLocaleString()}` : '';
           contentEl.textContent = page.content || '(empty page)';
-          document.title = `${page.title || page.slug} · Wiki`;
+          // The site name is the operator's, so it is read off the shell rather
+          // than written here: a literal would survive a rename.
+          const siteName = document.querySelector('.site-name')?.textContent || '';
+          document.title = siteName ? `${page.title || page.slug} · ${siteName}` : page.title || page.slug;
         } catch (error) {
           titleEl.textContent = 'Not found';
           metaEl.textContent = '';
